@@ -1,0 +1,46 @@
+# ROS 2 / colcon products. Rebuild locally with `make build`.
+/ros2_ws/build/
+/ros2_ws/install/
+/ros2_ws/log/
+
+# Collected demonstrations and derived training/export artifacts.
+/data/
+/outputs/
+/wandb/
+/runs/
+*.bag
+*.db3
+*.mcap
+
+# Python virtual environments, packages, test and type-checker caches.
+/.venv/
+/.venv-*/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local editor, ROS and operating-system state.
+.vscode/
+.idea/
+.ros/
+.DS_Store
+Thumbs.db
+compile_commands.json
+
+# Generated VR TLS keys and machine-specific secrets.
+teleop/cert.pem
+teleop/key.pem
+*.pem
+*.key
+.env
+.env.*
+!.env.example
+
+# Calibration tool backups are generated atomically; retain the active YAML.
+*.backup

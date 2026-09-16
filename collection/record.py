@@ -1,0 +1,303 @@
+#!/usr/bin/env python3
+"""Passive dual-arm recorder. Does not publish any robot motion commands."""
+import argparse
+import hashlib
+import json
+import os
+import threading
+import time
+from pathlib import Path
+
+import cv2
+import numpy as np
+import yaml
+
+from core import EpisodeWriter, StreamCache
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class Cameras:
+    """One receive thread per RealSense, latest frame plus actual capture metadata."""
+    def __init__(self, config):
+        import pyrealsense2 as rs
+        self.rs, self.config = rs, config
+        self.pipelines, self.threads, self.latest = {}, [], {}
+        self.lock, self.stop = threading.Lock(), threading.Event()
+        self.error = None
+        serials = list(config["cameras"].values())
+        if len(set(serials)) != len(serials) or not all(serials):
+            raise ValueError("Camera serials must be nonempty and distinct")
+        try:
+            for name, serial in config["cameras"].items():
+                pipeline, rs_config = rs.pipeline(), rs.config()
+                rs_config.enable_device(str(serial))
+                rs_config.enable_stream(rs.stream.color, config["width"], config["height"],
+                                        rs.format.bgr8, config["fps"])
+                pipeline.start(rs_config)
+                self.pipelines[name] = pipeline
+                thread = threading.Thread(target=self._receive, args=(name, pipeline), daemon=True)
+                thread.start()
+                self.threads.append(thread)
+        except Exception:
+            self.close()
+            raise
+
+    def _receive(self, name, pipeline):
+        try:
+            while not self.stop.is_set():
+                frames = pipeline.wait_for_frames(1000)
+                color = frames.get_color_frame()
+                if not color:
+                    continue
+                received = time.monotonic()
+                entry = (np.asanyarray(color.get_data()).copy(), {
+                    "frame_number": color.get_frame_number(),
+                    "device_timestamp_ms": color.get_timestamp(),
+                    "timestamp_domain": str(color.get_frame_timestamp_domain()),
+                    "receive_monotonic_s": received,
+                })
+                with self.lock:
+                    self.latest[name] = entry
+        except Exception as exc:
+            if not self.stop.is_set():
+                self.error = str(exc)
+
+    def snapshot(self, now):
+        with self.lock:
+            latest = dict(self.latest)
+        if self.error:
+            raise ValueError(f"Camera receive failure: {self.error}")
+        if set(latest) != set(self.pipelines):
+            raise ValueError("Waiting for all cameras")
+        stamps = [entry[1]["receive_monotonic_s"] for entry in latest.values()]
+        if any(now - stamp > self.config["max_camera_age_s"] for stamp in stamps):
+            raise ValueError("Camera frame is stale")
+        if max(stamps) - min(stamps) > self.config["max_camera_skew_s"]:
+            raise ValueError("Camera receive-time skew exceeds limit")
+        return ({name: entry[0] for name, entry in latest.items()},
+                {name: entry[1] for name, entry in latest.items()})
+
+    def close(self):
+        self.stop.set()
+        for thread in self.threads:
+            thread.join(timeout=1.5)
+        for pipeline in self.pipelines.values():
+            pipeline.stop()
+
+
+def make_node(config, cameras):
+    import rclpy
+    from rclpy.node import Node
+    from rclpy.qos import qos_profile_sensor_data
+    from ctl_msgs_hw.msg import CtlInformation, FkDataPub, MidNodeCtlMsgRet, MidNodeCtlMsgSend
+    from geometry_msgs.msg import WrenchStamped
+    from std_msgs.msg import Int8MultiArray, Bool
+    from sensor_msgs.msg import Image
+    from std_srvs.srv import SetBool, Trigger
+
+    class Recorder(Node):
+        def __init__(self):
+            super().__init__("towel_recorder")
+            self.cache, self.episode = StreamCache(), None
+            self.start_time, self.last_frame_time = None, None
+            self.camera_ids = {}
+            self.status = self.create_publisher(Bool, "/towel/recording", 10)
+            self.publish_rviz = bool(config.get("publish_rviz", False))
+            self.image_publishers = {}
+            self._last_visualization_error = ""
+            if self.publish_rviz:
+                self.image_publishers = {
+                    name: self.create_publisher(
+                        Image, f"/towel/camera/{name}/image_raw", qos_profile_sensor_data
+                    )
+                    for name in config["cameras"]
+                }
+            self.create_timer(0.2, self.publish_status)
+            subs = [
+                (MidNodeCtlMsgRet, "/dexbotCtl/midMonitor_msg_send", self.joints),
+                (CtlInformation, "/dexbotCtl/ctl_data_pub", lambda m: self.put(
+                    "joint_target", list(m.l_position) + list(m.r_position), m)),
+                (FkDataPub, "/dexbotCtl/DescPub/Fk_ret_data_pub", lambda m: self.put(
+                    "tcp", [getattr(m, axis + "_" + side) for side in ("l", "r")
+                            for axis in ("x", "y", "z", "roll", "pitch", "yaw")], m)),
+                (MidNodeCtlMsgSend, "/dexbotCtl/upperMonitor_msg_send", lambda m: self.put(
+                    "tcp_target", list(m.l_arm_des_pos_descartes) + list(m.r_arm_des_pos_descartes), m)),
+                (Int8MultiArray, "/towel/gripper_state", lambda m: self.put("gripper_state", m.data, m)),
+            ]
+            for key, topic in config.get("force_topics", {}).items():
+                subs.append((WrenchStamped, topic, lambda m, key=key: self.put(key,
+                    [m.wrench.force.x, m.wrench.force.y, m.wrench.force.z,
+                     m.wrench.torque.x, m.wrench.torque.y, m.wrench.torque.z], m)))
+            for typ, topic, callback in subs:
+                self.create_subscription(typ, topic, callback, qos_profile_sensor_data)
+            self.create_service(SetBool, "/towel/record", self.record)
+            self.create_service(Trigger, "/towel/discard", self.discard)
+            self.create_timer(1.0 / config["fps"], self.sample)
+            self.get_logger().info("Ready: /towel/record, /towel/discard. No episode starts automatically.")
+            if self.publish_rviz:
+                self.get_logger().info("Publishing live camera images for RViz; this does not change recording labels.")
+
+        def publish_status(self):
+            msg = Bool()
+            msg.data = self.episode is not None
+            self.status.publish(msg)
+
+        def put(self, key, values, msg):
+            stamp = getattr(getattr(msg, "header", None), "stamp", None)
+            source = stamp.sec + stamp.nanosec * 1e-9 if stamp else None
+            try:
+                self.cache.update(key, values, time.monotonic(), source)
+            except ValueError as exc:
+                self.get_logger().warning(f"Invalid {key}: {exc}")
+
+        def joints(self, msg):
+            self.put("q", list(msg.l_arm_pos_fdback) + list(msg.r_arm_pos_fdback), msg)
+            self.put("dq", list(msg.l_arm_spd_fdback) + list(msg.r_arm_spd_fdback), msg)
+
+        def snapshot(self):
+            now = time.monotonic()
+            sample = self.cache.snapshot(now, config["max_stream_age_s"], config["max_stream_skew_s"])
+            images, camera_meta = cameras.snapshot(now)
+            return now, sample, images, camera_meta
+
+        def record(self, request, response):
+            try:
+                if request.data and self.episode is None:
+                    now, _, _, _ = self.snapshot()  # Refuse an empty/unready episode.
+                    calibration = {}
+                    for folder in (ROOT / "ros2_ws/src/ctl_msgs_hw/config", ROOT / "teleop/VR_controller/config"):
+                        for path in folder.glob("*.yaml"):
+                            calibration[str(path.relative_to(ROOT))] = {
+                                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                                "content": path.read_text(),
+                            }
+                    self.episode = EpisodeWriter(config["dataset_root"], {
+                        "config": config, "calibration": calibration,
+                        "start_wall_time_ns": time.time_ns(), "start_monotonic_s": now,
+                    }, lambda path, img: cv2.imwrite(path, img, [cv2.IMWRITE_PNG_COMPRESSION, 1]))
+                    self.start_time, self.last_frame_time = now, now
+                    self.camera_ids = {}
+                    response.message = "recording"
+                elif not request.data and self.episode is not None:
+                    episode, self.episode = self.episode, None
+                    path = episode.finish(config["min_episode_frames"])
+                    response.message = f"Saved {path}" if path else "Too short; kept as .partial, excluded from export"
+                else:
+                    response.message = "already in requested state"
+                response.success = True
+            except Exception as exc:
+                response.success, response.message = False, str(exc)
+            self.publish_status()
+            self.get_logger().info(response.message)
+            return response
+
+        def discard(self, request, response):
+            response.success = self.episode is not None
+            response.message = "discarded" if response.success else "not recording"
+            if self.episode:
+                self.episode.discard()
+                self.episode = None
+            self.publish_status()
+            return response
+
+        def publish_images_for_rviz(self, images):
+            """Publish the exact BGR frames used by this recorder; this is read-only visualization."""
+            stamp = self.get_clock().now().to_msg()
+            for name, image in images.items():
+                if image.dtype != np.uint8 or image.ndim != 3 or image.shape[2] != 3:
+                    raise ValueError(f"Unexpected {name} image layout for RViz: {image.shape} {image.dtype}")
+                msg = Image()
+                msg.header.stamp = stamp
+                msg.header.frame_id = f"towel_{name}_camera"
+                msg.height, msg.width = image.shape[:2]
+                msg.encoding = "bgr8"
+                msg.is_bigendian = False
+                msg.step = int(image.strides[0])
+                msg.data = image.tobytes()
+                self.image_publishers[name].publish(msg)
+
+        def publish_preview(self):
+            try:
+                images, _ = cameras.snapshot(time.monotonic())
+                self.publish_images_for_rviz(images)
+                self._last_visualization_error = ""
+            except Exception as exc:
+                detail = str(exc)
+                if detail != self._last_visualization_error:
+                    self._last_visualization_error = detail
+                    self.get_logger().warning(f"RViz camera preview unavailable: {detail}")
+
+        def sample(self):
+            if self.publish_rviz:
+                self.publish_preview()
+            if self.episode is None:
+                return
+            try:
+                now, sample, images, camera_meta = self.snapshot()
+                if now - self.last_frame_time > config["max_frame_gap_s"]:
+                    raise ValueError("Capture frame gap exceeds limit; episode is incomplete")
+                ids = {name: meta["frame_number"] for name, meta in camera_meta.items()}
+                if any(self.camera_ids.get(name) == value for name, value in ids.items()):
+                    return  # Never label the same camera exposure as a fresh image.
+                sample.update(timestamp_s=now-self.start_time, monotonic_s=now,
+                              ros_time_s=self.get_clock().now().nanoseconds * 1e-9,
+                              camera_timestamps=camera_meta)
+                self.episode.add(sample, images)
+                self.last_frame_time, self.camera_ids = now, ids
+            except Exception as exc:
+                self.episode.abort(exc)
+                self.episode = None
+                self.publish_status()
+                self.get_logger().error(f"Recording aborted; retained .partial: {exc}")
+
+        def close(self):
+            if self.episode:
+                self.episode.abort("Recorder stopped without explicit save")
+                self.episode = None
+            self.destroy_node()
+
+    return Recorder()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", type=Path, default=ROOT / "config/recording.yaml")
+    parser.add_argument("--dataset-root", type=Path)
+    parser.add_argument("--task")
+    parser.add_argument(
+        "--publish-rviz", action="store_true", default=None,
+        help="Publish the recorder's head/wrist frames to RViz image topics.",
+    )
+    args = parser.parse_args()
+    config = yaml.safe_load(args.config.read_text())
+    if args.task:
+        config["task"] = args.task
+    if args.publish_rviz is None:
+        config["publish_rviz"] = os.environ.get("TOWEL_PUBLISH_RVIZ", "").lower() in {"1", "true", "yes"} or bool(
+            config.get("publish_rviz", False)
+        )
+    else:
+        config["publish_rviz"] = args.publish_rviz
+    path = args.dataset_root or Path(config["dataset_root"])
+    config["dataset_root"] = str(path if path.is_absolute() else ROOT / path)
+    import rclpy
+    cameras, node = None, None
+    rclpy.init()
+    try:
+        cameras = Cameras(config)
+        node = make_node(config, cameras)
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if node:
+            node.close()
+        if cameras:
+            cameras.close()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()

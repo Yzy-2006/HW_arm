@@ -1,0 +1,20 @@
+# Independent encoder endpoints; capture on hardware with scripts/calibrate_grippers.py.
+# 0=open, 1=closed. A false calibration disables torque on that side.
+feedback_timeout_s: 0.20
+left:
+  calibrated: false
+  open_deg: null
+  closed_deg: null
+  kp: 1.1
+  kd: 0.12
+  motion_time_s: 0.6
+  torque_limit_nm: 3.0
+right:
+  calibrated: false
+  # Original right-side values retained only as reference until recaptured.
+  open_deg: -30.0
+  closed_deg: 45.0
+  kp: 1.1
+  kd: 0.12
+  motion_time_s: 0.6
+  torque_limit_nm: 3.0

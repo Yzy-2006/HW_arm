@@ -1,0 +1,15 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from chassis_control_hw/msg/LifterCmd.msg
+// generated code does not contain a copyright notice
+
+#include "std_msgs/msg/Int8.idl"
+
+module chassis_control_hw {
+  module msg {
+    @verbatim (language="comment", text=
+      "上升 ： 1 停止： 0 下降： -1")
+    struct LifterCmd {
+      std_msgs::msg::Int8 move_cmd;
+    };
+  };
+};

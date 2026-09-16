@@ -1,0 +1,216 @@
+#控制器配置文件
+# 本文件统一管理控制器的所有硬件相关参数
+
+#============================================
+# VR 遥操作最终末端目标限位
+# position_enabled=false 时，不限制 VR 的末端 x/y/z 目标；orientation_enabled=false 时，
+# 不限制 VR 的末端 RPY 目标。关节限位、速度/力矩限制仍然有效。对应限幅关闭时，
+# position_min / position_max 或 rpy_min / rpy_max 无需配置。
+# rpy 顺序为 roll/pitch/yaw，单位 rad。
+#============================================
+vrTeleoperationLimit:
+  position_enabled: false
+  orientation_enabled: false
+  left_arm:
+    rpy_min: [-2.20, -2.20, -2.57]
+    rpy_max: [ 2.20,  2.20,  2.57]
+  right_arm:
+    rpy_min: [-2.20, -2.20, -2.57]
+    rpy_max: [ 2.20,  2.20,  2.57]
+
+#============================================
+# VR A 键关节空间回零参数
+# trajectory_time_sec 为从当前反馈关节角到 refTargetAngle.yaml 的运动时间。
+# acceleration_time_ratio 越接近 1，加减速段越长，回零越平缓（必须大于 1.05）。
+# stable_cycles 的控制周期为 0.02 s；分别为运动前、到达目标后的驻留周期。
+#============================================
+vrJointReturn:
+  trajectory_time_sec: 6.0
+  acceleration_time_ratio: 1.10
+  start_stable_cycles: 15
+  end_stable_cycles: 25
+
+#============================================
+# 重力补偿配置
+#============================================
+gravComp:
+
+  # ---------- 开关量 ----------
+  ifUseGravComp: 0      #是否使用重力补偿 0 -- 否； 1 -- 是
+  ifUseInpFtr: 1        #是否使用输入滤波器
+  ifUseOutpFtr: 1       #是否使用输出滤波器
+  ifUseFricComp: 1      #是否使用stribeck摩擦补偿
+  ifUsePosVelOutpFtr: 1 #是否使用关节角度/角速度输出低通滤波器 0 -- 否； 1 -- 是
+
+  # 数据输入模式
+  # 1 -- 全部采用目标数据
+  # 2 -- 全部采用反馈数据
+  # 3 -- 仅速度/加速度采用目标数据，位置采用反馈数据
+  InpDataMode: 1
+
+  # 重力补偿初始阶段平滑量
+  GravCompStZeroTimes: 10     #平滑输出初始阶段零输出轮数
+  GravCompStSmoothTimes: 75   #平滑输出阶段平滑输出轮数
+  JntCtlStStabTimes: 100      #机器人控制初始化完成后空跑输出轮数
+
+  # ---------- 动力学补偿修正系数 ----------
+  # 顺序: 左臂J0~J6, 右臂J0~J6
+  GravCompInte:    [2.4, 2.4, 2.2, 2.4, 2.2, 2.2, 2.2,
+                    2.4, 2.4, 2.2, 2.4, 2.2, 2.2, 2.2]
+  CoriousCompInte: [2.0, 2.0, 2.2, 2.2, 2.2, 2.2, 2.2,
+                    2.0, 2.0, 2.2, 2.2, 2.2, 2.2, 2.2]
+  InteriaCompInte: [2.0, 2.0, 2.2, 2.2, 2.2, 2.2, 2.2,
+                    2.0, 2.0, 2.2, 2.2, 2.2, 2.2, 2.2]
+
+  # ---------- 加速度滤波器参数 ----------
+  accFtr:
+    Qgain: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    Rgain: [0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01,
+            0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01]
+
+#============================================
+# 低通滤波器参数
+# 一阶低通滤波器: y[n] = α·x[n] + (1-α)·y[n-1]
+# α = cutoffRate / sampRate
+#============================================
+gravCompFtr:
+
+  # ---- 位置输入滤波器 ----
+  posInpFtr:
+    lArm:
+      sampRate:   [10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0]
+      cutoffRate: [20,      20,      20,      20,      20,      20,      20     ]
+    rArm:
+      sampRate:   [10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0]
+      cutoffRate: [20,      20,      20,      20,      20,      20,      20     ]
+
+  # ---- 速度输入滤波器 ----
+  velInpFtr:
+    lArm:
+      sampRate:   [10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0]
+      cutoffRate: [20,      20,      20,      20,      20,      20,      20     ]
+    rArm:
+      sampRate:   [10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0]
+      cutoffRate: [20,      20,      20,      20,      20,      20,      20     ]
+
+  # ---- 力矩输入滤波器 ----
+  torInpFtr:
+    lArm:
+      sampRate:   [10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0]
+      cutoffRate: [20,      20,      20,      20,      20,      20,      20     ]
+    rArm:
+      sampRate:   [10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0]
+      cutoffRate: [20,      20,      20,      20,      20,      20,      20     ]
+
+  # ---- 力矩输出滤波器 ----
+  torOutpFtr:
+    lArm:
+      sampRate:   [50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0]
+      cutoffRate: [20.0, 20.0, 20.0, 20.0, 20.0,     20,     20     ]
+    rArm:
+      sampRate:   [50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0]
+      cutoffRate: [20,     20,     20,     20,     20,     20,     20     ]
+
+  # ---- 关节角度输出滤波器 ----
+  posOutpFtr:
+    lArm:
+      sampRate:   [50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0]
+      cutoffRate: [20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0]
+    rArm:
+      sampRate:   [50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0]
+      cutoffRate: [20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0]
+
+  # ---- 关节角速度输出滤波器 ----
+  velOutpFtr:
+    lArm:
+      sampRate:   [50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0]
+      cutoffRate: [20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0]
+    rArm:
+      sampRate:   [50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0]
+      cutoffRate: [20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0]
+
+
+#============================================
+#优化器参数
+#============================================
+IKoptimizeSolverPara:
+
+  # ---------- 优化器优化参数 ----------
+  optiWeights: [50.0, 1.0, 0.002, 0.01, 0.00002]         #优化器各项权重
+  templateTimes: 100                                    #迭代次数
+  errorTolerance: 1e-5                                  #优化器误差容差
+
+  # ---------- 优化器信息打印控制参数 ----------
+  # 开关量：0 -- 否； 1 -- 是
+  ifPrintLevel: 0           #是否打印优化日志
+  ifPrintOptiTime: 0        #是否打印计算时间
+
+  ifDispJntInfo: 0          #是否打印关节配置
+  ifUse_visulization: 0     #是否使用meshcat可视化（这个一般选择否就行）
+  ifDispMessages: 0         #是否打印优化器信息
+
+#============================================
+#控制器控制流程总控参数
+#============================================
+TransLoopCtlInte:
+
+  #三层节点控制参数配置
+  #底层节点控制参数
+  servo_node_loop_ctl:
+    TempTime: 0.001
+    lArm_DOF: 7
+    rArm_DOF: 7
+    ZeroPos_Threshold: 0.02
+    netCard_name: "enP2p1s0"
+
+  #中层节点控制参数
+  dual_arm_ctl_node_loop_ctl:
+    TempTime: 0.02
+    lArm_DOF: 7
+    rArm_DOF: 7
+
+    #机器人求解链定义
+    urdf_path_option: "dual_arm.urdf"
+    base_link_lArm: "arm_base_link"
+    tip_link_lArm: "arm_l_link_8"
+    base_link_rArm: "arm_base_link"
+    tip_link_rArm: "arm_r_link_8"
+
+  #顶层节点控制参数
+  robot_ctlNode_loop_ctl:
+    TempTime: 0.02
+    lArm_DOF: 7
+    rArm_DOF: 7
+    RefAngRecordRounds: 100   #运行多少轮后，将中层节点反馈的目标关节角度记录为参考目标关节角度
+
+  #位置反馈值通用卡尔曼滤波参数
+  posRetKalmanFilterInte:
+    l_JntPos_Qgain: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    l_JntPos_Rgain: [0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01]
+    r_JntPos_Qgain: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    r_JntPos_Rgain: [0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01]
+
+  IqRetKalmanFilterInte:
+    l_JntIq_Qgain: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    l_JntIq_Rgain: [0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01]
+    r_JntIq_Qgain: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    r_JntIq_Rgain: [0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01]
+
+#============================================
+#底层控制器电流及温度限幅
+#============================================
+
+#夹爪限幅
+gripperTolerance:
+  l_gripper_tol:
+    torque: 10
+    temperature: 70
+    Kt: 1.4
+    IqRange: [-30, 30]
+
+  r_gripper_tol:
+    torque: 10
+    temperature: 70
+    Kt: 1.4
+    IqRange: [-30, 30]

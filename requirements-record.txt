@@ -1,0 +1,5 @@
+# ROS 2 rclpy and ctl_msgs_hw come from the sourced ROS workspace.
+numpy>=1.26,<2
+PyYAML>=6,<7
+opencv-python>=4.8,<4.12
+pyrealsense2>=2.55,<3

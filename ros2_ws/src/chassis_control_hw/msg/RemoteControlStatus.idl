@@ -1,0 +1,49 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from chassis_control_hw/msg/RemoteControlStatus.msg
+// generated code does not contain a copyright notice
+
+
+module chassis_control_hw {
+  module msg {
+    @verbatim (language="comment", text=
+      "RemoteControlStatus.msg - 遥控器状态反馈" "\n"
+      "遥控器状态")
+    struct RemoteControlStatus {
+      @verbatim (language="comment", text=
+        "拨杆A状态")
+      uint8 swa;
+
+      @verbatim (language="comment", text=
+        "拨杆B状态")
+      uint8 swb;
+
+      @verbatim (language="comment", text=
+        "拨杆C状态")
+      uint8 swc;
+
+      @verbatim (language="comment", text=
+        "拨杆D状态")
+      uint8 swd;
+
+      @verbatim (language="comment", text=
+        "右手左右摇杆")
+      int8 right_lr;
+
+      @verbatim (language="comment", text=
+        "右手上下摇杆")
+      int8 right_ud;
+
+      @verbatim (language="comment", text=
+        "左手左右摇杆")
+      int8 left_lr;
+
+      @verbatim (language="comment", text=
+        "左手上下摇杆")
+      int8 left_ud;
+
+      @verbatim (language="comment", text=
+        "左手旋钮")
+      int8 left_vra;
+    };
+  };
+};

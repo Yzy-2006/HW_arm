@@ -1,0 +1,21 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from chassis_control_hw/msg/FrontWheelOdometry.msg
+// generated code does not contain a copyright notice
+
+
+module chassis_control_hw {
+  module msg {
+    @verbatim (language="comment", text=
+      "FrontWheelOdometry.msg - 前车轮里程计反馈" "\n"
+      "轮式里程计信息")
+    struct FrontWheelOdometry {
+      @verbatim (language="comment", text=
+        "左轮里程计数")
+      double left_wheel_odom;
+
+      @verbatim (language="comment", text=
+        "右轮里程计数")
+      double right_wheel_odom;
+    };
+  };
+};

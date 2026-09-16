@@ -1,0 +1,8 @@
+# Install with the system Python, preferably in:
+#   /usr/bin/python3.12 -m venv --system-site-packages .venv-robot
+# Do not install ROS 2/rclpy with pip or Conda. They come from /opt/ros/jazzy.
+numpy>=1.26,<2
+PyYAML>=6,<7
+opencv-python>=4.8,<4.12
+pyrealsense2>=2.55,<3
+# `pip install -e teleop` supplies vuer==0.0.60, logging-mp and params-proto.

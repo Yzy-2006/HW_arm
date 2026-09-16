@@ -1,0 +1,43 @@
+# 机械臂关节-连杆结构配置文件
+# 由 dual_arm/urdf/dual_arm.urdf 提取，用于 RobotStructure 初始化
+#
+# 注意：link_list 中不包含固定关节的末端帧 (arm_l_link_8/arm_r_link_8)
+#       以及共享基座 arm_base_link
+
+lArm:
+  frame_names:
+    - "arm_l_link_1"
+    - "arm_l_link_2"
+    - "arm_l_link_3"
+    - "arm_l_link_4"
+    - "arm_l_link_5"
+    - "arm_l_link_6"
+    - "arm_l_link_7"
+  jnt_rotation_axis:
+    - "y"    # arm_l_joint_1, axis="0 1 0"
+    - "x"    # arm_l_joint_2, axis="1 0 0"
+    - "z"    # arm_l_joint_3, axis="0 0 -1"
+    - "y"    # arm_l_joint_4, axis="0 1 0"
+    - "z"    # arm_l_joint_5, axis="0 0 -1"
+    - "y"    # arm_l_joint_6, axis="0 -1 0"
+    - "x"    # arm_l_joint_7, axis="1 0 0"
+  joint_num: 7
+
+rArm:
+  frame_names:
+    - "arm_r_link_1"
+    - "arm_r_link_2"
+    - "arm_r_link_3"
+    - "arm_r_link_4"
+    - "arm_r_link_5"
+    - "arm_r_link_6"
+    - "arm_r_link_7"
+  jnt_rotation_axis:
+    - "y"    # arm_r_joint_1, axis="0 -1 0"
+    - "x"    # arm_r_joint_2, axis="1 0 0"
+    - "z"    # arm_r_joint_3, axis="0 0 -1"
+    - "y"    # arm_r_joint_4, axis="0 -1 0"
+    - "z"    # arm_r_joint_5, axis="0 0 -1"
+    - "y"    # arm_r_joint_6, axis="0 1 0"
+    - "x"    # arm_r_joint_7, axis="1 0 0"
+  joint_num: 7

@@ -1,0 +1,36 @@
+{
+  "type_description_msg": {
+    "type_description": {
+      "type_name": "chassis_control_hw/msg/FrontWheelOdometry",
+      "fields": [
+        {
+          "name": "left_wheel_odom",
+          "type": {
+            "type_id": 11,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": ""
+        },
+        {
+          "name": "right_wheel_odom",
+          "type": {
+            "type_id": 11,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": ""
+        }
+      ]
+    },
+    "referenced_type_descriptions": []
+  },
+  "type_hashes": [
+    {
+      "type_name": "chassis_control_hw/msg/FrontWheelOdometry",
+      "hash_string": "RIHS01_336af0b3754b35cd9faf0b5fe5f4d619831ccc0d5a8a3d747d73160fa87e72b4"
+    }
+  ]
+}

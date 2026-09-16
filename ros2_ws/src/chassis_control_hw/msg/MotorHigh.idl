@@ -1,0 +1,33 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from chassis_control_hw/msg/MotorHigh.msg
+// generated code does not contain a copyright notice
+
+
+module chassis_control_hw {
+  module msg {
+    @verbatim (language="comment", text=
+      "MotorHigh.msg - 25x高速反馈数据" "\n"
+      "电机高速信息反馈")
+    struct MotorHigh {
+      @verbatim (language="comment", text=
+        "电机ID (1-8)")
+      uint8 motor_id;
+
+      @verbatim (language="comment", text=
+        "CAN ID")
+      uint16 can_id;
+
+      @verbatim (language="comment", text=
+        "转速 (单位: RPM)")
+      float rpm;
+
+      @verbatim (language="comment", text=
+        "电流 (单位: A)")
+      float current;
+
+      @verbatim (language="comment", text=
+        "脉冲计数")
+      int32 pulse;
+    };
+  };
+};

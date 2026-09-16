@@ -1,0 +1,28 @@
+// generated from rosidl_adapter/resource/action.idl.em
+// with input from chassis_control_hw/action/MoveToPreset.action
+// generated code does not contain a copyright notice
+
+
+module chassis_control_hw {
+  module action {
+    @verbatim (language="comment", text=
+      "Goal: 指定目标高度（mm）。0 表示使用记忆点")
+    struct MoveToPreset_Goal {
+      int32 target_height;
+    };
+    @verbatim (language="comment", text=
+      "Result")
+    struct MoveToPreset_Result {
+      boolean success;
+
+      string message;
+    };
+    @verbatim (language="comment", text=
+      "Feedback")
+    struct MoveToPreset_Feedback {
+      int32 current_height;
+
+      float progress;
+    };
+  };
+};

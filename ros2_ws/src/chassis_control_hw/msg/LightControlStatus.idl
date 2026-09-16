@@ -1,0 +1,29 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from chassis_control_hw/msg/LightControlStatus.msg
+// generated code does not contain a copyright notice
+
+
+module chassis_control_hw {
+  module msg {
+    @verbatim (language="comment", text=
+      "LightControlStatus.msg - 灯光控制状态反馈" "\n"
+      "灯光控制状态")
+    struct LightControlStatus {
+      @verbatim (language="comment", text=
+        "使能状态码")
+      int8 enable;
+
+      @verbatim (language="comment", text=
+        "使能状态文本描述")
+      string enable_text;
+
+      @verbatim (language="comment", text=
+        "灯光模式码")
+      int8 mode;
+
+      @verbatim (language="comment", text=
+        "灯光模式文本描述")
+      string mode_text;
+    };
+  };
+};

@@ -1,0 +1,85 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from chassis_control_hw/msg/BMSAlarmWarning.msg
+// generated code does not contain a copyright notice
+
+
+module chassis_control_hw {
+  module msg {
+    @verbatim (language="comment", text=
+      "BMSAlarmWarning.msg - BMS报警和警告信息" "\n"
+      "BMS报警警告信息")
+    struct BMSAlarmWarning {
+      @verbatim (language="comment", text=
+        "报警字节1")
+      uint8 alarm1;
+
+      @verbatim (language="comment", text=
+        "报警字节2")
+      uint8 alarm2;
+
+      @verbatim (language="comment", text=
+        "警告字节1")
+      uint8 warn1;
+
+      @verbatim (language="comment", text=
+        "警告字节2")
+      uint8 warn2;
+
+      @verbatim (language="comment", text=
+        "过压报警")
+      boolean over_voltage_alarm;
+
+      @verbatim (language="comment", text=
+        "欠压报警")
+      boolean under_voltage_alarm;
+
+      @verbatim (language="comment", text=
+        "高温报警")
+      boolean high_temp_alarm;
+
+      @verbatim (language="comment", text=
+        "低温报警")
+      boolean low_temp_alarm;
+
+      @verbatim (language="comment", text=
+        "放电过流报警")
+      boolean discharge_overcurrent_alarm;
+
+      @verbatim (language="comment", text=
+        "充电过流报警")
+      boolean charge_overcurrent_alarm;
+
+      @verbatim (language="comment", text=
+        "过压警告")
+      boolean over_voltage_warning;
+
+      @verbatim (language="comment", text=
+        "欠压警告")
+      boolean under_voltage_warning;
+
+      @verbatim (language="comment", text=
+        "高温警告")
+      boolean high_temp_warning;
+
+      @verbatim (language="comment", text=
+        "低温警告")
+      boolean low_temp_warning;
+
+      @verbatim (language="comment", text=
+        "放电过流警告")
+      boolean discharge_overcurrent_warning;
+
+      @verbatim (language="comment", text=
+        "充电过流警告")
+      boolean charge_overcurrent_warning;
+
+      @verbatim (language="comment", text=
+        "是否有报警")
+      boolean has_alarm;
+
+      @verbatim (language="comment", text=
+        "是否有警告")
+      boolean has_warning;
+    };
+  };
+};

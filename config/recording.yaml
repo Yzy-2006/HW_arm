@@ -1,0 +1,23 @@
+task: "wipe with a towel using both arms"
+dataset_root: data/raw/towel_wipe
+fps: 30
+width: 640
+height: 480
+min_episode_frames: 30
+# Receive-time checks, not hardware synchronization. Timestamps are preserved.
+max_stream_age_s: 0.20
+max_stream_skew_s: 0.10
+max_camera_age_s: 0.15
+max_camera_skew_s: 0.07
+max_frame_gap_s: 0.10
+# Optional: publish the two captured RGB streams to RViz. This does not publish
+# robot commands and does not change the frames written to disk.
+publish_rviz: false
+cameras:
+  head: "261222075640"
+  wrist: "260422274993"
+# Original driver publishes these names; its arm controller currently swaps the
+# left/right subscriptions. Preserve topic names verbatim in diagnostics.
+force_topics:
+  force_topic_left: /force_sensor/left/wrench
+  force_topic_right: /force_sensor/right/wrench

@@ -1,0 +1,30 @@
+ecat_8can:
+
+  # CAN ID 分块: CAN0=1~8, CAN1=1-8, CAN2=1-8, 转换板ID不能>=10,会屏蔽ID>=10的电机报文
+  # joint_id 1-14 为手臂关节，99 为夹爪(不参与运动学)
+  channels:
+
+    # 左臂关节 1~7 (CH0 slot 0-6)
+    - channel: 0
+      motors:
+        - {slot: 0, joint_id: 1, motor_can_id: 1, kt: 2.1, direction: 1}
+        - {slot: 1, joint_id: 2, motor_can_id: 2, kt: 2.8, direction: 1}
+        - {slot: 2, joint_id: 3, motor_can_id: 3, kt: 2.8, direction: 1}
+        - {slot: 3, joint_id: 4, motor_can_id: 4, kt: 2.8, direction: 1}
+        - {slot: 4, joint_id: 5, motor_can_id: 5, kt: 1.4, direction: 1}
+        - {slot: 5, joint_id: 6, motor_can_id: 6, kt: 1.4, direction: 1}
+        - {slot: 6, joint_id: 7, motor_can_id: 7, kt: 1.4, direction: 1}
+        - {slot: 7, joint_id: 99, motor_can_id: 8, kt: 0.0, direction: -1}
+
+    # 右臂关节 8~14 (CH1 slot 0-6)
+    - channel: 1
+      motors:
+        - {slot: 0, joint_id: 8,  motor_can_id: 1, kt: 2.1, direction: 1}
+        - {slot: 1, joint_id: 9,  motor_can_id: 2, kt: 2.8, direction: 1}
+        - {slot: 2, joint_id: 10, motor_can_id: 3, kt: 2.8, direction: 1}
+        - {slot: 3, joint_id: 11, motor_can_id: 4, kt: 2.8, direction: 1}
+        - {slot: 4, joint_id: 12, motor_can_id: 5, kt: 1.4, direction: 1}
+        - {slot: 5, joint_id: 13, motor_can_id: 6, kt: 1.4, direction: 1}
+        - {slot: 6, joint_id: 14, motor_can_id: 7, kt: 1.4, direction: 1}
+        - {slot: 7, joint_id: 99, motor_can_id: 8, kt: 0.0, direction: 1}
+

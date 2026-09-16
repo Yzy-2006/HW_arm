@@ -1,0 +1,65 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from chassis_control_hw/msg/MotorLow.msg
+// generated code does not contain a copyright notice
+
+
+module chassis_control_hw {
+  module msg {
+    @verbatim (language="comment", text=
+      "MotorLow.msg - 26x低速反馈数据" "\n"
+      "电机低速信息反馈")
+    struct MotorLow {
+      @verbatim (language="comment", text=
+        "电机ID (1-8)")
+      uint8 motor_id;
+
+      @verbatim (language="comment", text=
+        "CAN ID")
+      uint16 can_id;
+
+      @verbatim (language="comment", text=
+        "驱动器电压 (单位: V)")
+      float driver_vol;
+
+      @verbatim (language="comment", text=
+        "驱动器温度 (单位: °C)")
+      float driver_temp;
+
+      @verbatim (language="comment", text=
+        "电机温度 (单位: °C)")
+      float motor_temp;
+
+      @verbatim (language="comment", text=
+        "驱动器状态字节")
+      uint8 driver_status;
+
+      @verbatim (language="comment", text=
+        "使能状态")
+      boolean enable_status;
+
+      @verbatim (language="comment", text=
+        "错误状态")
+      boolean error_status;
+
+      @verbatim (language="comment", text=
+        "传感器状态")
+      boolean sensor_status;
+
+      @verbatim (language="comment", text=
+        "驱动器过温")
+      boolean over_temp_driver;
+
+      @verbatim (language="comment", text=
+        "过流")
+      boolean over_current;
+
+      @verbatim (language="comment", text=
+        "电机过温")
+      boolean over_temp_motor;
+
+      @verbatim (language="comment", text=
+        "欠压")
+      boolean under_voltage;
+    };
+  };
+};

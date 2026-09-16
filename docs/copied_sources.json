@@ -1,0 +1,66 @@
+[
+  {
+    "source": "catkin_ws_ENCOS3不抖动/catkin_ws_ENCOS/src/ctl_msgs_hw",
+    "destination": "ros2_ws/src/ctl_msgs_hw"
+  },
+  {
+    "source": "catkin_ws_ENCOS3不抖动/catkin_ws_ENCOS/src/servo_control_hw",
+    "destination": "ros2_ws/src/servo_control_hw"
+  },
+  {
+    "source": "catkin_ws_ENCOS3不抖动/catkin_ws_ENCOS/src/dual_arm_control_hw",
+    "destination": "ros2_ws/src/dual_arm_control_hw"
+  },
+  {
+    "source": "catkin_ws_ENCOS3不抖动/catkin_ws_ENCOS/src/robot_control_hw",
+    "destination": "ros2_ws/src/robot_control_hw"
+  },
+  {
+    "source": "catkin_ws_ENCOS3不抖动/catkin_ws_ENCOS/src/encos_force_sensor",
+    "destination": "ros2_ws/src/encos_force_sensor"
+  },
+  {
+    "source": "catkin_ws_ENCOS3不抖动/catkin_ws_ENCOS/install/chassis_control_hw/share/chassis_control_hw/msg",
+    "destination": "ros2_ws/src/chassis_control_hw/msg"
+  },
+  {
+    "source": "catkin_ws_ENCOS3不抖动/catkin_ws_ENCOS/install/chassis_control_hw/share/chassis_control_hw/srv",
+    "destination": "ros2_ws/src/chassis_control_hw/srv"
+  },
+  {
+    "source": "catkin_ws_ENCOS3不抖动/catkin_ws_ENCOS/install/chassis_control_hw/share/chassis_control_hw/action",
+    "destination": "ros2_ws/src/chassis_control_hw/action"
+  },
+  {
+    "source": "catkin_ws_ENCOS3不抖动/catkin_ws_ENCOS/install/dual_arm_hw/share/dual_arm_hw/urdf",
+    "destination": "ros2_ws/src/dual_arm_hw/urdf"
+  },
+  {
+    "source": "catkin_ws_ENCOS3不抖动/catkin_ws_ENCOS/install/dual_arm_hw/share/dual_arm_hw/meshes",
+    "destination": "ros2_ws/src/dual_arm_hw/meshes"
+  },
+  {
+    "source": "catkin_ws_ENCOS3不抖动/catkin_ws_ENCOS/install/dual_arm_hw/share/dual_arm_hw/config",
+    "destination": "ros2_ws/src/dual_arm_hw/config"
+  },
+  {
+    "source": "vr_teleuer-master3不抖动/vr_teleuer-master/pyproject.toml",
+    "destination": "teleop/pyproject.toml"
+  },
+  {
+    "source": "vr_teleuer-master3不抖动/vr_teleuer-master/LICENSE",
+    "destination": "teleop/LICENSE"
+  },
+  {
+    "source": "vr_teleuer-master3不抖动/vr_teleuer-master/src/televuer",
+    "destination": "teleop/src/televuer"
+  },
+  {
+    "source": "vr_teleuer-master3不抖动/vr_teleuer-master/VR_controller/vr_pose_increment_publisher.py",
+    "destination": "teleop/VR_controller/vr_pose_increment_publisher.py"
+  },
+  {
+    "source": "vr_teleuer-master3不抖动/vr_teleuer-master/VR_controller/config",
+    "destination": "teleop/VR_controller/config"
+  }
+]

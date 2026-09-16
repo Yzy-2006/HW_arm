@@ -1,0 +1,19 @@
+// generated from rosidl_adapter/resource/srv.idl.em
+// with input from chassis_control_hw/srv/SavePreset.srv
+// generated code does not contain a copyright notice
+
+
+module chassis_control_hw {
+  module srv {
+    @verbatim (language="comment", text=
+      "请求为空")
+    struct SavePreset_Request {
+      uint8 structure_needs_at_least_one_member;
+    };
+    struct SavePreset_Response {
+      boolean success;
+
+      string message;
+    };
+  };
+};

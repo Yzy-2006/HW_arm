@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>dual_arm_hw</name><version>0.0.0</version>
+  <description>Recovered ENCOS URDF and mesh assets</description>
+  <maintainer email="maintainer@example.com">Towel task maintainer</maintainer>
+  <license>LicenseRef-Original-Project-Unspecified</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

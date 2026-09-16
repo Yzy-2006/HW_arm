@@ -1,0 +1,30 @@
+#ifndef __debugPublish__H__
+#define __debugPublish__H__
+
+#include <iostream>
+#include <string>
+#include <vector>
+
+#include "rclcpp/rclcpp.hpp"
+#include "ctl_msgs_hw/msg/dbg_information.hpp"
+
+class debugMsgPub_upper{
+    private:
+        rclcpp::Node* node_ptr_;
+
+        //初始化发送的消息类型
+        rclcpp::Publisher<ctl_msgs_hw::msg::DbgInformation>::SharedPtr debug_msg_send;
+        rclcpp::Publisher<ctl_msgs_hw::msg::DbgInformation>::SharedPtr debug_msg_send_2;
+    public:
+
+        debugMsgPub_upper(rclcpp::Node* node);
+
+        void debug_msg_publish_1(std::vector<double> l_reserve, std::vector<double> r_reserve);
+        void debug_msg_publish_2(std::vector<double> l_reserve, std::vector<double> r_reserve);
+};
+
+//-----------------------------------------------------------------------------------
+
+extern debugMsgPub_upper* global_debugPub;
+
+#endif

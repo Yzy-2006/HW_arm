@@ -1,0 +1,25 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from chassis_control_hw/msg/ChassisMotion.msg
+// generated code does not contain a copyright notice
+
+
+module chassis_control_hw {
+  module msg {
+    @verbatim (language="comment", text=
+      "ChassisMotion.msg - 底盘运动数据" "\n"
+      "底盘运动信息")
+    struct ChassisMotion {
+      @verbatim (language="comment", text=
+        "线速度 (单位: m/s)")
+      double linear_speed;
+
+      @verbatim (language="comment", text=
+        "旋转角速度 (单位: rad/s)")
+      double rotate_angular;
+
+      @verbatim (language="comment", text=
+        "转向角 (单位: rad)")
+      double steering_angle;
+    };
+  };
+};

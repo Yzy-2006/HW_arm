@@ -1,0 +1,25 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from chassis_control_hw/msg/FaultBit.msg
+// generated code does not contain a copyright notice
+
+
+module chassis_control_hw {
+  module msg {
+    @verbatim (language="comment", text=
+      "FaultBit.msg - 故障位数据" "\n"
+      "故障位信息")
+    struct FaultBit {
+      @verbatim (language="comment", text=
+        "故障项目名称")
+      string item;
+
+      @verbatim (language="comment", text=
+        "故障值 (0-正常, 1-故障)")
+      int8 value;
+
+      @verbatim (language="comment", text=
+        "故障描述文本")
+      string text;
+    };
+  };
+};

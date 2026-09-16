@@ -1,0 +1,59 @@
+# =============================================================================
+# encos_force_sensor 六维力传感器 CAN-FD 驱动节点配置
+# -----------------------------------------------------------------------------
+# 配置多个六维力传感器：在 sensors 下按名称添加条目即可，数量即列表条目数。
+# 每个传感器独立收发线程、独立 topic、独立去皮服务。
+#
+# topic:  /force_sensor/<name>/wrench   (geometry_msgs/WrenchStamped)
+# 服务:    /force_sensor/<name>/tare    (std_srvs/Trigger)
+#
+# 后端 backend 可选：
+#   socketcan : Linux 内核 SocketCAN（跨 x86_64 / aarch64，推荐；需先用
+#               `ip link set <dev> up type can bitrate ... dbitrate ... fd on` 配置接口）
+#   zlg       : ZLG USBCANFD-200U 官方驱动 libcontrolcanfd.so（仅 x86_64）
+# =============================================================================
+encos_force_sensor_node:
+  ros__parameters:
+    # ---------- 全局默认（各传感器可覆盖同名项） ----------
+    transport: "socketcan"       # 默认后端: socketcan / zlg
+    arbitration_baud: 1000000    # 仲裁域波特率 (bps)
+    data_baud: 5000000           # 数据域波特率 (bps)
+    fd_enabled: true             # 启用 CAN-FD
+    zlg_device_type: 41          # ZLG 设备类型：USBCANFD_200U=41
+    zlg_device_index: 0          # ZLG 设备索引
+    publish_rate: 1000.0         # 默认发布频率 (Hz)，<=0 表示每帧都发
+    tare_samples: 10             # 默认去皮采样帧数
+
+    # ---------- 传感器列表（Map：名称 -> 配置） ----------
+    sensors:
+      left:
+        transport: "socketcan"   # 覆盖全局 transport
+        device: "can0"           # SocketCAN 接口名；zlg 后端则填通道号 "0"/"1"
+        frame_id: "left_gripper_force"
+        can_id: 0x101            # 传感器 CAN ID；0 表示不过滤
+        id_mask: 0x1FFFFFFF      # ID 过滤掩码
+        is_extended: false       # 是否为扩展帧
+        axis_flip: [-1.0, 1.0, 1.0, -1.0, 1.0, 1.0]  # 坐标变换符号 [Fx,Fy,Fz,Mx,My,Mz]
+        publish_rate: 1000.0
+        tare_samples: 10
+
+      right:
+        transport: "socketcan"
+        device: "can1"
+        frame_id: "right_gripper_force"
+        can_id: 0x001
+        id_mask: 0x1FFFFFFF
+        is_extended: false
+        axis_flip: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+        publish_rate: 1000.0
+        tare_samples: 10
+
+      # 第三路示例（演示"任意数量"；zlg 后端需 x86_64 且接 ZLG 设备时启用）
+      # wrist:
+      #   transport: "zlg"
+      #   device: "0"
+      #   frame_id: "wrist_force"
+      #   can_id: 0x103
+      #   id_mask: 0x1FFFFFFF
+      #   is_extended: false
+      #   axis_flip: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]

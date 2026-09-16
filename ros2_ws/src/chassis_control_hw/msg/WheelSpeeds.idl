@@ -1,0 +1,29 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from chassis_control_hw/msg/WheelSpeeds.msg
+// generated code does not contain a copyright notice
+
+
+module chassis_control_hw {
+  module msg {
+    @verbatim (language="comment", text=
+      "SteeringSpeeds.msg - 转向速度反馈" "\n"
+      "轮速信息")
+    struct WheelSpeeds {
+      @verbatim (language="comment", text=
+        "1号轮速度 (单位: m/s)")
+      double wheel_01;
+
+      @verbatim (language="comment", text=
+        "2号轮速度 (单位: m/s)")
+      double wheel_02;
+
+      @verbatim (language="comment", text=
+        "3号轮速度 (单位: m/s)")
+      double wheel_03;
+
+      @verbatim (language="comment", text=
+        "4号轮速度 (单位: m/s)")
+      double wheel_04;
+    };
+  };
+};

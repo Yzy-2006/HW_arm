@@ -1,0 +1,29 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from chassis_control_hw/msg/SteeringAngles.msg
+// generated code does not contain a copyright notice
+
+
+module chassis_control_hw {
+  module msg {
+    @verbatim (language="comment", text=
+      "SteeringAngles.msg - 四轮角度反馈" "\n"
+      "转向角度信息")
+    struct SteeringAngles {
+      @verbatim (language="comment", text=
+        "1号转向轮角度 (单位: rad)")
+      double steering_01;
+
+      @verbatim (language="comment", text=
+        "2号转向轮角度 (单位: rad)")
+      double steering_02;
+
+      @verbatim (language="comment", text=
+        "3号转向轮角度 (单位: rad)")
+      double steering_03;
+
+      @verbatim (language="comment", text=
+        "4号转向轮角度 (单位: rad)")
+      double steering_04;
+    };
+  };
+};

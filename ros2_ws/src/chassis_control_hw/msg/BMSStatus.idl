@@ -1,0 +1,41 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from chassis_control_hw/msg/BMSStatus.msg
+// generated code does not contain a copyright notice
+
+
+module chassis_control_hw {
+  module msg {
+    @verbatim (language="comment", text=
+      "BMSStatus.msg - BMS状态反馈" "\n"
+      "BMS状态信息")
+    struct BMSStatus {
+      @verbatim (language="comment", text=
+        "电池剩余电量 (单位: %)")
+      uint8 soc;
+
+      @verbatim (language="comment", text=
+        "电池健康度 (单位: %)")
+      uint8 soh;
+
+      @verbatim (language="comment", text=
+        "电池电压 (单位: V)")
+      float voltage;
+
+      @verbatim (language="comment", text=
+        "电池电流 (单位: A)")
+      float current;
+
+      @verbatim (language="comment", text=
+        "电池温度 (单位: °C)")
+      float temperature;
+
+      @verbatim (language="comment", text=
+        "BMS状态码")
+      uint8 status;
+
+      @verbatim (language="comment", text=
+        "BMS状态文本描述")
+      string status_text;
+    };
+  };
+};

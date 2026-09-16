@@ -1,0 +1,12 @@
+# GPU training / conversion only. It deliberately excludes ROS 2 and hardware drivers.
+name: towel-pi05
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - git
+  - git-lfs
+  - ffmpeg
+  - pip:
+      - uv>=0.5,<1

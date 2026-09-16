@@ -1,0 +1,86 @@
+{
+  "type_description_msg": {
+    "type_description": {
+      "type_name": "chassis_control_hw/msg/MotorHighArray",
+      "fields": [
+        {
+          "name": "motors",
+          "type": {
+            "type_id": 145,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "chassis_control_hw/msg/MotorHigh"
+          },
+          "default_value": ""
+        }
+      ]
+    },
+    "referenced_type_descriptions": [
+      {
+        "type_name": "chassis_control_hw/msg/MotorHigh",
+        "fields": [
+          {
+            "name": "motor_id",
+            "type": {
+              "type_id": 3,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "can_id",
+            "type": {
+              "type_id": 5,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "rpm",
+            "type": {
+              "type_id": 10,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "current",
+            "type": {
+              "type_id": 10,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "pulse",
+            "type": {
+              "type_id": 6,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      }
+    ]
+  },
+  "type_hashes": [
+    {
+      "type_name": "chassis_control_hw/msg/MotorHighArray",
+      "hash_string": "RIHS01_b32db7ce2a76dc43f81d0cdecacde2d24d7eba683d112b093cee6f2f2f80c37b"
+    },
+    {
+      "type_name": "chassis_control_hw/msg/MotorHigh",
+      "hash_string": "RIHS01_216badc33343c19a677d7d9076199a8f306ff861f05c1418c54f91dcf0302e98"
+    }
+  ]
+}
