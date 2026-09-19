@@ -162,7 +162,7 @@ TransLoopCtlInte:
     lArm_DOF: 7
     rArm_DOF: 7
     ZeroPos_Threshold: 0.02
-    netCard_name: "enP2p1s0"
+    netCard_name: "enp129s0"
 
   #中层节点控制参数
   dual_arm_ctl_node_loop_ctl:

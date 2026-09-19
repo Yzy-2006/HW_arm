@@ -96,6 +96,19 @@ ament_target_dependencies(servo_node rclcpp std_msgs ctl_msgs_hw Boost yaml-cpp
 )
 target_link_libraries(servo_node soem pthread rt yaml-cpp)
 
+# EtherCAT needs CAP_NET_RAW/CAP_NET_ADMIN when servo_node is run without sudo.
+# A capability-enabled ELF ignores LD_LIBRARY_PATH and rejects an $ORIGIN path
+# outside trusted system directories.  Preserve absolute lookup locations for
+# the interface package and the ROS prefix found by CMake.
+get_filename_component(servo_ctl_msgs_prefix "${ctl_msgs_hw_DIR}/../../.." ABSOLUTE)
+get_filename_component(servo_ros_prefix "${rclcpp_DIR}/../../.." ABSOLUTE)
+set_target_properties(servo_node PROPERTIES
+  INSTALL_RPATH "${servo_ctl_msgs_prefix}/lib;${servo_ros_prefix}/lib"
+)
+# DT_RUNPATH only applies to direct dependencies.  Use DT_RPATH so ROS
+# libraries loaded by ctl_msgs_hw inherit the same lookup locations.
+target_link_options(servo_node PRIVATE "-Wl,--disable-new-dtags")
+
 # 安装规则
 install(TARGETS servo_node
   DESTINATION lib/${PROJECT_NAME})

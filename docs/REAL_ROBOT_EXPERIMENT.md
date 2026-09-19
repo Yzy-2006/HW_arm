@@ -1,144 +1,96 @@
 # 真机实验流程：双臂 VR 叠毛巾与数据采集
 
-适用目录：`/home/yanziyu/projects/HW_arm/towel_task`。
-本流程假设操作者已了解本机物理急停、上电和 CAN/EtherCAT 的厂家操作要求。
-**软件停止或 Ctrl+C 不是物理急停。** 人或设备出现风险时先使用物理急停，确认机械臂和环境安全后再排查。
+本文件是一次实验当天的**总清单**。它只说明顺序、通过条件与下一份专项文档；相机、夹爪、力传感器、VR 和数据格式的具体命令均在各自模块中维护，避免同一命令在多处失效。
 
-## 明日流程表
+适用目录：`/home/yanziyu/projects/HW_arm/towel_task`。软件停止不是物理急停；人员、机械臂或线缆存在风险时，先按现场规范使用物理急停。
 
-| 阶段 | 要做什么 | 通过条件 | 未通过时 |
+## 当天流程表
+
+| 阶段 | 目标 | 通过条件 | 进入的模块 |
 |---|---|---|---|
-| 0. 准备 | 清理工作台；固定/铺平毛巾；检查两臂、工具、相机、网线、CAN、急停和供电 | 运动空间无人、线缆无拉扯、急停可触及 | 不上电，不启动软件 |
-| 1. 软件 | 退出 Conda；如已创建则激活 `.venv-robot`；source 环境；构建并执行只读检查 | `make build`、`make check-control`、`make check-record`、`make check-visualize` 通过 | 修依赖后重试；不要绕过检查 |
-| 2. 相机预检 | 在不启动机械臂的情况下运行 `make preview` | RViz 有 head/wrist 实时图像；相机画面方向、曝光、帧率正常 | 停止占用相机的软件，检查序列号和 USB |
-| 3. 夹爪标定 | 停止 VR；按 [夹爪标定说明](GRIPPER_CALIBRATION.md) 采集左右开/闭端点 | 两侧 `calibrated: true`，单独按键方向正确 | 保持未标定侧禁用；不要采集双手抓取示教 |
-| 4. 硬件上电 | 按机器人厂家规定上电、配置网络/EtherCAT/CAN；工具未接触毛巾 | 无硬件故障；力传感器持续输出 | 急停/断电后检查接线和总线 |
-| 5. 力与反馈 | 无载荷时对每路力传感器去皮；检查关节反馈、夹爪状态和 VR 状态 | 数据新鲜、方向符合预期、无异常力 | 不做接触动作；检查传感器话题映射 |
-| 6. 空载联调 | 启动全套节点，但先不触碰毛巾；低幅度、低速度分别测试左右臂和夹爪 | 左右触发器、姿态轴、夹爪开闭、回零均正确 | 立即停住；修正标定/映射后重新验证 |
-| 7. 试录 | 用短、无接触动作录制并保存一段 | 有完整 episode，无 `.partial`；两路视频和关节数据齐全 | 丢弃片段，先处理时序或相机问题 |
-| 8. 正式采集 | 每段只完成一次完整叠毛巾；包含不同毛巾初始姿态和抓取方式 | 完成段数持续增加，失败段不混入数据 | 用左 A 丢弃失败片段 |
-| 9. 收尾 | 正常结束当前段；松开触发器；按现场规范停机 | 数据目录只保留准备导出的完整段 | 不把 `.partial` 当训练数据 |
-| 10. 数据验收 | 在训练机或导出环境校验数据 | `make validate-data` 成功，再导出 LeRobot | 修复问题后重新采，不修改原始帧伪造数据 |
+| 0. 现场安全 | 清空工作空间，检查急停、供电、网线、CAN/EtherCAT、三台相机和毛巾 | 急停可触及，无线缆拉扯或运动干涉 | 本文件的“0” |
+| 1. 软件就绪 | 构建并完成只读依赖检查 | `make build`、`make check`、`make test` 成功 | [环境与构建](../environments/README.md) |
+| 2. 相机预检 | 确认三台相机序列号、物理位置和画面 | head/left_wrist/right_wrist 三路正确且稳定 | [相机序列号配置](CAMERA_CONFIGURATION.md) |
+| 3. 夹爪标定 | 采样左右开/闭端点并检查反馈 | 两侧 `calibrated: true`；夹爪状态不为 `-1` | [双夹爪标定](GRIPPER_CALIBRATION.md) |
+| 4. 空载 VR | 检查双臂位姿、夹爪、回零和右臂前馈 | 所有方向、安全限幅和按键符合预期 | [VR 遥操作检查](VR_TELEOP_CHECK.md) |
+| 5. 完整实验与去皮 | 用最终会录制的进程启动整套系统，再对空载传感器去皮 | 左右 wrench 新鲜、去皮后接近零且物理对应正确 | [力传感器检查与去皮](FORCE_SENSOR.md) |
+| 6. 试录和正式采集 | 先保存短的无接触样本，再录制叠毛巾 | 三路图像和机器人数据完整，无意外 `.partial` | [数据集约定](DATASET.md) |
+| 7. 验收与导出 | 校验完整 episode，并在训练环境导出 | 校验成功；训练/验证按 episode 划分 | [数据集约定](DATASET.md)、[π0.5 训练](../training/README_PI05.md) |
+| 8. 安全停机 | 正常结束录制、松开操作输入并按现场规范停机 | 不把 `.partial` 或失败段用于训练 | 本文件的“8” |
 
-## 0. 当天开始前的命令
+## 0. 现场安全
 
-在每个机器人端终端执行：
+在运行任何 ROS 节点前：
 
-```bash
-cd /home/yanziyu/projects/HW_arm/towel_task
-conda deactivate 2>/dev/null || true
-if [[ -f .venv-robot/bin/activate ]]; then source .venv-robot/bin/activate; fi
-source scripts/env.sh
-```
+- 清空双臂可达空间，固定或铺平毛巾，确认无人员、工具或线缆会进入轨迹；
+- 确认物理急停可触及，并按厂家规定完成上电、EtherCAT 和 CAN 配置；确认 EtherCAT
+  网卡显示 `LOWER_UP`（没有 `NO-CARRIER`），并已按[环境与构建](../environments/README.md#ethercat-网卡权限)
+  配置 `servo_node` 的网卡权限；
+- 检查三台 RealSense 的供电和 USB 连接；
+- 首次联调、重新标定或修改映射后，一律从空载、小幅、低速动作开始。
 
-首次或代码变更后：
+未通过任一项时不上电、不启动两终端控制流程。
+
+## 1. 软件就绪
+
+在项目根目录执行：
 
 ```bash
 make build
-make check-control
-make check-record
-make check-visualize
+make check
 make test
 ```
 
-`check-control` 失败通常代表 ROS、Pinocchio/CasADi 或厂商 SDK 未就绪；
-`check-record` 失败通常代表 RealSense Python 包或相机运行环境未就绪；
-`check-visualize` 失败代表 `towel_bringup` 尚未构建或 `rviz2` 未安装。
+`make` 会自动加载机器人端环境。`make check` 是只读检查，不会打开 CAN、启动电机或占用相机。若失败，按 [环境与构建](../environments/README.md) 和 [依赖说明](DEPENDENCIES.md) 修复，不要跳过检查直接进入硬件阶段。
+`make build` 的末尾会自动请求 sudo 并配置 EtherCAT 网卡权限；若该授权步骤失败，
+不要进入涉及伺服的后续步骤。
 
-## 1. 相机和 RViz 预检
+## 2. 至 4. 完成三个独立预检
 
-在机械臂未启动的状态下运行：
+按下列顺序完成专项文档，完成前不要启动完整实验：
 
-```bash
-make preview
-```
+1. [相机序列号配置](CAMERA_CONFIGURATION.md)：填写三台非空且互不重复的序列号，并用 `make preview` 查看三路画面；
+2. [双夹爪标定](GRIPPER_CALIBRATION.md)：只启动 `make servo`，写入四个端点并核对 `/gripper/fdb`；
+3. [VR 遥操作检查](VR_TELEOP_CHECK.md)：用 `make teleop` 空载验证左右扳机、两侧 squeeze、右 A、右 B。结束该 Launch 后，才能进入下一阶段。
 
-这会启动采集器和 RViz；采集器会将其正在读取的图像发布到：
+不要让 `make preview`、`make teleop` 与其他控制启动命令并行运行。
 
-```text
-/towel/camera/head/image_raw
-/towel/camera/wrist/image_raw
-```
+## 5. 启动完整实验并去皮
 
-不按右 B 或调用 `/towel/record`，不会创建 episode。此模式没有关节反馈，所以 RViz 中机器人模型不动是正常的；重点检查两路图像。
-
-## 2. 夹爪和力传感器
-
-完成 [双夹爪控制与端点标定](GRIPPER_CALIBRATION.md) 后，重新启动 VR。
-双夹爪状态话题为：
-
-```bash
-ros2 topic echo /towel/gripper_state
-```
-
-格式是 `[左反馈, 右反馈, 左目标, 右目标]`，`0` 为开、`1` 为闭、`-1` 为无有效反馈。
-正式录制前必须没有 `-1`。
-
-工具不接触任何物体时，对实际存在的每个传感器去皮。例如当前配置含 left/right 时：
-
-```bash
-ros2 service call /force_sensor/left/tare std_srvs/srv/Trigger '{}'
-ros2 service call /force_sensor/right/tare std_srvs/srv/Trigger '{}'
-```
-
-当前历史控制代码的左右力话题接线映射尚未由本目录擅自修正。去皮后先以小幅空载动作核对
-`/force_sensor/left/wrench`、`/force_sensor/right/wrench` 的实际工具对应关系和正负方向。
-
-## 3. 启动全套实验
-
-完成物理检查、力传感器去皮和夹爪标定后：
+完成前置步骤、确认现场安全后，运行唯一的完整实验命令：
 
 ```bash
 make experiment VISUALIZE=true
 ```
 
-启动顺序为：伺服与力传感器 → 2 秒后双臂控制 → 4 秒后上层控制 → 5 秒后采集/RViz → 6 秒后 VR。
-RViz 使用独立的 `rviz_` TF 前缀，不会修改或覆盖原控制节点的 TF。
-
-启动后，在另一个已 source 环境的终端做只读观察：
+它会按既有延时顺序启动伺服、力传感器、双臂、上层控制、采集器/RViz 和 VR。等待启动日志稳定后，**保持这一个完整实验进程运行**，在另一个终端分别对空载传感器去皮：
 
 ```bash
-ros2 topic echo --once /dexbotCtl/midMonitor_msg_send
-ros2 topic echo --once /towel/gripper_state
-ros2 topic hz /dexbotCtl/midMonitor_msg_send
-ros2 topic hz /towel/camera/head/image_raw
+make tare-force SIDE=left
+make tare-force SIDE=right
 ```
 
-确认反馈、图像和夹爪状态正常后，XR 设备浏览器打开：
+去皮偏置保存在正在运行的力传感器节点内；如果停止并重新启动完整实验，必须重新去皮。接着按 [力传感器检查与去皮](FORCE_SENSOR.md) 核对两路物理对应、符号和新鲜度。
 
-```text
-https://<主机IP>:8012?ws=wss://<主机IP>:8012
-```
+## 6. 试录与正式采集
 
-进入 Virtual Reality，回到 VR 终端按 Enter。先空载分别测试两侧手臂与夹爪，确认方向后才接触毛巾。
+完整实验进程仍在运行时，使用 VR 中左 B 开始/结束录制，左 A 丢弃当前片段。精确按键含义、XR 连接和安全验证顺序见 [VR 遥操作检查](VR_TELEOP_CHECK.md)。
 
-## 4. 采集单段示教
+先录制 3–5 段短、无接触示教，确认每个完整 episode 都有三路图像、双臂数据和有效夹爪状态，再批量录制叠毛巾。失败、碰撞、人工干预或不完整的片段应立即丢弃，不作为正样本。
 
-| 操作 | 结果 |
-|---|---|
-| 右 B 或 `/towel/record true` | 开始一段新示教 |
-| 完成一次连续叠毛巾后再按右 B | 结束并保存完整段 |
-| 左 `left_aButton` 或 `/towel/discard` | 丢弃当前段 |
-| 控制/相机/文件写入异常 | 片段保留为 `.partial`，不会导出 |
+原始字段、`complete`/`.partial` 生命周期和质量阈值见 [数据集约定](DATASET.md)。
 
-建议先采 3–5 段短演示，检查图像、双臂轨迹和夹爪状态，再开始批量采集。
-每段保持单一任务文本；使用多种毛巾位置、褶皱、朝向和抓取起点，但不要把明显失败、被干预或碰撞的过程保存为正样本。
+## 7. 验收与导出
 
-## 5. 结束和数据验收
-
-先结束当前录制，再松开所有触发器，按现场规定安全停机。发生异常时优先物理急停；
-不要依赖 Launch 退出过程代替安全机制。
-
-采集结束后：
+在采集结束且硬件已按现场规范停机后：
 
 ```bash
 make validate-data
+make export-data OUTPUT=/absolute/path/to/fold_towel_lerobot
 ```
 
-导出命令应在 `towel-pi05` 训练环境中执行：
+若本次使用了非默认的 `dataset_root`，两个命令都增加 `DATASET_ROOT=/absolute/path/to/raw_data`。导出应在安装 LeRobot 的训练环境运行；不要把训练依赖安装到机器人控制环境。数据拆分与字段解释见 [数据集约定](DATASET.md)。
 
-```bash
-make export-data OUTPUT=/absolute/path/to/towel_wipe_lerobot
-```
+## 8. 收尾
 
-导出前请按完整 episode 划分训练/验证集；`.partial`、`too_short`、丢弃的片段不参与导出。
+先正常结束当前录制，再松开扳机和所有按键，按现场规范使机器人安全停机。发生异常优先物理急停。只把通过校验的完整 episode 交给训练；`.partial`、`too_short` 和已丢弃片段保留为排障证据或按数据管理规则清理，绝不伪造或补写原始帧。

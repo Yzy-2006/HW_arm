@@ -178,6 +178,15 @@ class ServoNode : public rclcpp::Node {
         bool has_received_command_;     //当该标志位为false -- 非使能状态； 当标志位为true -- 使能状态
         bool ifFirstTemp;
 
+        // Arm zero calibration is an explicit, isolated mode.  It must never
+        // fall through to the normal homing or upper-controller path.
+        bool left_arm_zero_calibration_ = false;
+        bool both_arm_zero_calibration_ = false;
+        std::vector<double> right_arm_calibration_hold_positions_;
+        void apply_left_arm_zero_calibration_commands(
+            const std::vector<double>& right_hold_positions
+        );
+
         //----------ROS2回调执行器----------
         //显式 executor（替代每次调用都会临时创建 executor 的全局 rclcpp::spin_some）
         //注意：EtherCAT 主循环与回调仍在同一线程执行，避免共享数据竞态

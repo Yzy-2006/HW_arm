@@ -5,7 +5,7 @@
 ## 数据为何这样保留
 
 π0.5 可以从图像、机器人状态和任务指令学习动作，LeRobot 提供 `pi05` 训练入口。
-本项目导出 `observation.state`、`action`、两路图像和任务文本，具体字段见 ../docs/DATASET.md。
+本项目导出 `observation.state`、`action`、头部/左腕/右腕三路图像和任务文本，具体字段见 [数据集约定](../docs/DATASET.md)。
 
 默认动作是 14 个关节位置目标 + 2 个夹爪二值目标（0=开，1=闭）。
 观测中夹爪位是反馈分类，动作中是操作者要求的目标，二者可能在运动中不同。
@@ -31,8 +31,8 @@ pip install 'lerobot[pi]'
 
 ```bash
 lerobot-train \
-  --dataset.repo_id=local/towel_wipe \
-  --dataset.root=/absolute/path/to/towel_task/data/lerobot/towel_wipe \
+  --dataset.repo_id=local/fold_towel \
+  --dataset.root=/absolute/path/to/towel_task/data/lerobot/fold_towel \
   --policy.type=pi05 \
   --policy.pretrained_path=lerobot/pi05_base \
   --policy.empty_cameras=1 \

@@ -92,7 +92,7 @@ def test_nonbinary_recording_status_rejected_and_invalidates_cache():
     with pytest.raises(ValueError):binary_states([0,.5,0,1])
 
 
-def test_vr_button_edges_publish_both_torques_and_binary_states(monkeypatch):
+def test_vr_left_buttons_record_discard_and_squeezes_toggle_matching_grippers(monkeypatch):
     import importlib.util
     import types
     import time
@@ -106,21 +106,55 @@ def test_vr_button_edges_publish_both_torques_and_binary_states(monkeypatch):
     ctl=DualGrippers(config());now=time.monotonic()
     ctl.feedback([30,0,0,0,-30,0,0,0],now)
     fake=types.SimpleNamespace(
-        dual_grippers=ctl,prev_b_button=False,prev_discard_button=False,
-        prev_left_gripper_button=False,prev_gripper_button=False,
+        dual_grippers=ctl,prev_record_button=False,prev_discard_button=False,
+        prev_left_gripper_button=False,prev_right_gripper_button=False,
         gripper_ctl_pub=types.SimpleNamespace(publish=published.append),
         gripper_state_pub=types.SimpleNamespace(publish=states.append),
         toggle_recording=lambda:calls.append('record'),discard_recording=lambda:calls.append('discard'))
-    buttons=types.SimpleNamespace(left_squeeze_ctrl_state=True,left_bButton=True,
-                                 left_aButton=False,right_bButton=False)
+    buttons=types.SimpleNamespace(
+        left_squeeze_ctrl_state=True, right_squeeze_ctrl_state=True,
+        left_aButton=False, left_bButton=False, right_bButton=False,
+    )
     data=types.SimpleNamespace(tele_state=buttons)
     for _ in range(3):module.VRPoseIncrementPublisher.update_gripper(fake,data)
     assert list(states[-1].data)==[0,0,1,1] # No repeat toggle while held.
     assert published[-1].l_arm_gripper_tor < 0
     assert published[-1].r_arm_gripper_tor > 0
+    buttons.left_bButton=True
+    module.VRPoseIncrementPublisher.update_gripper(fake,data)
+    assert calls==['record']
+    buttons.left_bButton=False
+    module.VRPoseIncrementPublisher.update_gripper(fake,data)
+    buttons.left_aButton=True
+    module.VRPoseIncrementPublisher.update_gripper(fake,data)
+    assert calls==['record', 'discard']
     buttons.left_squeeze_ctrl_state=False
     module.VRPoseIncrementPublisher.update_gripper(fake,data)
     buttons.left_squeeze_ctrl_state=True;buttons.right_bButton=True
     module.VRPoseIncrementPublisher.update_gripper(fake,data)
     assert list(states[-1].data)==[0,0,0,1]
-    assert calls==['record']
+
+
+def test_vr_right_b_holds_right_arm_feedforward(monkeypatch):
+    import importlib.util
+    import types
+    pytest.importorskip('rclpy')
+    pytest.importorskip('ctl_msgs_hw.msg')
+    televuer=types.ModuleType('televuer');televuer.TeleVuerWrapper=object
+    monkeypatch.setitem(sys.modules,'televuer',televuer)
+    spec=importlib.util.spec_from_file_location('towel_vr_feedforward_test',ROOT/'teleop/VR_controller/vr_pose_increment_publisher.py')
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    published=[]
+    fake=types.SimpleNamespace(
+        right_arm_ff_pub=types.SimpleNamespace(publish=published.append),
+        right_arm_ff_force=[1., 2., 3., 4., 5., 6.],
+    )
+    buttons=types.SimpleNamespace(right_bButton=True, right_squeeze_ctrl_state=False)
+
+    module.VRPoseIncrementPublisher.publish_arm_feedforward(
+        fake, types.SimpleNamespace(tele_state=buttons)
+    )
+
+    msg=published[-1]
+    assert (msg.force.x, msg.force.y, msg.force.z)==(1., 2., 3.)
+    assert (msg.torque.x, msg.torque.y, msg.torque.z)==(4., 5., 6.)

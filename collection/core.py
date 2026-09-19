@@ -15,21 +15,21 @@ ACTION_NAMES = JOINT_NAMES[:7] + ["left_gripper_closed"] + JOINT_NAMES[7:] + ["r
 REQUIRED = {"q": 14, "dq": 14, "joint_target": 14, "tcp": 12,
             "tcp_target": 12, "gripper_state": 4}
 
-
+# 检查向量的长度和数据是否合法
 def finite_vector(values, size):
     result = [float(x) for x in values]
     if len(result) != size or not all(math.isfinite(x) for x in result):
         raise ValueError(f"Expected {size} finite values")
     return result
 
-
+# 检查数组是不是只有0和1
 def binary_states(values):
     result = finite_vector(values, 4)
     if any(value not in (0, 1) for value in result):
         raise ValueError("Gripper states must be binary and calibrated (0=open, 1=closed)")
     return [int(value) for value in result]
 
-
+# 连接机器人原始数据和学习数据
 def vectors(sample):
     """Joint angles plus measured/commanded binary gripper states."""
     q = finite_vector(sample["q"], 14)
@@ -37,13 +37,12 @@ def vectors(sample):
     target = finite_vector(sample["joint_target"], 14)
     return q[:7]+[g[0]]+q[7:]+[g[1]], target[:7]+[g[2]]+target[7:]+[g[3]]
 
-
+# 缓存机器人不同 ROS topic / 数据流中最新的一条数据
 class StreamCache:
     def __init__(self):
         self.items = {}
 
     def update(self, name, values, received_at, source_time=None):
-        # Invalid messages invalidate the old value rather than extending its lifetime.
         self.items.pop(name, None)
         size = REQUIRED.get(name, 6)
         value = binary_states(values) if name == "gripper_state" else finite_vector(values, size)
@@ -65,13 +64,9 @@ class StreamCache:
                                      for key, value in self.items.items() if key in data}
         return data
 
-
+# 用来保存数据
 class EpisodeWriter:
-    """Write to a partial directory; only explicit stop commits a complete episode.
-
-    A recorder failure keeps partial evidence but it is excluded from export.
-    A discard deletes only the current uncommitted episode.
-    """
+    
     def __init__(self, root, metadata, image_write):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)

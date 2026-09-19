@@ -51,6 +51,35 @@ python scripts/preflight.py --scope control
 python scripts/preflight.py --scope record
 ```
 
+## EtherCAT 网卡权限
+
+`servo_node` 使用 EtherCAT 原始以太网帧，并会把配置中的网卡设为混杂模式；这需要
+Linux 的 `CAP_NET_RAW` 和 `CAP_NET_ADMIN` 权限。没有这两个权限时，日志会显示
+`No socket connection on <网卡名>`，即使网卡名称正确也无法扫描从站。
+
+先确认 `ros2_ws/src/ctl_msgs_hw/config/controllerConfig.yaml` 中的
+`netCard_name` 是实际接入 EtherCAT 的有线网卡。按厂家流程给网关和机械臂上电、接好
+网线后，以下命令应显示 `LOWER_UP`，且不应包含 `NO-CARRIER`：
+
+```bash
+ip -br link show enp129s0   # 将 enp129s0 替换为 netCard_name 的实际值
+```
+
+`servo_node` 已嵌入工作区和 ROS 的 RPATH，因此在带文件能力的安全加载模式下仍能找到
+所需动态库。`make build` 会在 ROS 构建成功后自动调用 `sudo setcap`，授予已安装伺服
+可执行文件 `CAP_NET_RAW` 和 `CAP_NET_ADMIN`。因此每次运行 `make build` 都会提示输入
+sudo 密码；成功时会打印 `getcap` 结果，其中应包含
+`cap_net_admin,cap_net_raw=ep`。
+
+必须从可交互输入 sudo 密码的本机终端运行 `make build`。若取消、输错密码或授权失败，
+`make build` 会返回失败；重新运行它完成授权后，才可直接以当前用户运行 `make servo`、
+`make teleop` 或 `make experiment VISUALIZE=true`，使所有 ROS 节点处于同一用户和 DDS
+通信域。
+
+`sudo -E make servo` 仍可作为临时诊断命令：`sudo` 让伺服节点获得原始网卡权限，`-E`
+请求保留当前 ROS 域、虚拟环境和 OpenRobots 等环境变量。但 root 伺服与普通用户节点
+可能无法通过 DDS 共享内存通信，不能将它作为常规标定、VR 或采集流程。
+
 ## π0.5 训练端：Conda
 
 先创建基础 Conda 环境：

@@ -16,9 +16,9 @@ from core import EpisodeWriter, StreamCache
 
 ROOT = Path(__file__).resolve().parents[1]
 
-
+# 为每一个配置好的RealSense相机创建一个独立线程来不断接受图像
 class Cameras:
-    """One receive thread per RealSense, latest frame plus actual capture metadata."""
+    # 根据序列号创建摄像头并给每一个摄像头开一个接受线程
     def __init__(self, config):
         import pyrealsense2 as rs
         self.rs, self.config = rs, config
@@ -42,7 +42,7 @@ class Cameras:
         except Exception:
             self.close()
             raise
-
+    # 不断接收图像并保存帧数、时间等信息
     def _receive(self, name, pipeline):
         try:
             while not self.stop.is_set():
@@ -62,7 +62,7 @@ class Cameras:
         except Exception as exc:
             if not self.stop.is_set():
                 self.error = str(exc)
-
+    # 从所有相机中取出最新的数据，检查后返回
     def snapshot(self, now):
         with self.lock:
             latest = dict(self.latest)
@@ -77,7 +77,7 @@ class Cameras:
             raise ValueError("Camera receive-time skew exceeds limit")
         return ({name: entry[0] for name, entry in latest.items()},
                 {name: entry[1] for name, entry in latest.items()})
-
+    # 退出接口
     def close(self):
         self.stop.set()
         for thread in self.threads:
@@ -85,7 +85,7 @@ class Cameras:
         for pipeline in self.pipelines.values():
             pipeline.stop()
 
-
+# 用于处理与ROS的交互，将各个topic的信息整合为一帧
 def make_node(config, cameras):
     import rclpy
     from rclpy.node import Node
@@ -267,7 +267,7 @@ def main():
     parser.add_argument("--task")
     parser.add_argument(
         "--publish-rviz", action="store_true", default=None,
-        help="Publish the recorder's head/wrist frames to RViz image topics.",
+        help="Publish every configured camera frame to its RViz image topic.",
     )
     args = parser.parse_args()
     config = yaml.safe_load(args.config.read_text())

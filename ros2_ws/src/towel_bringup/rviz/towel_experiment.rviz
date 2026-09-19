@@ -6,7 +6,8 @@ Panels:
       Expanded:
         - /Robot Model1
         - /Head camera1
-        - /Wrist camera1
+        - /Left wrist camera1
+        - /Right wrist camera1
       Splitter Ratio: 0.5
     Tree Height: 520
   - Class: rviz_common/Views
@@ -35,7 +36,7 @@ Visualization Manager:
       Visual Enabled: true
     - Class: rviz_default_plugins/Image
       Enabled: true
-      Image Topic:
+      Topic:
         Depth: 5
         Durability Policy: Volatile
         History Policy: Keep Last
@@ -43,18 +44,29 @@ Visualization Manager:
         Value: /towel/camera/head/image_raw
       Name: Head camera
       Normalize Range: true
-      Transport Hint: raw
+      Value: true
     - Class: rviz_default_plugins/Image
       Enabled: true
-      Image Topic:
+      Topic:
         Depth: 5
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Best Effort
-        Value: /towel/camera/wrist/image_raw
-      Name: Wrist camera
+        Value: /towel/camera/left_wrist/image_raw
+      Name: Left wrist camera
       Normalize Range: true
-      Transport Hint: raw
+      Value: true
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /towel/camera/right_wrist/image_raw
+      Name: Right wrist camera
+      Normalize Range: true
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48

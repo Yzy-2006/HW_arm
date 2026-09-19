@@ -2,6 +2,7 @@
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include "std_msgs/msg/float64_multi_array.hpp"
 #include <algorithm>    // std::clamp / std::max（夹爪限幅用）
+#include <stdexcept>
 
 //全局变量 -- 数据传输
 std::vector<double> joint_pos(SERVODOF, 0.0);
@@ -22,6 +23,21 @@ ServoNode::ServoNode() : Node ("servo_node"),
     has_received_command_(false),
     ifFirstTemp(true)
 {
+
+    const auto calibration_side = this->declare_parameter<std::string>(
+        "arm_zero_calibration_side", ""
+    );
+    if (
+        !calibration_side.empty()
+        && calibration_side != "left"
+        && calibration_side != "both"
+    ) {
+        throw std::runtime_error(
+            "arm_zero_calibration_side must be left, both, or empty"
+        );
+    }
+    left_arm_zero_calibration_ = !calibration_side.empty();
+    both_arm_zero_calibration_ = calibration_side == "both";
 
     //显式 executor 替代全局 rclcpp::spin_some
     executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
@@ -278,6 +294,41 @@ void ServoNode::EtherCATrun(){
     retMsg_unpack_func();
 }
 
+void ServoNode::apply_left_arm_zero_calibration_commands(
+    const std::vector<double>& right_hold_positions
+){
+    if (static_cast<int>(right_hold_positions.size()) != RARMDOF) {
+        throw std::runtime_error("Missing right-arm calibration hold positions");
+    }
+
+    for(int i = 0; i < LARMDOF; i++){
+        servo_desMsg_orig[i].transMod = 5;
+        servo_desMsg_orig[i].joint_pos = 0.0;
+        servo_desMsg_orig[i].joint_spd = 0.0;
+        servo_desMsg_orig[i].joint_tor = 0.0;
+        servo_desMsg_orig[i].joint_Kp = 0.0;
+        servo_desMsg_orig[i].joint_Kd = 0.0;
+    }
+    for(int i = 0; i < RARMDOF; i++){
+        const int index = i + LARMDOF;
+        if (both_arm_zero_calibration_) {
+            servo_desMsg_orig[index].transMod = 5;
+            servo_desMsg_orig[index].joint_pos = 0.0;
+            servo_desMsg_orig[index].joint_spd = 0.0;
+            servo_desMsg_orig[index].joint_tor = 0.0;
+            servo_desMsg_orig[index].joint_Kp = 0.0;
+            servo_desMsg_orig[index].joint_Kd = 0.0;
+            continue;
+        }
+        servo_desMsg_orig[index].transMod = 1;
+        servo_desMsg_orig[index].joint_pos = right_hold_positions[i];
+        servo_desMsg_orig[index].joint_spd = 0.0;
+        servo_desMsg_orig[index].joint_tor = 0.0;
+        servo_desMsg_orig[index].joint_Kp = rArm_defaultKp[i];
+        servo_desMsg_orig[index].joint_Kd = rArm_defaultKd[i];
+    }
+}
+
 //主要循环函数
 void ServoNode::run(){
     std::cout << "SOEM主站代码 -- ENCOS关节控制与测试代码" << std::endl;
@@ -310,42 +361,67 @@ void ServoNode::run(){
         rclcpp::sleep_for(std::chrono::milliseconds(1));
     }
 
-    //-----------------------------------------------
-    //检查是否有电机反馈
-    bool hasFeedback = false;
-    // 【修改点】：将 SERVODOF 改为基于已过滤的手臂关节数进行安全遍历
-    int valid_arm_dof = LARMDOF + RARMDOF;
-    for(int i = 0; i < valid_arm_dof; i++){
-        if(i < (int)servo_retMsg_unpacked.size()) {
-            if(std::abs(servo_retMsg_unpacked[i].joint_posRet) > 1e-6){
-                hasFeedback = true;
-                break;
-            }
+    if (left_arm_zero_calibration_) {
+        if (static_cast<int>(servo_retMsg_unpacked.size()) < LARMDOF + RARMDOF) {
+            throw std::runtime_error(
+                "Cannot start left-arm calibration without full arm feedback"
+            );
         }
-    }
-    if(!hasFeedback){
-        std::cout << "警告：无电机反馈数据，跳过回零控制。" << std::endl;
-    }
-
-    //回零控制
-    bool needRetZero = false;
-    if(hasFeedback){
-        for(int i = 0; i < LARMDOF; i++){
-            if(std::abs(servo_retMsg_unpacked[i].joint_posRet - lArm_zeroPos[i]) > ZERO_POS_THRESHOLD){
-                needRetZero = true;
-                break;
-            }
+        right_arm_calibration_hold_positions_.resize(RARMDOF);
+        for (int i = 0; i < RARMDOF; i++) {
+            right_arm_calibration_hold_positions_[i] =
+                servo_retMsg_unpacked[i + LARMDOF].joint_posRet;
         }
-        for(int i = 0; i < RARMDOF; i++){
-            if(std::abs(servo_retMsg_unpacked[i + LARMDOF].joint_posRet - rArm_zeroPos[i]) > ZERO_POS_THRESHOLD){
-                needRetZero = true;
-                break;
-            }
+        if (both_arm_zero_calibration_) {
+            RCLCPP_WARN(
+                this->get_logger(),
+                "both-arm calibration: zero-current; support both arms before moving them"
+            );
+        } else {
+            RCLCPP_WARN(
+                this->get_logger(),
+                "left arm calibration: zero-current; support the arm before moving it"
+            );
         }
     }
 
-    //若达成回零控制条件，则开启回零控制
-    if(needRetZero){
+    if (!left_arm_zero_calibration_) {
+        //-----------------------------------------------
+        //检查是否有电机反馈
+        bool hasFeedback = false;
+        // 【修改点】：将 SERVODOF 改为基于已过滤的手臂关节数进行安全遍历
+        int valid_arm_dof = LARMDOF + RARMDOF;
+        for(int i = 0; i < valid_arm_dof; i++){
+            if(i < (int)servo_retMsg_unpacked.size()) {
+                if(std::abs(servo_retMsg_unpacked[i].joint_posRet) > 1e-6){
+                    hasFeedback = true;
+                    break;
+                }
+            }
+        }
+        if(!hasFeedback){
+            std::cout << "警告：无电机反馈数据，跳过回零控制。" << std::endl;
+        }
+
+        //回零控制
+        bool needRetZero = false;
+        if(hasFeedback){
+            for(int i = 0; i < LARMDOF; i++){
+                if(std::abs(servo_retMsg_unpacked[i].joint_posRet - lArm_zeroPos[i]) > ZERO_POS_THRESHOLD){
+                    needRetZero = true;
+                    break;
+                }
+            }
+            for(int i = 0; i < RARMDOF; i++){
+                if(std::abs(servo_retMsg_unpacked[i + LARMDOF].joint_posRet - rArm_zeroPos[i]) > ZERO_POS_THRESHOLD){
+                    needRetZero = true;
+                    break;
+                }
+            }
+        }
+
+        //若达成回零控制条件，则开启回零控制
+        if(needRetZero){
         std::cout << "检测到关节偏离零点，开始回零控制..." << std::endl;
 
         //提取当前双臂位置
@@ -424,15 +500,28 @@ void ServoNode::run(){
             loop_rate.sleep();
         }
 
-        std::cout << "回零控制完成，关节已到达零点位置。" << std::endl;
-    }else{
-        std::cout << "关节已在零点附近，跳过回零控制。" << std::endl;
+            std::cout << "回零控制完成，关节已到达零点位置。" << std::endl;
+        }else{
+            std::cout << "关节已在零点附近，跳过回零控制。" << std::endl;
+        }
     }
 
     //-----------------------------------------------
     //开启ros2循环
     while (rclcpp::ok()){
         ecatcheck();
+
+        if (left_arm_zero_calibration_) {
+            apply_left_arm_zero_calibration_commands(
+                right_arm_calibration_hold_positions_
+            );
+            msg_publish();
+            gripper_fdb_publish();
+            EtherCATrun();
+            executor_->spin_some();
+            loop_rate.sleep();
+            continue;
+        }
 
         //第一轮控制，先直接获取一下反馈值
         if(ifShallInit){

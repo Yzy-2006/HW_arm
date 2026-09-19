@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Dual-arm VR teleoperation for towel_task.
-Left squeeze toggles LEFT gripper; left_bButton toggles RIGHT gripper.
-Right B toggles recording, left_aButton discards, right A returns arms home.
+Left/right squeeze toggle the matching left/right gripper.
+Left B toggles recording, left A discards, right A returns arms home.
 Gripper encoder endpoints and PD: config/grippers.yaml (calibration required).
-Motion mapping and right squeeze force feedforward: config/gripper_pd.yaml.
+Motion mapping and right B force feedforward: config/gripper_pd.yaml.
 /towel/gripper_state: [measured_left, measured_right, commanded_left, commanded_right],
 0=open, 1=closed, -1=unavailable. Motor torque stays on /gripper/ctl only.
 """
@@ -32,8 +32,8 @@ except ImportError:  # pragma: no cover
     yaml = None
 
 
-# 左手柄 Y 键：夹爪开合。本机 Pico 实测物理 Y 键由 televuer 暴露为 left_bButton。
-LEFT_GRIPPER_BUTTON_ATTR = "left_bButton"
+# 左手柄 B 键：开始/结束录制。
+LEFT_RECORD_BUTTON_ATTR = "left_bButton"
 # 左手柄 X 键：丢弃当前录制（不保存）。物理 X 键由 televuer 暴露为 left_aButton。
 LEFT_DISCARD_BUTTON_ATTR = "left_aButton"
 
@@ -100,7 +100,7 @@ GRIPPER_PD_YAML_DEFAULT = str(Path(__file__).resolve().parent / "config/gripper_
 # 默认值：文件缺失/字段缺失时兜底
 GRIPPER_PD_DEFAULTS = {
     # 右手臂六维前馈力 [fx, fy, fz, tx, ty, tz]，单位 N / Nm。
-    # 按下右手柄侧面按键（grip/squeeze）时按此值输出，松开输出零。
+    # 按下右手柄 B 键时按此值输出，松开输出零。
     "right_arm_feedforward_force": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
     # 手臂位姿增量的基准坐标系：
     #   "head" —— 以头部为基准（抵消头部/身体平移和水平转向，仅手柄相对头部的移动生效，安全默认）
@@ -326,7 +326,7 @@ def robot_frame_orientation_delta(
 # -----------------------------------------------------------------------------
 
 class VRPoseIncrementPublisher(Node):
-    """订阅（内部）VR 数据，逐帧计算位姿增量，并按扳机门控发布到 ROS2 话题。"""
+    """订阅(内部)VR 数据，逐帧计算位姿增量，并按扳机门控发布到 ROS2 话题。"""
 
     def __init__(self):
         super().__init__('vr_pose_increment_publisher')
@@ -435,18 +435,17 @@ class VRPoseIncrementPublisher(Node):
         self.dual_grippers = DualGrippers(load_dual_gripper_config())
         self.gripper_state_pub = self.create_publisher(Int8MultiArray, "/towel/gripper_state", 10)
         self.prev_left_gripper_button = False
+        self.prev_right_gripper_button = False
 
-        # ---------- 右臂六维前馈力（右手柄侧面按键 = grip/squeeze）----------
+        # ---------- 右臂六维前馈力（右手柄 B 键，按住才输出）----------
         self.right_arm_ff_pub = self.create_publisher(Wrench, "/vr/right_arm_force_feedforward", 10)
         self.right_arm_ff_force = gripper_cfg["right_arm_feedforward_force"]  # [fx, fy, fz, tx, ty, tz]
-        # 右手柄 B 键上一次状态（用于录制上升沿）
-        self.prev_b_button = False
-        # 本机 Pico 的物理 X 键在 televuer 中对应 left_bButton。
-        self.prev_gripper_button = False
+        # 左手柄 B 键上一次状态（用于录制上升沿）。
+        self.prev_record_button = False
         # 左手柄 X 键上一次状态（用于丢弃录制上升沿）
         self.prev_discard_button = False
 
-        # B 键录制切换：复用现有右手柄 B 上升沿，录制器未启动时不阻塞遥操作。
+        # 左手柄 B 键录制切换；录制器未启动时不阻塞遥操作。
         self.record_service_name = "/towel/record"
         self.record_service_client = self.create_client(SetBool, self.record_service_name)
         self.recording_active = False
@@ -461,10 +460,10 @@ class VRPoseIncrementPublisher(Node):
         self.discard_service_client = self.create_client(Trigger, self.discard_service_name)
         self._discard_service_warned = False
 
-        self.get_logger().info("双夹爪：左 squeeze 切换左夹爪；left_bButton 切换右夹爪；未标定侧不输出力矩")
+        self.get_logger().info("双夹爪：左/右 squeeze 分别切换左/右夹爪；未标定侧不输出力矩")
         self.get_logger().info(
             f"右臂六维前馈力初始化：[fx,fy,fz,tx,ty,tz]={self.right_arm_ff_force} "
-            f"（右手柄侧面按键触发）"
+            f"（按住 right_bButton 触发）"
         )
         self.get_logger().info(
             f"手臂位姿增量基准坐标系：{self.reference_frame} "
@@ -476,7 +475,7 @@ class VRPoseIncrementPublisher(Node):
                 f"水平面平移标定角：{float(gripper_cfg['translation_yaw_offset_deg']):.1f} deg（绕 z 旋转）"
             )
         self.get_logger().info(
-            "VR 初始化完成：左 squeeze 控制左夹爪，left_bButton 控制右夹爪"
+            "VR 初始化完成：左右 squeeze 控制对应夹爪；左 B 录制、左 A 丢弃、右 A 回零、右 B 前馈"
         )
 
     def publish_increment(self, teleData):
@@ -680,20 +679,20 @@ class VRPoseIncrementPublisher(Node):
 
     def update_gripper(self, teleData):
         state = teleData.tele_state if teleData is not None else None
-        record_button = bool(getattr(state, "right_bButton", False))
+        record_button = bool(getattr(state, LEFT_RECORD_BUTTON_ATTR, False))
         discard_button = bool(getattr(state, LEFT_DISCARD_BUTTON_ATTR, False))
         left_button = bool(getattr(state, "left_squeeze_ctrl_state", False))
-        right_button = bool(getattr(state, LEFT_GRIPPER_BUTTON_ATTR, False))
-        if record_button and not self.prev_b_button:
+        right_button = bool(getattr(state, "right_squeeze_ctrl_state", False))
+        if record_button and not self.prev_record_button:
             self.toggle_recording()
         if discard_button and not self.prev_discard_button:
             self.discard_recording()
         torque, states = self.dual_grippers.step(time.monotonic(), {
             "left": left_button and not self.prev_left_gripper_button,
-            "right": right_button and not self.prev_gripper_button,
+            "right": right_button and not self.prev_right_gripper_button,
         })
-        self.prev_b_button, self.prev_discard_button = record_button, discard_button
-        self.prev_left_gripper_button, self.prev_gripper_button = left_button, right_button
+        self.prev_record_button, self.prev_discard_button = record_button, discard_button
+        self.prev_left_gripper_button, self.prev_right_gripper_button = left_button, right_button
         ctl = GripperCtl()
         ctl.ctl_time = 0.02
         ctl.l_arm_gripper_tor, ctl.r_arm_gripper_tor = torque
@@ -707,13 +706,13 @@ class VRPoseIncrementPublisher(Node):
             self.recording_active = bool(message.data)
 
     def toggle_recording(self):
-        """Toggle the passive recorder on a right-hand B-button rising edge."""
+        """Toggle the passive recorder on a left-hand B-button rising edge."""
         if self._record_request_pending:
             return
         if not self.record_service_client.service_is_ready():
             if not self._record_service_warned:
                 self.get_logger().warning(
-                    f"B 键录制切换不可用：未发现 {self.record_service_name}，请先启动 collection/record.py"
+                    f"左 B 键录制切换不可用：未发现 {self.record_service_name}，请先启动 collection/record.py"
                 )
                 self._record_service_warned = True
             return
@@ -727,17 +726,17 @@ class VRPoseIncrementPublisher(Node):
                 response = done_future.result()
             except Exception as exc:  # pragma: no cover - ROS transport failure
                 self._record_request_pending = False
-                self.get_logger().error(f"B 键录制切换服务失败: {exc}")
+                self.get_logger().error(f"左 B 键录制切换服务失败: {exc}")
                 return
             self._record_request_pending = False
             if response.success:
                 self.recording_active = request.data
                 self._record_service_warned = False
                 self.get_logger().info(
-                    "B 键录制开始" if self.recording_active else "B 键录制结束"
+                    "左 B 键录制开始" if self.recording_active else "左 B 键录制结束"
                 )
             else:
-                self.get_logger().warning(f"B 键录制切换被拒绝: {response.message}")
+                self.get_logger().warning(f"左 B 键录制切换被拒绝: {response.message}")
 
         future.add_done_callback(_done)
 
@@ -773,9 +772,9 @@ class VRPoseIncrementPublisher(Node):
         future.add_done_callback(_done)
 
     def publish_arm_feedforward(self, teleData):
-        """按下右手柄侧面按键（grip/squeeze）时，右臂输出恒定六维前馈力；松开输出零。"""
+        """按住右手柄 B 键时，右臂输出恒定六维前馈力；松开输出零。"""
         state = teleData.tele_state if teleData is not None else None
-        side_button = bool(state.right_squeeze_ctrl_state) if state is not None else False
+        side_button = bool(state.right_bButton) if state is not None else False
 
         msg = Wrench()
         if side_button:

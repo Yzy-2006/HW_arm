@@ -45,13 +45,14 @@ def test_cache_requires_all_streams_and_checks_age_and_skew():
 
 
 def metadata():
-    return {'config': {'task':'wipe with towel', 'cameras':{'head':'h','wrist':'w'},
+    return {'config': {'task':'wipe with towel', 'cameras':{
+            'head':'h', 'left_wrist':'lw', 'right_wrist':'rw'},
             'width':4,'height':3,'fps':30,'max_frame_gap_s':.1}}
 
 
 def write_episode(tmp_path):
     writer = EpisodeWriter(tmp_path, metadata(), cv2.imwrite)
-    images = {key:np.zeros((3,4,3),np.uint8) for key in ('head','wrist')}
+    images = {key:np.zeros((3,4,3),np.uint8) for key in metadata()['config']['cameras']}
     for t in [0,.033,.080,.100]:
         writer.add(dict(sample(),timestamp_s=t),images)
     return writer.finish(3)

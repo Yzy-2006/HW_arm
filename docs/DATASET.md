@@ -1,12 +1,14 @@
 # 采集数据约定 v2
 
+本文件只定义原始数据、时序、质量规则和 LeRobot 映射。真机当天的操作顺序见[真机实验流程](REAL_ROBOT_EXPERIMENT.md)，三相机和夹爪的专项准备分别见[相机序列号配置](CAMERA_CONFIGURATION.md)和[双夹爪标定](GRIPPER_CALIBRATION.md)。
+
 ## 原始片段
 
 ```text
-data/raw/towel_wipe/episode_<time>_<id>/
+<dataset_root>/episode_<time>_<id>/
 ├── episode.json             任务、相机、配置内容和校验值、状态、帧数
 ├── frames.jsonl             每行一个采样记录
-└── images/{head,wrist}/000000.png
+└── images/{head,left_wrist,right_wrist}/000000.png
 ```
 
 未完成片段目录以 `.partial` 结尾。丢弃操作只删除当前未提交片段。
@@ -34,7 +36,7 @@ data/raw/towel_wipe/episode_<time>_<id>/
 
 ## 时间对齐
 
-ROS 各话题和两台 USB 相机没有共享硬件触发。本采集器进行最新样本对齐并检查接收时间，
+ROS 各话题和三台 USB 相机没有共享硬件触发。本采集器进行最新样本对齐并检查接收时间，
 **不是严格硬件同步**。没有 header 的 FK/夹爪消息只能记录到达时间。
 采样目标 30 Hz，但重复相机帧不会作为新帧写入；间隙超限会中止片段并保留原始证据。
 
@@ -46,7 +48,7 @@ ROS 各话题和两台 USB 相机没有共享硬件触发。本采集器进行�
 
 - `observation.state`：16 维，左 7 关节角 + 左夹爪反馈状态 + 右 7 关节角 + 右夹爪反馈状态。
 - `action`：16 维，左 7 关节目标角 + 左夹爪目标状态 + 右 7 关节目标角 + 右夹爪目标状态。
-- `observation.images.head/wrist`：RGB 图像；由 PNG 转成 LeRobot 视频流。
+- `observation.images.head/left_wrist/right_wrist`：三路 RGB 图像；由 PNG 转成 LeRobot 视频流。
 - `task`：每段的自然语言任务描述。
 - 额外保留关节速度、实测 TCP、名义 TCP 目标、原始采样时间；没有原始夹爪角度/力矩数组。
 
@@ -67,3 +69,14 @@ ROS 各话题和两台 USB 相机没有共享硬件触发。本采集器进行�
 每段只包含一次完整示教，任务文本描述实际操作。失败/误操作片段用丢弃服务剔除。
 训练/验证按整段示教划分，避免同一段相邻帧同时进入训练和验证。
 相机序列号、分辨率或机器人配置变化时分数据集保存，并保留原始文件和配置。
+
+## 校验与导出入口
+
+当前默认 `dataset_root` 是 `data/raw/fold_towel`，对应以下命令：
+
+```bash
+make validate-data
+make export-data OUTPUT=/absolute/path/to/fold_towel_lerobot
+```
+
+如果修改了 `config/recording.yaml` 的 `dataset_root`，两个命令均增加 `DATASET_ROOT=/absolute/path/to/raw_data`。导出需要在安装 LeRobot 的训练环境执行；训练侧的后续步骤见[π0.5 训练说明](../training/README_PI05.md)。

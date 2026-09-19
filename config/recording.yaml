@@ -1,5 +1,5 @@
-task: "wipe with a towel using both arms"
-dataset_root: data/raw/towel_wipe
+task: "fold a towel with both arms"
+dataset_root: data/raw/fold_towel
 fps: 30
 width: 640
 height: 480
@@ -15,7 +15,13 @@ max_frame_gap_s: 0.10
 publish_rviz: false
 cameras:
   head: "261222075640"
-  wrist: "260422274993"
+  # The previously configured wrist camera. Confirm its physical side before
+  # recording; move this serial to right_wrist if it is mounted on the right arm.
+  right_wrist: "260422274993"
+  # Replace this placeholder with the serial printed on the right wrist camera.
+  # The recorder deliberately refuses to start until all configured serials are
+  # nonempty and distinct.
+  left_wrist: "260422271922"
 # Original driver publishes these names; its arm controller currently swaps the
 # left/right subscriptions. Preserve topic names verbatim in diagnostics.
 force_topics:
