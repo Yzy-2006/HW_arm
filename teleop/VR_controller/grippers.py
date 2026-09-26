@@ -1,4 +1,4 @@
-"""Dual gripper PD and binary feedback; independent of ROS and XR."""
+"""Dual gripper position trajectories and binary feedback; independent of ROS/XR."""
 import math
 from pathlib import Path
 import yaml
@@ -7,10 +7,12 @@ CONFIG_PATH = Path(__file__).resolve().parent / 'config/grippers.yaml'
 
 
 def validate_side(config):
-    for key in ('kp', 'kd', 'motion_time_s', 'torque_limit_nm'):
+    for key in ('motion_time_s',):
         value = float(config[key])
-        if not math.isfinite(value) or value < 0 or (key != 'kd' and value == 0):
+        if not math.isfinite(value) or value <= 0:
             raise ValueError(f'Invalid gripper {key}')
+    if not math.isfinite(float(config.get('zero_pos_deg', 0.0))):
+        raise ValueError('Invalid gripper zero_pos_deg')
     if config.get('calibrated'):
         opened, closed = float(config['open_deg']), float(config['closed_deg'])
         if not all(map(math.isfinite, (opened, closed))) or abs(closed-opened) < 5:
@@ -52,14 +54,12 @@ class Gripper:
         self.t0 = now
         return True
 
-    def torque(self, now):
+    def position(self, now):
         if not self.ready:
-            return 0.0
+            return math.nan  # Zero is a real position command, not a stop command.
         s = 1.0 if self.t0 is None else max(0.0, min(1.0, (now-self.t0)/self.config['motion_time_s']))
         qdes = self.start+(self.end-self.start)*(10*s**3-15*s**4+6*s**5)
-        torque = self.config['kp']*math.radians(qdes-self.q)-self.config['kd']*self.dq
-        limit = self.config['torque_limit_nm']
-        return max(-limit, min(limit, torque))
+        return qdes - self.config.get('zero_pos_deg', 0.0)
 
     def invalidate(self):
         self.ready = False
@@ -75,14 +75,17 @@ class DualGrippers:
         self.last_feedback = None
 
     def feedback(self, data, now):
-        if len(data) != 8 or not all(math.isfinite(float(data[i])) for i in (0,1,4,5)):
+        if len(data) != 8:
             self.last_feedback = None
             for side in self.sides.values(): side.invalidate()
             return
         if self.last_feedback is not None and now-self.last_feedback > self.timeout:
             for side in self.sides.values(): side.invalidate()
         for name,index in [('left',0),('right',4)]:
-            self.sides[name].feedback(float(data[index]),float(data[index+1]))
+            if all(math.isfinite(float(data[i])) for i in (index, index+1)):
+                self.sides[name].feedback(float(data[index]),float(data[index+1]))
+            else:
+                self.sides[name].invalidate()
         self.last_feedback = now
 
     def step(self, now, toggles):
@@ -90,11 +93,23 @@ class DualGrippers:
             for side in self.sides.values(): side.invalidate()
         for name, toggle in toggles.items():
             if toggle: self.sides[name].toggle(now)
-        torque = [self.sides[name].torque(now) for name in ('left','right')]
+        positions = [self.sides[name].position(now) for name in ('left','right')]
         states = [self.sides[name].measured for name in ('left','right')]
         states += [self.sides[name].command for name in ('left','right')]
-        return torque, states
+        return positions, states
 
 
-def load_config(path=CONFIG_PATH):
-    return yaml.safe_load(Path(path).read_text())
+def load_config(path=CONFIG_PATH, controller_path=None):
+    config = yaml.safe_load(Path(path).read_text())
+    if controller_path is not None:
+        controls = yaml.safe_load(Path(controller_path).read_text())['gripperControl']
+        for side, key in (('left', 'l_gripper_ctl'), ('right', 'r_gripper_ctl')):
+            control = controls[key]
+            if control['mode'] != 'position':
+                raise ValueError(f'{side} gripper must use position mode for VR control')
+            config[side]['zero_pos_deg'] = float(control.get('zero_pos_deg', 0.0))
+            if config[side].get('calibrated'):
+                for endpoint in ('open_deg', 'closed_deg'):
+                    if not control['pos_min_deg'] <= config[side][endpoint] <= control['pos_max_deg']:
+                        raise ValueError(f'{side} {endpoint} is outside servo position limits')
+    return config

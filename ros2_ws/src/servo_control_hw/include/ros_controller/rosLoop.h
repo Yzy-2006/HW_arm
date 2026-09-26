@@ -267,6 +267,10 @@ class ServoNode : public rclcpp::Node {
         //夹紧力获取目标值
         double l_gripper_tor_get;
         double r_gripper_tor_get;
+        double l_gripper_pos_get = 0.0;
+        double r_gripper_pos_get = 0.0;
+        bool l_gripper_pos_received = false;
+        bool r_gripper_pos_received = false;
 
         //每轮输出量
         double l_gripper_tor;
@@ -317,6 +321,9 @@ class ServoNode : public rclcpp::Node {
         // 夹爪插补变量
         CubicSpline l_gripper_runiner;
         CubicSpline r_gripper_runiner;
+        runin_core gripper_pos_runiner;
+        std::vector<double> l_gripper_posTraj;
+        std::vector<double> r_gripper_posTraj;
         std::vector<double> l_gripper_torTraj;
         std::vector<double> r_gripper_torTraj;
         int gripper_Tor_trajLen;

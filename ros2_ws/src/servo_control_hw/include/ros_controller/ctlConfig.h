@@ -5,6 +5,15 @@
 #include <string>
 #include <yaml-cpp/yaml.h>
 
+struct GripperControlConfig {
+    int mode = 0;
+    double kp = 0.0;
+    double kd = 0.0;
+    double pos_min_deg = -180.0;
+    double pos_max_deg = 180.0;
+    double zero_pos_deg = 0.0;
+};
+
 typedef struct{
     double TempTime;
     double LARMDOF;
@@ -24,6 +33,9 @@ typedef struct{
     double GripperRight_Temp_Thr;
     double GripperRight_Kt;
     std::vector<double> GripperRight_IqRange;
+    GripperControlConfig GripperLeft_Control;
+    GripperControlConfig GripperRight_Control;
+    double Gripper_TempRecover_Hys = 5.0;
 }ctlInteConfig;
 
 //数据接受全局变量

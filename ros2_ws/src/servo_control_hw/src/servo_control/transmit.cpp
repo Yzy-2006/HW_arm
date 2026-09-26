@@ -496,6 +496,28 @@ void CanChannelScanPrintResult()
     }
 }
 
+// Feedback positions stay in raw encoder coordinates, as in src-4.
+static void gripperFdbDecode(int channel, int motor_id, int ack,
+                             const OD_Motor_Msg& motor, const MotorBlock& frame){
+    if(motor_id != 8){
+        return;
+    }
+    auto& fdb = channel == 0 ? left_gripper_fdb : right_gripper_fdb;
+    if(ack == 1){
+        fdb.pos_deg = motor.angle_actual_rad * 180.0 / M_PI;
+        fdb.spd_rad = motor.speed_actual_rad;
+        fdb.valid = std::isfinite(fdb.pos_deg) && std::isfinite(fdb.spd_rad);
+    }else if(ack == 2 || (ack == 5 && frame.dlc == 6 && frame.data[1] == 1)){
+        fdb.pos_deg = motor.angle_actual_float;
+        fdb.valid = std::isfinite(fdb.pos_deg);
+    }
+    if(ack == 1 || ack == 2 || ack == 3){
+        fdb.current_A = motor.current_actual_float;
+        // The decoder already converted the raw byte to Celsius.
+        fdb.temperature = motor.temperature;
+    }
+}
+
 void EtherCAT_direGetFdback(){
     if (wkc_err_iteration_count > K_ETHERCAT_ERR_PERIOD)
     {
@@ -547,6 +569,8 @@ void EtherCAT_direGetFdback(){
             ServoStruct.CAN_boards[ch].can_jnt_ret_msg[joint].joint_spdRet = ServoStruct.CAN_boards[ch].can_jnt_direComp[joint] * rv_motor_msg[rv_ID].speed_actual_float / 180 * M_PI;
             ServoStruct.CAN_boards[ch].can_jnt_ret_msg[joint].joint_currentRet = rv_motor_msg[rv_ID].current_actual_float;
             ServoStruct.CAN_boards[ch].can_jnt_ret_msg[joint].joint_temperature = (rv_motor_msg[rv_ID].temperature - 50.0)/2.0;
+            gripperFdbDecode(channel, ServoStruct.CAN_boards[ch].can_jnt_ID[joint],
+                             repack_rc, rv_motor_msg[rv_ID], Rx_Msg_01[channel][slot]);
         }
     }
 }
@@ -661,20 +685,8 @@ void EtherCAT_Data_Get()
             ServoStruct.CAN_boards[ch].can_jnt_ret_msg[j].joint_currentRet = rv_motor_msg[rv_ID].current_actual_float;
             ServoStruct.CAN_boards[ch].can_jnt_ret_msg[j].joint_temperature = (rv_motor_msg[rv_ID].temperature - 50.0)/2.0;
 
-            // gripper feedback, channel区分左右
-            if(motor_id == 8){
-                if(channel == 0){
-                    left_gripper_fdb.pos_deg     = rv_motor_msg[rv_ID].angle_actual_rad * 180.0 / M_PI;
-                    left_gripper_fdb.spd_rad     = rv_motor_msg[rv_ID].speed_actual_rad;
-                    left_gripper_fdb.current_A   = rv_motor_msg[rv_ID].current_actual_float;
-                    left_gripper_fdb.temperature = (rv_motor_msg[rv_ID].temperature - 50.0)/2.0;
-                }else{
-                    right_gripper_fdb.pos_deg     = rv_motor_msg[rv_ID].angle_actual_rad * 180.0 / M_PI;
-                    right_gripper_fdb.spd_rad     = rv_motor_msg[rv_ID].speed_actual_rad;
-                    right_gripper_fdb.current_A   = rv_motor_msg[rv_ID].current_actual_float;
-                    right_gripper_fdb.temperature = (rv_motor_msg[rv_ID].temperature - 50.0)/2.0;
-                }
-            }
+            gripperFdbDecode(channel, motor_id, repack_rc,
+                             rv_motor_msg[rv_ID], pdo_rx[channel][slot]);
         }
     }
 }
@@ -701,6 +713,20 @@ float rads_to_deg(double rad){
     return mRes;
 }
 
+
+int gripperDireComp(int channel){
+    for(const auto& board : ServoStruct.CAN_boards){
+        if(board.channel_idx != channel){
+            continue;
+        }
+        for(int joint = 0; joint < board.JntNum_onCan; ++joint){
+            if(board.can_jnt_ID[joint] == 8){
+                return board.can_jnt_direComp[joint];
+            }
+        }
+    }
+    return 0;
+}
 
 int CommandMODE = 1;         //命令模式，根据不同的命令模式执行不同的指令下发方式
 
@@ -739,6 +765,13 @@ void EtherCAT_Command_Set()
             if(motor_id == 8){
                 gripperCmd *g = (channel == 0) ? &left_gripper_cmd : &right_gripper_cmd;
                 int dir = jnt_direComp[j];
+
+                if(g->joint_mode == 1){
+                    send_motor_ctrl_cmd(&pdo_tx[channel][slot], motor_id,
+                                        g->joint_Kp, g->joint_Kd,
+                                        dir * g->joint_pos, 0.0, 0.0);
+                    continue;
+                }
 
                 double raw_value = dir * g->joint_tor * 100.0;
                 // 限幅到 int16_t 有效范围
@@ -1036,12 +1069,12 @@ std::vector<std::vector<joint_desMsg>> JntDesMsg_inContainer_Outp_v1(){
 
 
 // 夹爪控制接口实现 (力控模式)
-void setLeftGripperCmd(double tor){
-    left_gripper_cmd.joint_tor = tor;
+void setLeftGripperCmd(const gripperCmd& cmd){
+    left_gripper_cmd = cmd;
 }
 
-void setRightGripperCmd(double tor){
-    right_gripper_cmd.joint_tor = tor;
+void setRightGripperCmd(const gripperCmd& cmd){
+    right_gripper_cmd = cmd;
 }
 
 //----------------------------------------

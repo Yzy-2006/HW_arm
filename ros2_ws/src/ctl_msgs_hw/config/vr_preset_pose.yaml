@@ -1,0 +1,20 @@
+# Right B preset: independent of zeropos.yaml. Joint angles are in radians.
+# Initially copied from the current zero pose; later zero calibration does not update this file.
+# Uses controllerConfig.yaml vrJointReturn timing. Loaded when robot_control_node starts.
+left_arm:
+  left_shoulder_pitch_joint: 0.0009536743
+  left_shoulder_roll_joint: 0.0036239624
+  left_shoulder_yaw_joint: 0.0230789185
+  left_elbow_joint: -0.0345239639
+  left_wrist_roll_joint: -0.0032424927
+  left_wrist_pitch_joint: -0.1985578537
+  left_wrist_yaw_joint: 0.0150680542
+
+right_arm:
+  right_shoulder_pitch_joint: 0.0154495239
+  right_shoulder_roll_joint: -0.0188827515
+  right_shoulder_yaw_joint: -0.0162124634
+  right_elbow_joint: 0.0413904190
+  right_wrist_roll_joint: 0.0055313110
+  right_wrist_pitch_joint: 0.3690776825
+  right_wrist_yaw_joint: -0.0143051147

@@ -138,8 +138,9 @@ std::vector<std::vector<joint_retMsg>> runImpl(std::vector<std::vector<joint_des
 void startRun();                        //启动EtherCAT运行函数
 
 // 夹爪控制接口 (力位混控)
-void setLeftGripperCmd(double tor);
-void setRightGripperCmd(double tor);
+void setLeftGripperCmd(const gripperCmd& cmd);
+void setRightGripperCmd(const gripperCmd& cmd);
+int gripperDireComp(int channel);
 
 CAN_JNT_numStruct CAN_JNT_arrange_outp();       //辅助函数 -- 返回CAN板数量以及各个CAN板上关节数量的结构体
 std::vector<double> joint_Kt_get();             //辅助函数 -- 获取关节Kt

@@ -3,6 +3,8 @@
 #include "std_msgs/msg/float64_multi_array.hpp"
 #include <algorithm>    // std::clamp / std::max（夹爪限幅用）
 #include <stdexcept>
+#include <cmath>
+#include <limits>
 
 //全局变量 -- 数据传输
 std::vector<double> joint_pos(SERVODOF, 0.0);
@@ -57,7 +59,9 @@ ServoNode::ServoNode() : Node ("servo_node"),
     yaml_path_initialPD = ament_index_cpp::get_package_share_directory("ctl_msgs_hw") + "/config/initialPD.yaml";
     controllerConfig_yamlPath = ament_index_cpp::get_package_share_directory("ctl_msgs_hw") + "/config/controllerConfig.yaml";
 
-    loadServoNodeCtlFromYaml(controllerConfig_yamlPath);
+    if(!loadServoNodeCtlFromYaml(controllerConfig_yamlPath)){
+        throw std::runtime_error("Cannot load servo controller configuration");
+    }
 
     //初始化关键全局变量
     TEMPTIME = ctl_inteMsg_config.TempTime;
@@ -225,8 +229,8 @@ void ServoNode::rosLoopVar_Init(){
     time_last_gripper = 0.0;
     winlen_gripper = 1;
 
-    setLeftGripperCmd(l_gripper_tor);
-    setRightGripperCmd(r_gripper_tor);
+    setLeftGripperCmd(gripperCmd{});
+    setRightGripperCmd(gripperCmd{});
 
     l_gripper_torTraj.assign(1, 0.0);
     r_gripper_torTraj.assign(1, 0.0);
@@ -239,8 +243,10 @@ void ServoNode::rosLoopVar_Init(){
     gripper_otputTimes = 0;
 
     //夹爪力限幅初始化
-    l_gripper_limit.Init(ctl_inteMsg_config.GripperLeft_Tor_Thr, ctl_inteMsg_config.GripperLeft_Temp_Thr);
-    r_gripper_limit.Init(ctl_inteMsg_config.GripperRight_Tor_Thr, ctl_inteMsg_config.GripperRight_Temp_Thr);
+    l_gripper_limit.Init(ctl_inteMsg_config.GripperLeft_Tor_Thr, ctl_inteMsg_config.GripperLeft_Temp_Thr,
+                         ctl_inteMsg_config.Gripper_TempRecover_Hys);
+    r_gripper_limit.Init(ctl_inteMsg_config.GripperRight_Tor_Thr, ctl_inteMsg_config.GripperRight_Temp_Thr,
+                         ctl_inteMsg_config.Gripper_TempRecover_Hys);
 
     //滤波器初始化触发器变量初始化流程
     ifInitFilter = true;
@@ -658,16 +664,16 @@ void ServoNode::run(){
         Tor_ftrRes[0].assign(LARMDOF, 0.0);
         Tor_ftrRes[1].assign(RARMDOF, 0.0);
 
+        // Grippers can run even before the arm receives its first command.
+        if(ifGetGripperMsg){
+            ifGetGripperMsg = false;
+            gripperTrajRunin();
+        }
+
         //获取本轮插补值
         if(ifRuninerInited){    // --- 若进行了插补的操作 ---
             //-----获取初始轨迹-----
             outpTraj_process();
-
-            //-----夹爪插补-----
-            if(ifGetGripperMsg){
-                ifGetGripperMsg = false;
-                gripperTrajRunin();
-            }
 
             //-----数据处理以及补偿量计算-----
 
@@ -1161,8 +1167,31 @@ void ServoNode::comp_desMsg_containerMsg(){
 
 //插补函数
 void ServoNode::gripperTrajRunin(){
-    l_gripper_torTraj = l_gripper_runiner.cubicSplineCal(gripper_LastTorRec_l, l_gripper_tor_get, winlen);
-    r_gripper_torTraj = r_gripper_runiner.cubicSplineCal(gripper_LastTorRec_r, r_gripper_tor_get, winlen);
+    // Interpolate from the last emitted setpoint; restarting from feedback on
+    // every packet would repeatedly pull the target back under load.
+    const auto positionStart = [](const gripperCmd& cmd, const gripperFdb& feedback, int channel){
+        return cmd.joint_mode == 1
+            ? gripperDireComp(channel) * cmd.joint_pos / 0.017453292519943295
+            : feedback.pos_deg;
+    };
+    if(ctl_inteMsg_config.GripperLeft_Control.mode == 1){
+        if(l_gripper_pos_received && left_gripper_fdb.valid){
+            l_gripper_posTraj = gripper_pos_runiner.liner_runin(
+                positionStart(left_gripper_cmd, left_gripper_fdb, 0), l_gripper_pos_get, winlen_gripper);
+        }
+    }else{
+        l_gripper_torTraj = l_gripper_runiner.cubicSplineCal(
+            gripper_LastTorRec_l, l_gripper_tor_get, winlen_gripper);
+    }
+    if(ctl_inteMsg_config.GripperRight_Control.mode == 1){
+        if(r_gripper_pos_received && right_gripper_fdb.valid){
+            r_gripper_posTraj = gripper_pos_runiner.liner_runin(
+                positionStart(right_gripper_cmd, right_gripper_fdb, 1), r_gripper_pos_get, winlen_gripper);
+        }
+    }else{
+        r_gripper_torTraj = r_gripper_runiner.cubicSplineCal(
+            gripper_LastTorRec_r, r_gripper_tor_get, winlen_gripper);
+    }
 
     gripper_Tor_trajLen = winlen_gripper;
     gripper_otputTimes = 0;
@@ -1173,36 +1202,39 @@ void ServoNode::gripperTrajRunin(){
 
 //插补结果输出函数
 void ServoNode::gripperTorOutp(){
-    double l_gripper_tor = 0.0;
-    double r_gripper_tor = 0.0;
+    const auto sample = [this](const std::vector<double>& trajectory){
+        return trajectory[std::min(static_cast<size_t>(gripper_otputTimes), trajectory.size() - 1)];
+    };
+    const auto positionCommand = [&sample](const std::vector<double>& trajectory,
+            const GripperControlConfig& config, const gripperFdb& feedback,
+            gripper_RangeLimit& limit, int channel){
+        if(trajectory.empty()){
+            return gripperCmd{};
+        }
+        return limit.PositionOutp(sample(trajectory), config, gripperDireComp(channel), feedback.temperature);
+    };
 
-    if(gripper_otputTimes < gripper_Tor_trajLen){
-        l_gripper_tor = l_gripper_torTraj[gripper_otputTimes];
-        r_gripper_tor = r_gripper_torTraj[gripper_otputTimes];
-
-        gripper_otputTimes += 1;
+    gripperCmd left, right;
+    if(ctl_inteMsg_config.GripperLeft_Control.mode == 1){
+        left = positionCommand(l_gripper_posTraj, ctl_inteMsg_config.GripperLeft_Control,
+                               left_gripper_fdb, l_gripper_limit, 0);
     }else{
-        l_gripper_tor = l_gripper_torTraj.back();
-        r_gripper_tor = r_gripper_torTraj.back();
+        l_gripper_tor = sample(l_gripper_torTraj);
+        left.joint_tor = l_gripper_limit.LimitOutp(l_gripper_tor, left_gripper_fdb.temperature,
+            left_gripper_fdb.current_A * ctl_inteMsg_config.GripperLeft_Kt);
     }
-
-    //夹爪反馈值获取
-    double l_gripper_tor_feedback, r_gripper_tor_feedback;
-    double l_gripper_temperature_feedback, r_gripper_temperature_feedback;
-    l_gripper_tor_feedback = left_gripper_fdb.current_A * ctl_inteMsg_config.GripperLeft_Kt;
-    l_gripper_temperature_feedback = left_gripper_fdb.temperature;
-    r_gripper_tor_feedback = right_gripper_fdb.current_A * ctl_inteMsg_config.GripperRight_Kt;
-    r_gripper_temperature_feedback = right_gripper_fdb.temperature;
-
-    //待添加 -- 力矩限幅
-    double l_gripper_tor_limited = 0.0;
-    double r_gripper_tor_limited = 0.0;
-    l_gripper_tor_limited = l_gripper_limit.LimitOutp(l_gripper_tor, l_gripper_temperature_feedback, l_gripper_tor_feedback);
-    r_gripper_tor_limited = r_gripper_limit.LimitOutp(r_gripper_tor, r_gripper_temperature_feedback, r_gripper_tor_feedback);
-
-    //结果输出
-    setLeftGripperCmd(l_gripper_tor_limited);
-    setRightGripperCmd(r_gripper_tor_limited);
+    if(ctl_inteMsg_config.GripperRight_Control.mode == 1){
+        right = positionCommand(r_gripper_posTraj, ctl_inteMsg_config.GripperRight_Control,
+                                right_gripper_fdb, r_gripper_limit, 1);
+    }else{
+        r_gripper_tor = sample(r_gripper_torTraj);
+        right.joint_tor = r_gripper_limit.LimitOutp(r_gripper_tor, right_gripper_fdb.temperature,
+            right_gripper_fdb.current_A * ctl_inteMsg_config.GripperRight_Kt);
+    }
+    setLeftGripperCmd(left);
+    setRightGripperCmd(right);
+    // Windows are bounded at 100; saturating also avoids overflow while holding.
+    gripper_otputTimes = std::min(gripper_otputTimes + 1, 100);
 }
 
 
@@ -1212,11 +1244,11 @@ void ServoNode::gripperTorOutp(){
 void ServoNode::gripper_fdb_publish(){
     auto msg = std_msgs::msg::Float64MultiArray();
     msg.data.resize(8);
-    msg.data[0] = left_gripper_fdb.pos_deg;
+    msg.data[0] = left_gripper_fdb.valid ? left_gripper_fdb.pos_deg : std::numeric_limits<double>::quiet_NaN();
     msg.data[1] = left_gripper_fdb.spd_rad;
     msg.data[2] = left_gripper_fdb.current_A;
     msg.data[3] = left_gripper_fdb.temperature;
-    msg.data[4] = right_gripper_fdb.pos_deg;
+    msg.data[4] = right_gripper_fdb.valid ? right_gripper_fdb.pos_deg : std::numeric_limits<double>::quiet_NaN();
     msg.data[5] = right_gripper_fdb.spd_rad;
     msg.data[6] = right_gripper_fdb.current_A;
     msg.data[7] = right_gripper_fdb.temperature;
@@ -1225,22 +1257,37 @@ void ServoNode::gripper_fdb_publish(){
 
 //夹爪目标控制量接收
 void ServoNode::gripper_desMsg_get(const ctl_msgs_hw::msg::GripperCtl::SharedPtr msg){
-    l_gripper_tor_get = msg->l_arm_gripper_tor;
-    r_gripper_tor_get = msg->r_arm_gripper_tor;
+    l_gripper_tor_get = std::isfinite(msg->l_arm_gripper_tor) ? msg->l_arm_gripper_tor : 0.0;
+    r_gripper_tor_get = std::isfinite(msg->r_arm_gripper_tor) ? msg->r_arm_gripper_tor : 0.0;
+
+    const auto& left = ctl_inteMsg_config.GripperLeft_Control;
+    const auto& right = ctl_inteMsg_config.GripperRight_Control;
+    const double left_target = left.zero_pos_deg + msg->l_arm_gripper_pos;
+    const double right_target = right.zero_pos_deg + msg->r_arm_gripper_pos;
+    if(std::isfinite(left_target) && left_gripper_fdb.valid){
+        l_gripper_pos_get = std::clamp(left_target, left.pos_min_deg, left.pos_max_deg);
+        l_gripper_pos_received = true;
+    }
+    if(std::isfinite(right_target) && right_gripper_fdb.valid){
+        r_gripper_pos_get = std::clamp(right_target, right.pos_min_deg, right.pos_max_deg);
+        r_gripper_pos_received = true;
+    }
 
     //获取时间戳并计算窗口长度
     if(if_gripper_firstGet){
         rclcpp::Time current_time = this->now();
         time_res_gripper = current_time.seconds();
         time_last_gripper = current_time.seconds();
-        winlen_gripper = std::round(msg->ctl_time / TEMPTIME);
+        const double period = std::isfinite(msg->ctl_time) ? msg->ctl_time : TEMPTIME;
+        winlen_gripper = static_cast<int>(std::clamp(std::round(period / TEMPTIME), 1.0, 100.0));
 
         if_gripper_firstGet = false;
     }else{
         rclcpp::Time current_time = this->now();
         time_res_gripper = current_time.seconds();
 
-        winlen_gripper = std::round((time_res_gripper - time_last_gripper)/TEMPTIME);
+        winlen_gripper = static_cast<int>(std::clamp(
+            std::round((time_res_gripper - time_last_gripper)/TEMPTIME), 1.0, 100.0));
         time_last_gripper = time_res_gripper;
     }
 

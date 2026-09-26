@@ -316,6 +316,8 @@ class gripper_RangeLimit{
     private:
         double TorLimit;
         double TemperatureLimit;
+        double TemperatureRecover = 5.0;
+        bool ifOverTemp = false;
 
         //衰减系数
         const double decay_K = 2.0; 
@@ -324,7 +326,10 @@ class gripper_RangeLimit{
         const double decay_K_Tor = 2.0;
         const double decayTrigger_LimitRate = 1.3;
     public:
-        void Init(double TorLim, double TempLim);
+        void Init(double TorLim, double TempLim, double TempRecover = 5.0);
+        bool OverTemperature(double temperature);
+        gripperCmd PositionOutp(double target_deg, const GripperControlConfig& config,
+                               int direction, double temperature);
 
         //限幅函数 -- 输出修正后的力矩
         double LimitOutp(double TorDes_origin, double Temperature_feedback, double TorFeedback);

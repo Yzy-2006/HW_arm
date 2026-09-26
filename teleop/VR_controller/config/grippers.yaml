@@ -1,29 +1,23 @@
 feedback_timeout_s: 0.2
 left:
   calibrated: true
-  open_deg: 0.0
-  closed_deg: 90.2582178060505
-  kp: 1.1
-  kd: 0.12
+  open_deg: 52.64245359382267
+  closed_deg: 90.2
   motion_time_s: 0.6
-  torque_limit_nm: 3.0
   captures:
     open:
-      time_utc: '2026-09-20T13:51:35.816429+00:00'
-      samples: 819
-      spread_deg: 0.0
+      time_utc: '2026-09-26T09:46:29.893761+00:00'
+      samples: 800
+      spread_deg: 0.021856605344034108
     closed:
-      time_utc: '2026-09-20T10:11:12.376803+00:00'
-      samples: 832
+      time_utc: '2026-09-26T09:46:40.417306+00:00'
+      samples: 787
       spread_deg: 0.0
 right:
   calibrated: true
   open_deg: 6.961438085103716
   closed_deg: -24.359569146526997
-  kp: 1.1
-  kd: 0.12
   motion_time_s: 0.6
-  torque_limit_nm: 3.0
   captures:
     open:
       time_utc: '2026-09-20T10:11:34.489579+00:00'

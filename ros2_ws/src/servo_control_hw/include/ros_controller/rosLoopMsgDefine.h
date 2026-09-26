@@ -57,6 +57,11 @@ struct joint_retMsg{
 
 //定义结构体 -- 夹爪控制指令 (transMod=1 力位混控)
 struct gripperCmd{
+    int joint_mode = 0;     // 0: torque, 1: motor MIT position control
+    double joint_pos = 0.0; // rad, before CAN direction compensation
+    double joint_spd = 0.0;
+    double joint_Kp = 0.0;
+    double joint_Kd = 0.0;
     double joint_tor = 0.0;  // 目标力矩 (Nm)
 };
 
@@ -69,6 +74,7 @@ struct gripperFdb{
     double spd_rad = 0.0;       // 实际速度 (rad/s)
     double current_A = 0.0;     // 实际电流 (A)
     double temperature = 0.0;   // 电机温度 (℃)
+    bool valid = false;
 };
 extern gripperFdb left_gripper_fdb;
 extern gripperFdb right_gripper_fdb;

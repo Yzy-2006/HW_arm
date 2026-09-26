@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Dual-arm VR teleoperation for towel_task.
 Left/right squeeze toggle the matching left/right gripper.
-Left B toggles recording, left A discards, right A returns arms home.
-Gripper encoder endpoints and PD: config/grippers.yaml (calibration required).
+Left B toggles recording, left A discards, right A returns arms home, right B selects a preset.
+Gripper encoder endpoints and motion time: config/grippers.yaml (calibration required).
 Motion mapping: config/gripper_pd.yaml.
 /towel/gripper_state: [measured_left, measured_right, commanded_left, commanded_right],
-0=open, 1=closed, -1=unavailable. Motor torque stays on /gripper/ctl only.
+0=open, 1=closed, -1=unavailable. Position targets use /gripper/ctl.
 """
 
 import argparse
@@ -23,6 +23,7 @@ from geometry_msgs.msg import Vector3
 from std_msgs.msg import Bool, Float64MultiArray, Int8MultiArray
 from std_srvs.srv import SetBool, Trigger
 from ctl_msgs_hw.msg import GripperCtl
+from ament_index_python.packages import get_package_share_directory
 
 from televuer import TeleVuerWrapper
 from grippers import DualGrippers, load_config as load_dual_gripper_config
@@ -288,6 +289,30 @@ def _rotate_xy(delta, cy, sy):
     return np.array([cy * x - sy * y, sy * x + cy * y, z])
 
 
+def _limit_increment(delta, enabled, hard_max_norm, max_speed, sample_dt):
+    """Reject tracking jumps and cap speed without rescaling displacement."""
+    delta = np.asarray(delta, dtype=float).copy()
+    norm = float(np.linalg.norm(delta))
+    if not enabled or not np.all(np.isfinite(delta)) or norm > hard_max_norm:
+        return np.zeros(3)
+    max_step = max_speed * sample_dt
+    if norm > max_step and norm > 1e-12:
+        delta *= max_step / norm
+    return delta
+
+
+def _conservative_deadband(delta, residual, threshold, enabled):
+    """Keep sub-threshold movement until it accumulates into an increment."""
+    if not enabled:
+        residual.fill(0.0)
+        return np.zeros(3)
+    residual += delta
+    output = residual.copy()
+    output[np.abs(output) < threshold] = 0.0
+    residual -= output
+    return output
+
+
 def robot_frame_position_delta(
     current_pose,
     previous_pose,
@@ -388,15 +413,17 @@ class VRPoseIncrementPublisher(Node):
         self.prev_right_trigger = False
         self.first_frame = True
 
-        # Tracking noise protection.  Values are per 20 ms publisher tick.
+        # Tracking noise thresholds and hard limits on raw frame increments.
         self.position_deadband_m = 0.0004
         self.orientation_deadband_rad = 0.002
         self.max_position_delta_m = 0.05
         self.max_orientation_delta_rad = 0.20
-        # The VR pose stream is not perfectly periodic.  Convert each raw
-        # frame displacement to the nominal 50 Hz period before publishing;
-        # otherwise a 12 ms frame looks faster than a 28 ms frame even when
-        # the operator's hand velocity is constant.
+        self._left_pos_residual = np.zeros(3)
+        self._right_pos_residual = np.zeros(3)
+        self._left_rot_residual = np.zeros(3)
+        self._right_rot_residual = np.zeros(3)
+        # Downstream integrates displacements once per message.  Elapsed time
+        # controls only the speed limit, not the displacement gain.
         self.target_period_s = 1.0 / 50.0
         self._last_sample_time = None
         self.max_position_speed_mps = 0.75
@@ -417,9 +444,11 @@ class VRPoseIncrementPublisher(Node):
         # 由下游 robot_control_hw 按 controllerConfig.yaml 的 vrJointReturn
         # 配置，以平滑关节空间轨迹回归参考目标角度。
         self.zero_return_pub = self.create_publisher(Bool, "/vr/zero_return_cmd", 10)
+        self.preset_pose_pub = self.create_publisher(Bool, "/vr/preset_pose_cmd", 10)
 
         # A 键上一次状态（用于检测「按下」上升沿）
         self.prev_a_button = False
+        self.prev_b_button = False
         # ---------- 遥操作坐标映射配置 ----------
         gripper_cfg = load_gripper_config()
         # 手臂位姿增量的基准坐标系：room（房间/世界坐标系）或 head（头部坐标系）
@@ -463,7 +492,8 @@ class VRPoseIncrementPublisher(Node):
         self.gripper_fdb_sub = self.create_subscription(
             Float64MultiArray, "/gripper/fdb", self._gripper_fdb_callback, 10
         )
-        self.dual_grippers = DualGrippers(load_dual_gripper_config())
+        controller_path = Path(get_package_share_directory('ctl_msgs_hw')) / 'config/controllerConfig.yaml'
+        self.dual_grippers = DualGrippers(load_dual_gripper_config(controller_path=controller_path))
         self.gripper_state_pub = self.create_publisher(Int8MultiArray, "/towel/gripper_state", 10)
         self.prev_left_gripper_button = False
         self.prev_right_gripper_button = False
@@ -489,7 +519,7 @@ class VRPoseIncrementPublisher(Node):
         self.discard_service_client = self.create_client(Trigger, self.discard_service_name)
         self._discard_service_warned = False
 
-        self.get_logger().info("双夹爪：左/右 squeeze 分别切换左/右夹爪；未标定侧不输出力矩")
+        self.get_logger().info("双夹爪位控：左/右 squeeze 分别切换左/右夹爪；未标定侧不更新位置目标")
         self.get_logger().info(
             f"手臂位姿增量基准坐标系：{self.reference_frame} "
             f"（room=房间/世界坐标系，head=头部坐标系），"
@@ -500,7 +530,7 @@ class VRPoseIncrementPublisher(Node):
                 f"水平面平移标定角：{float(gripper_cfg['translation_yaw_offset_deg']):.1f} deg（绕 z 旋转）"
             )
         self.get_logger().info(
-            "VR 初始化完成：左右 squeeze 控制对应夹爪；左 B 录制、左 A 丢弃、右 A 回零"
+            "VR 初始化完成：左右 squeeze 控制对应夹爪；左 B 录制、左 A 丢弃、右 A 回零、右 B 预设姿态"
         )
 
     def report_controller_debug(self, snapshot):
@@ -536,7 +566,11 @@ class VRPoseIncrementPublisher(Node):
             self.prev_left_pose = left_pose.copy()
             self.prev_right_pose = right_pose.copy()
             self.prev_head_pose = head_pose.copy()
-            self.head_orientation_reference = _head_rotation(head_pose)
+            self.head_orientation_reference = _head_yaw_rotation(head_pose)
+            self._left_pos_residual.fill(0.0)
+            self._right_pos_residual.fill(0.0)
+            self._left_rot_residual.fill(0.0)
+            self._right_rot_residual.fill(0.0)
             self._left_pos_filter.fill(0.0)
             self._right_pos_filter.fill(0.0)
             self._left_rot_filter.fill(0.0)
@@ -560,6 +594,12 @@ class VRPoseIncrementPublisher(Node):
             self.get_logger().info("检测到 A 键按下，发布关节空间回零触发指令")
             self.zero_return_pub.publish(Bool(data=True))
         self.prev_a_button = a_button
+        b_button = bool(getattr(state, "right_bButton", False))
+        # A has priority if both buttons are pressed together.
+        if b_button and not self.prev_b_button and not a_button:
+            self.get_logger().info("检测到右 B 键按下，发布预设关节姿态指令")
+            self.preset_pose_pub.publish(Bool(data=True))
+        self.prev_b_button = b_button
 
         # ---- 基准坐标系选择 ----
         # tv_wrapper 返回的 left_arm_pose / right_arm_pose 已扣除头部平移（头部相对基准），
@@ -616,44 +656,23 @@ class VRPoseIncrementPublisher(Node):
                 self.head_orientation_reference,
             )
 
-        # Ignore sub-millimetre / sub-0.1-degree tracker jitter and reject an
-        # invalid single-frame jump.  The previous pose is still updated below,
-        # so releasing/repressing the trigger never creates a position jump.
-        def clean_delta(delta, deadband, max_norm):
-            delta = np.asarray(delta, dtype=float)
-            if not np.all(np.isfinite(delta)) or np.linalg.norm(delta) > max_norm:
-                return np.zeros(3)
-            delta[np.abs(delta) < deadband] = 0.0
-            return delta
-
-        def normalize_increment(delta, enabled, max_speed):
-            if not enabled or stale_sample:
-                return np.zeros(3)
-            # Rescale displacement to the fixed downstream control period.
-            # This removes speed modulation caused by WebRTC/VR frame jitter.
-            delta = np.asarray(delta, dtype=float) * (self.target_period_s / sample_dt)
-            max_step = max_speed * self.target_period_s
-            norm = float(np.linalg.norm(delta))
-            if norm > max_step and norm > 1e-12:
-                delta *= max_step / norm
-            return delta
-
-        left_pos_delta = normalize_increment(left_pos_delta, left_trigger, self.max_position_speed_mps)
-        right_pos_delta = normalize_increment(right_pos_delta, right_trigger, self.max_position_speed_mps)
-        left_euler_delta = normalize_increment(
-            left_euler_delta, left_trigger, self.max_orientation_speed_radps
+        left_enabled = left_trigger and not stale_sample
+        right_enabled = right_trigger and not stale_sample
+        left_pos_delta = _limit_increment(
+            left_pos_delta, left_enabled, self.max_position_delta_m,
+            self.max_position_speed_mps, sample_dt,
         )
-        right_euler_delta = normalize_increment(
-            right_euler_delta, right_trigger, self.max_orientation_speed_radps
+        right_pos_delta = _limit_increment(
+            right_pos_delta, right_enabled, self.max_position_delta_m,
+            self.max_position_speed_mps, sample_dt,
         )
-
-        left_pos_delta = clean_delta(left_pos_delta, self.position_deadband_m, self.max_position_delta_m)
-        right_pos_delta = clean_delta(right_pos_delta, self.position_deadband_m, self.max_position_delta_m)
-        left_euler_delta = clean_delta(
-            left_euler_delta, self.orientation_deadband_rad, self.max_orientation_delta_rad
+        left_euler_delta = _limit_increment(
+            left_euler_delta, left_enabled, self.max_orientation_delta_rad,
+            self.max_orientation_speed_radps, sample_dt,
         )
-        right_euler_delta = clean_delta(
-            right_euler_delta, self.orientation_deadband_rad, self.max_orientation_delta_rad
+        right_euler_delta = _limit_increment(
+            right_euler_delta, right_enabled, self.max_orientation_delta_rad,
+            self.max_orientation_speed_radps, sample_dt,
         )
 
         # Apply explicit robot-frame axis calibration before filtering.  This
@@ -672,6 +691,19 @@ class VRPoseIncrementPublisher(Node):
             left_pos_delta = _rotate_xy(left_pos_delta, cy, sy)
             right_pos_delta = _rotate_xy(right_pos_delta, cy, sy)
 
+        left_pos_delta = _conservative_deadband(
+            left_pos_delta, self._left_pos_residual, self.position_deadband_m, left_enabled,
+        )
+        right_pos_delta = _conservative_deadband(
+            right_pos_delta, self._right_pos_residual, self.position_deadband_m, right_enabled,
+        )
+        left_euler_delta = _conservative_deadband(
+            left_euler_delta, self._left_rot_residual, self.orientation_deadband_rad, left_enabled,
+        )
+        right_euler_delta = _conservative_deadband(
+            right_euler_delta, self._right_rot_residual, self.orientation_deadband_rad, right_enabled,
+        )
+
         def filter_delta(delta, previous, alpha, enabled):
             if not enabled:
                 previous.fill(0.0)
@@ -683,16 +715,16 @@ class VRPoseIncrementPublisher(Node):
             return filtered
 
         left_pos_delta = filter_delta(
-            left_pos_delta, self._left_pos_filter, self.position_filter_alpha, left_trigger
+            left_pos_delta, self._left_pos_filter, self.position_filter_alpha, left_enabled
         )
         right_pos_delta = filter_delta(
-            right_pos_delta, self._right_pos_filter, self.position_filter_alpha, right_trigger
+            right_pos_delta, self._right_pos_filter, self.position_filter_alpha, right_enabled
         )
         left_euler_delta = filter_delta(
-            left_euler_delta, self._left_rot_filter, self.orientation_filter_alpha, left_trigger
+            left_euler_delta, self._left_rot_filter, self.orientation_filter_alpha, left_enabled
         )
         right_euler_delta = filter_delta(
-            right_euler_delta, self._right_rot_filter, self.orientation_filter_alpha, right_trigger
+            right_euler_delta, self._right_rot_filter, self.orientation_filter_alpha, right_enabled
         )
 
         # ---- 发布 ----
@@ -720,7 +752,7 @@ class VRPoseIncrementPublisher(Node):
             self.toggle_recording()
         if discard_button and not self.prev_discard_button:
             self.discard_recording()
-        torque, states = self.dual_grippers.step(time.monotonic(), {
+        positions, states = self.dual_grippers.step(time.monotonic(), {
             "left": left_button and not self.prev_left_gripper_button,
             "right": right_button and not self.prev_right_gripper_button,
         })
@@ -728,7 +760,8 @@ class VRPoseIncrementPublisher(Node):
         self.prev_left_gripper_button, self.prev_right_gripper_button = left_button, right_button
         ctl = GripperCtl()
         ctl.ctl_time = 0.02
-        ctl.l_arm_gripper_tor, ctl.r_arm_gripper_tor = torque
+        ctl.l_arm_gripper_pos, ctl.r_arm_gripper_pos = positions
+        ctl.l_arm_gripper_tor = ctl.r_arm_gripper_tor = 0.0
         self.gripper_ctl_pub.publish(ctl)
         msg = Int8MultiArray()
         msg.data = states  # measured L/R, commanded L/R; 0=open, 1=closed, -1=invalid

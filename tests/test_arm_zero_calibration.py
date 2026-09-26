@@ -235,35 +235,46 @@ class FakeKinematics:
         return [0.12, 0.17, -0.5, 0.2, -0.3, 0.4]
 
 
-@pytest.mark.parametrize("target", ["joint", "cartesian", "both"])
+@pytest.mark.parametrize("target", ["joint", "cartesian", "both", "preset"])
 @pytest.mark.parametrize("side", ["left", "right", "both"])
 def test_calibration_target_selects_only_requested_files_and_arms(tmp_path, target, side):
     joint = tmp_path / "zeropos.yaml"
     desc = tmp_path / "desc_zeropos.yaml"
+    preset = tmp_path / "vr_preset_pose.yaml"
     joint.write_text(YAML_WITH_LEFT_AND_RIGHT)
     desc.write_text(CARTESIAN_YAML)
+    preset.write_text(YAML_WITH_LEFT_AND_RIGHT)
     sides = ("left", "right") if side == "both" else (side,)
     samples = {selected: [(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7)] * 20 for selected in sides}
     fk = FakeKinematics()
 
     joints, cartesian, backups = calibrate_arm_zero.save_calibration(
-        joint, desc, samples, target=target, kinematics=fk
+        joint, desc, samples, target=target, kinematics=fk, preset_path=preset
     )
 
     assert set(joints) == set(sides)
-    expected_files = {joint, desc} if target == "both" else {joint if target == "joint" else desc}
+    expected_files = {
+        "both": {joint, desc}, "joint": {joint}, "cartesian": {desc}, "preset": {preset},
+    }[target]
     assert set(backups) == expected_files
     assert len({backup.name.split(".")[-2] for backup in backups.values()}) == 1
-    for path, original in ((joint, YAML_WITH_LEFT_AND_RIGHT), (desc, CARTESIAN_YAML)):
+    for path, original in (
+        (joint, YAML_WITH_LEFT_AND_RIGHT), (desc, CARTESIAN_YAML),
+        (preset, YAML_WITH_LEFT_AND_RIGHT),
+    ):
         if path not in expected_files:
             assert path.read_text() == original
         else:
             assert backups[path].read_text() == original
         for other in set(("left", "right")) - set(sides):
             assert yaml.safe_load(path.read_text())[f"{other}_arm"] == yaml.safe_load(original)[f"{other}_arm"]
-    if target == "joint":
+    if target in ("joint", "preset"):
         assert not fk.calls
         assert not cartesian
+        saved = yaml.safe_load((preset if target == "preset" else joint).read_text())
+        for selected in sides:
+            assert [saved[f"{selected}_arm"][key] for key in
+                    calibrate_arm_zero.ARM_JOINT_KEYS[selected]] == pytest.approx(joints[selected])
     else:
         assert fk.calls == [(selected, joints[selected]) for selected in sides]
         saved_desc = yaml.safe_load(desc.read_text())
@@ -347,7 +358,7 @@ def test_fk_uses_arm_base_frame_and_correct_joint_names():
         ])
 
 
-@pytest.mark.parametrize("target", ["joint", "cartesian", "both"])
+@pytest.mark.parametrize("target", ["joint", "cartesian", "both", "preset"])
 def test_make_passes_calibration_target(target):
     result = subprocess.run(
         ["make", "-n", "save-arm-zero", "SIDE=right", f"TARGET={target}"],
@@ -359,3 +370,53 @@ def test_make_passes_calibration_target(target):
 def test_calibration_cli_defaults_to_both(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["calibrate_arm_zero.py", "--side", "left"])
     assert calibrate_arm_zero.parse_arguments().target == "both"
+
+
+def test_calibration_cli_selects_independent_preset_file(monkeypatch):
+    monkeypatch.setattr(sys, "argv", [
+        "calibrate_arm_zero.py", "--side", "both", "--target", "preset",
+    ])
+    args = calibrate_arm_zero.parse_arguments()
+    assert args.target == "preset"
+    assert args.preset_config == ROOT / "ros2_ws/src/ctl_msgs_hw/config/vr_preset_pose.yaml"
+    assert args.preset_config not in (args.config, args.desc_config)
+
+
+@pytest.mark.parametrize("failure", ["invalid_samples", "invalid_yaml", "zero_path_alias"])
+def test_preset_calibration_failure_preserves_files(tmp_path, failure):
+    joint = tmp_path / "zeropos.yaml"
+    desc = tmp_path / "desc_zeropos.yaml"
+    preset = tmp_path / "vr_preset_pose.yaml"
+    joint.write_text(YAML_WITH_LEFT_AND_RIGHT)
+    desc.write_text(CARTESIAN_YAML)
+    original = YAML_WITH_LEFT_AND_RIGHT
+    if failure == "invalid_yaml":
+        original = original.replace("right_elbow_joint:", "unknown_joint:")
+    preset.write_text(original)
+    samples = {"left": [(0.1,) * 7] * 20, "right": [(0.2,) * 7] * 20}
+    if failure == "invalid_samples":
+        samples["right"] = [(float("nan"),) * 7] * 20
+    path = preset
+    if failure == "zero_path_alias":
+        path = tmp_path / "preset_link.yaml"
+        path.symlink_to(joint)
+    with pytest.raises(ValueError):
+        calibrate_arm_zero.save_calibration(
+            joint, desc, samples, target="preset", preset_path=path,
+        )
+    assert joint.read_text() == YAML_WITH_LEFT_AND_RIGHT
+    assert desc.read_text() == CARTESIAN_YAML
+    assert preset.read_text() == original
+    assert not list(tmp_path.glob("*.backup"))
+
+
+def test_preset_only_does_not_require_zero_files_or_kinematics(tmp_path):
+    preset = tmp_path / "vr_preset_pose.yaml"
+    preset.write_text(YAML_WITH_LEFT_AND_RIGHT)
+    calibrate_arm_zero.save_calibration(
+        tmp_path / "missing_joint.yaml", tmp_path / "missing_desc.yaml",
+        {"left": [(0.1,) * 7] * 20}, target="preset", preset_path=preset,
+    )
+    assert yaml.safe_load(preset.read_text())["left_arm"]["left_elbow_joint"] == pytest.approx(0.1)
+    assert not (tmp_path / "missing_joint.yaml").exists()
+    assert not (tmp_path / "missing_desc.yaml").exists()

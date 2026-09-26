@@ -146,6 +146,11 @@ class xr_telepercation_ctl{
         //---------- A 键关节空间回零状态 ----------
         //A 键触发标志（由 /vr/zero_return_cmd 回调置位，主循环消费）
         bool returnRequested = false;
+        bool use_preset_target = false;
+        bool preset_pose_valid = false;
+        std::vector<double> preset_left_joints;
+        std::vector<double> preset_right_joints;
+        void load_preset_pose();
         //是否正在执行关节空间回零轨迹
         bool returning = false;
         // Synchronize once from feedback when Cartesian teleoperation resumes
@@ -181,6 +186,7 @@ class xr_telepercation_ctl{
 
         //A 键触发关节空间回零（由回零触发回调调用，仅置位请求标志）
         void trigger_joint_return();
+        void trigger_preset_pose();
 
         // 接收一帧 [yaw, pitch, roll] 姿态增量（弧度），按局部坐标复合。
         void apply_left_orientation_delta(const std::vector<double>& delta_zyx);

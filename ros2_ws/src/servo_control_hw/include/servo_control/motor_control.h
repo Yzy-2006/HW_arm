@@ -68,7 +68,7 @@ typedef struct
     float angle_actual_rad;
     float angle_desired_rad;
     uint16_t motor_id;
-    uint8_t temperature;
+    int8_t temperature; // Decoded Celsius can be negative.
     uint8_t error;
     float angle_actual_float;
     float speed_actual_float;

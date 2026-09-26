@@ -201,6 +201,25 @@ TransLoopCtlInte:
 #============================================
 
 #夹爪限幅
+# Motor MIT gains follow src-4; limits cover this project's calibrated endpoints.
+# Position commands are offsets in degrees; zero=0 preserves encoder coordinates.
+gripperControl:
+  temp_recover_hys: 5.0
+  l_gripper_ctl:
+    mode: position
+    kp: 5.0
+    kd: 0.8
+    pos_min_deg: 0.0
+    pos_max_deg: 90.2582178060505
+    zero_pos_deg: 0.0
+  r_gripper_ctl:
+    mode: position
+    kp: 8.0
+    kd: 2.0
+    pos_min_deg: -24.359569146526997
+    pos_max_deg: 6.961438085103716
+    zero_pos_deg: 0.0
+
 gripperTolerance:
   l_gripper_tol:
     torque: 10

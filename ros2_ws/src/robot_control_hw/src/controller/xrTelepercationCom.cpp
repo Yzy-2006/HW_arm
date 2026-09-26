@@ -374,6 +374,38 @@ void xr_telepercation_ctl::limit_and_reanchor_target(
     orientation_limit_active = orientation_limited;
 }
 
+void xr_telepercation_ctl::load_preset_pose(){
+    preset_pose_valid = false;
+    try{
+        const auto path = ament_index_cpp::get_package_share_directory("ctl_msgs_hw") +
+                          "/config/vr_preset_pose.yaml";
+        const YAML::Node root = YAML::LoadFile(path);
+        const std::vector<std::string> joints = {
+            "shoulder_pitch_joint", "shoulder_roll_joint", "shoulder_yaw_joint",
+            "elbow_joint", "wrist_roll_joint", "wrist_pitch_joint", "wrist_yaw_joint"
+        };
+        std::vector<double> left(joints.size()), right(joints.size());
+        for(std::size_t i = 0; i < joints.size(); ++i){
+            if(!read_finite_scalar(root["left_arm"], ("left_" + joints[i]).c_str(), left[i]) ||
+               !read_finite_scalar(root["right_arm"], ("right_" + joints[i]).c_str(), right[i])){
+                std::cerr << "[遥操作] vr_preset_pose.yaml 关节角缺失或无效，禁用右 B 预设姿态" << std::endl;
+                return;
+            }
+        }
+        if(left.size() != static_cast<std::size_t>(LARMDOF) ||
+           right.size() != static_cast<std::size_t>(RARMDOF)){
+            std::cerr << "[遥操作] 预设姿态关节数量与机械臂不符，禁用右 B" << std::endl;
+            return;
+        }
+        preset_left_joints = left;
+        preset_right_joints = right;
+        preset_pose_valid = true;
+    }catch(const std::exception& exception){
+        std::cerr << "[遥操作] 无法加载 vr_preset_pose.yaml，禁用右 B: "
+                  << exception.what() << std::endl;
+    }
+}
+
 void xr_telepercation_ctl::init(){
 
     l_arm_end_pos.assign(3, 0.0);
@@ -402,6 +434,7 @@ void xr_telepercation_ctl::init(){
     }
 
     load_teleoperation_limits();
+    load_preset_pose();
 
     //角度输出模式是否为静止的
     std::vector<int> lArm_ifJntStab, rArm_ifJntStab;
@@ -580,6 +613,16 @@ void xr_telepercation_ctl::trans_and_outp_core(){
 }
 
 void xr_telepercation_ctl::trigger_joint_return(){
+    use_preset_target = false;
+    returnRequested = true;
+}
+
+void xr_telepercation_ctl::trigger_preset_pose(){
+    if(!preset_pose_valid){
+        std::cerr << "[遥操作] 右 B 请求被忽略：预设姿态配置无效" << std::endl;
+        return;
+    }
+    use_preset_target = true;
     returnRequested = true;
 }
 
@@ -624,7 +667,7 @@ void xr_telepercation_ctl::build_joint_return_cmd(){
     mdataSend.runinMod = 3;
     mdataSend.TorCompMod = 0;
 
-    //起点使用当前关节反馈（ifUseRet=1），目标为 zeropos.yaml
+    //起点使用当前关节反馈（ifUseRet=1），A/B 共用平滑轨迹。
     mdataSend.ifUseRet = 1;
     mdataSend.ifUseTemp = 0;
 
@@ -647,9 +690,8 @@ void xr_telepercation_ctl::build_joint_return_cmd(){
         mdataSend.m_stabMsg[1][i].des_stabTimes = joint_return_end_stable_cycles;
     }
 
-    // Match the servo startup home; Cartesian zero is its FK after TARGET=both calibration.
-    mdataSend.ctlDesMsg.desPos_l_JointSpace = lArm_zeroPos;
-    mdataSend.ctlDesMsg.desPos_r_JointSpace = rArm_zeroPos;
+    mdataSend.ctlDesMsg.desPos_l_JointSpace = use_preset_target ? preset_left_joints : lArm_zeroPos;
+    mdataSend.ctlDesMsg.desPos_r_JointSpace = use_preset_target ? preset_right_joints : rArm_zeroPos;
 }
 
 
@@ -681,8 +723,12 @@ dataSendWrap xr_telepercation_ctl::trans_and_outp(){
     //触发：构建关节空间回零指令，清零增量
     if(returnRequested){
         returnRequested = false;
-        std::cout << "[遥操作] A 键按下：以 " << joint_return_trajectory_time_sec
-                  << "s 平滑关节轨迹回归 zeropos.yaml 零位" << std::endl;
+        // An explicit A/B target supersedes the startup zero-pose hold.
+        zero_outputTimes = total_zeroTimes;
+        std::cout << "[遥操作] 以 " << joint_return_trajectory_time_sec
+                  << "s 平滑关节轨迹到达 "
+                  << (use_preset_target ? "右 B 预设 vr_preset_pose.yaml" : "右 A 零位 zeropos.yaml")
+                  << std::endl;
         build_joint_return_cmd();
         returning = true;
         const double cycle_time = (std::isfinite(TempTime) && TempTime > 0.0) ? TempTime : 0.02;
@@ -706,7 +752,7 @@ dataSendWrap xr_telepercation_ctl::trans_and_outp(){
             return mdataSend;
         }
         // 完成：用末端反馈的当前笛卡尔位姿重新锚定遥操作基准，再恢复笛卡尔遥操作。
-        std::cout << "[遥操作] 关节空间回零完成，恢复笛卡尔遥操作" << std::endl;
+        std::cout << "[遥操作] 关节姿态运动完成，恢复笛卡尔遥操作" << std::endl;
         returning = false;
 
         if(desc_ret_valid){

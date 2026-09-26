@@ -173,6 +173,12 @@ void RobotCtlNode::xr_teleComu_init(){
         std::bind(&RobotCtlNode::zeroReturnCmd_callback, this, std::placeholders::_1)
     );
 
+    presetPoseCmd_sub = this->create_subscription<std_msgs::msg::Bool>(
+        "/vr/preset_pose_cmd",
+        10,
+        std::bind(&RobotCtlNode::presetPoseCmd_callback, this, std::placeholders::_1)
+    );
+
     endDescPub_sub = this->create_subscription<ctl_msgs_hw::msg::EndDescPub>(
         "/feedback_get/end_desc_traj_pub",
         10,
@@ -223,6 +229,12 @@ void RobotCtlNode::zeroReturnCmd_callback(const std_msgs::msg::Bool::SharedPtr m
     if(msg->data){
         std::cout << " xr message get: A 键回零触发指令" << std::endl;
         xrTeleComuCtl.trigger_joint_return();
+    }
+}
+
+void RobotCtlNode::presetPoseCmd_callback(const std_msgs::msg::Bool::SharedPtr msg){
+    if(msg->data){
+        xrTeleComuCtl.trigger_preset_pose();
     }
 }
 

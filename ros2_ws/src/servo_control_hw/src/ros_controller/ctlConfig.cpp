@@ -1,4 +1,35 @@
 #include "ros_controller/ctlConfig.h"
+#include <cmath>
+#include <stdexcept>
+
+static GripperControlConfig readGripperControl(const YAML::Node& node){
+    GripperControlConfig result;
+    if(!node){
+        return result;
+    }
+    const auto mode = node["mode"].as<std::string>("torque");
+    if(mode != "torque" && mode != "position"){
+        throw std::runtime_error("Gripper mode must be torque or position");
+    }
+    result.mode = mode == "position" ? 1 : 0;
+    if(result.mode == 0){
+        return result;
+    }
+    result.kp = node["kp"].as<double>();
+    result.kd = node["kd"].as<double>();
+    result.pos_min_deg = node["pos_min_deg"].as<double>();
+    result.pos_max_deg = node["pos_max_deg"].as<double>();
+    result.zero_pos_deg = node["zero_pos_deg"].as<double>(0.0);
+    if(!std::isfinite(result.kp) || result.kp <= 0.0 || result.kp > 500.0 ||
+       !std::isfinite(result.kd) || result.kd < 0.0 || result.kd > 50.0 ||
+       !std::isfinite(result.pos_min_deg) || !std::isfinite(result.pos_max_deg) ||
+       result.pos_min_deg >= result.pos_max_deg ||
+       !std::isfinite(result.zero_pos_deg) ||
+       result.zero_pos_deg < result.pos_min_deg || result.zero_pos_deg > result.pos_max_deg){
+        throw std::runtime_error("Invalid gripper position gains, limits, or zero position");
+    }
+    return result;
+}
 
 ctlInteConfig ctl_inteMsg_config;
 
@@ -82,6 +113,17 @@ bool ServoNodeCtlConfig::loadFromYaml(const std::string& yaml_path){
                       << "夹爪限幅使用默认值" << std::endl;
         }
 
+        const auto gc = config["gripperControl"];
+        if(gc){
+            mData.GripperLeft_Control = readGripperControl(gc["l_gripper_ctl"]);
+            mData.GripperRight_Control = readGripperControl(gc["r_gripper_ctl"]);
+            mData.Gripper_TempRecover_Hys = gc["temp_recover_hys"].as<double>(5.0);
+            if(!std::isfinite(mData.Gripper_TempRecover_Hys) ||
+               mData.Gripper_TempRecover_Hys < 0.0){
+                throw std::runtime_error("Invalid gripper temperature recovery hysteresis");
+            }
+        }
+
         loaded_ = true;
         std::cout << "===============底层节点控制配置加载完毕===============" << std::endl;
         printConfig();
@@ -122,6 +164,12 @@ void ServoNodeCtlConfig::printConfig() const{
     std::cout << "  rArm_DOF:            " << mData.RARMDOF           << std::endl;
     std::cout << "  ZeroPos_Threshold:   " << mData.ZeroPos_Threshold << " rad" << std::endl;
     std::cout << "  netCard_name:        " << mData.NetCardName       << std::endl;
+    for(const auto* control : {&mData.GripperLeft_Control, &mData.GripperRight_Control}){
+        std::cout << "  Gripper mode: " << (control->mode == 1 ? "position" : "torque")
+                  << ", Kp/Kd: " << control->kp << "/" << control->kd
+                  << ", limits (deg): [" << control->pos_min_deg << ", "
+                  << control->pos_max_deg << "], zero: " << control->zero_pos_deg << std::endl;
+    }
     std::cout << "  ---------- 夹爪力矩/温度限幅 ----------" << std::endl;
     std::cout << "  左夹爪 力矩限幅: " << mData.GripperLeft_Tor_Thr  << " Nm"  << std::endl;
     std::cout << "  左夹爪 温度限幅: " << mData.GripperLeft_Temp_Thr  << " ℃"  << std::endl;

@@ -383,9 +383,41 @@ double kalman_filter::FilteredResCal(double inputvar)
 //限幅控制
 
 //初始化控制参数
-void gripper_RangeLimit::Init(double TorLim, double TempLim){
+void gripper_RangeLimit::Init(double TorLim, double TempLim, double TempRecover){
     this->TorLimit = TorLim;
     this->TemperatureLimit = TempLim;
+    this->TemperatureRecover = TempRecover;
+    this->ifOverTemp = false;
+}
+
+bool gripper_RangeLimit::OverTemperature(double temperature){
+    const double value = std::abs(temperature);
+    if(!std::isfinite(value)){
+        ifOverTemp = true;
+    }else if(ifOverTemp){
+        if(value <= TemperatureLimit - TemperatureRecover){
+            ifOverTemp = false;
+        }
+    }else if(value >= TemperatureLimit){
+        ifOverTemp = true;
+    }
+    return ifOverTemp;
+}
+
+gripperCmd gripper_RangeLimit::PositionOutp(double target_deg, const GripperControlConfig& config,
+                                           int direction, double temperature){
+    gripperCmd cmd;
+    if(!std::isfinite(target_deg) || (direction != -1 && direction != 1)){
+        return cmd;
+    }
+    cmd.joint_mode = 1;
+    // Feedback is raw encoder angle; cancel the direction mapping at CAN output.
+    cmd.joint_pos = direction * std::clamp(target_deg, config.pos_min_deg, config.pos_max_deg)
+                    * 0.017453292519943295;
+    const bool overTemp = OverTemperature(temperature);
+    cmd.joint_Kp = overTemp ? 0.0 : config.kp;
+    cmd.joint_Kd = overTemp ? 0.0 : config.kd;
+    return cmd;
 }
 
 //限幅输出

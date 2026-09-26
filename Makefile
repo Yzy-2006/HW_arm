@@ -45,7 +45,7 @@ help:
 	@echo "  make calibrate SIDE=left ENDPOINT=open   Capture one gripper endpoint"
 	@echo "  make calibrate-arm-zero SIDE=left|right|both  Start passive arm zero calibration"
 	@echo "  make scan-arm-can                         Passively scan CAN0-CAN2 for motor replies"
-	@echo "  make save-arm-zero SIDE=left|right|both [TARGET=joint|cartesian|both]  Save arm zero poses (default: both files)"
+	@echo "  make save-arm-zero SIDE=left|right|both [TARGET=joint|cartesian|both|preset]  Save zero poses or right-B preset (default: both zero files)"
 	@echo "  make validate-data          Validate completed raw episodes"
 	@echo "  make export-data OUTPUT=/absolute/output  Export with the training environment"
 	@echo "  Defaults: VENV=$(VENV), OPENROBOTS_PREFIX=$(OPENROBOTS_PREFIX), DATASET_ROOT=$(DATASET_ROOT)"
@@ -117,7 +117,7 @@ scan-arm-can:
 
 save-arm-zero:
 	@if [[ "$(SIDE)" != "left" && "$(SIDE)" != "right" && "$(SIDE)" != "both" ]]; then echo "Usage: make save-arm-zero SIDE={left|right|both}"; exit 2; fi
-	@if [[ "$(TARGET)" != "joint" && "$(TARGET)" != "cartesian" && "$(TARGET)" != "both" ]]; then echo "TARGET must be joint, cartesian, or both"; exit 2; fi
+	@if [[ "$(TARGET)" != "joint" && "$(TARGET)" != "cartesian" && "$(TARGET)" != "both" && "$(TARGET)" != "preset" ]]; then echo "TARGET must be joint, cartesian, both, or preset"; exit 2; fi
 	@$(ROBOT_ENV)
 	@python3 "$(ROOT)/scripts/calibrate_arm_zero.py" --side "$(SIDE)" --target "$(TARGET)"
 

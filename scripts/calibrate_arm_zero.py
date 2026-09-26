@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture a stable arm feedback pose and save it as source zero positions.
+"""Capture stable arm feedback as zero positions or the right-B joint preset.
 
 This tool is intentionally passive: it only subscribes to feedback and edits
 the source YAML after a complete, stable sample window has been validated.
@@ -22,6 +22,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "ros2_ws/src/ctl_msgs_hw/config/zeropos.yaml"
 DEFAULT_DESC_CONFIG = DEFAULT_CONFIG.with_name("desc_zeropos.yaml")
+DEFAULT_PRESET_CONFIG = DEFAULT_CONFIG.with_name("vr_preset_pose.yaml")
 ARM_JOINT_KEYS = {
     "left": (
         "left_shoulder_pitch_joint",
@@ -170,7 +171,7 @@ def replace_arm_positions_in_yaml(
         rendered_lines.append(rendered_line)
 
     if seen_keys != set(updated_pose):
-        raise ValueError("Could not locate every zero-position key in the source YAML")
+        raise ValueError("Could not locate every joint-position key in the source YAML")
     return "".join(rendered_lines)
 
 
@@ -182,9 +183,9 @@ def render_joint_poses(original: str, poses: dict[str, list[float]]) -> str:
         arm_key = f"{side}_arm"
         joint_keys = ARM_JOINT_KEYS[side]
         if not isinstance(config, dict) or not isinstance(config.get(arm_key), dict):
-            raise ValueError(f"Missing {arm_key} zero-position mapping")
+            raise ValueError(f"Missing {arm_key} joint-position mapping")
         if set(config[arm_key]) != set(joint_keys):
-            raise ValueError("Zero-position configuration keys do not match the arm schema")
+            raise ValueError("Joint-position configuration keys do not match the arm schema")
         updated_text = replace_arm_positions_in_yaml(
             updated_text, arm_key, updated_pose
         )
@@ -285,8 +286,9 @@ def save_calibration(
     arm_samples: dict[str, list[tuple[float, ...]]],
     target: str = "both",
     kinematics=None,
+    preset_path: Path = DEFAULT_PRESET_CONFIG,
 ) -> tuple[dict[str, list[float]], dict[str, list[float]], dict[Path, Path]]:
-    if target not in ("joint", "cartesian", "both"):
+    if target not in ("joint", "cartesian", "both", "preset"):
         raise ValueError("Unknown calibration target")
     if not arm_samples or any(side not in ARM_JOINT_KEYS for side in arm_samples):
         raise ValueError("Unknown or missing arm side")
@@ -296,6 +298,11 @@ def save_calibration(
         raise ValueError("Joint and Cartesian configurations must be different files")
     updates = {}
     cartesian = {}
+    if target == "preset":
+        preset_path = preset_path.resolve()
+        if preset_path in (joint_path, desc_path):
+            raise ValueError("Preset and zero configurations must be different files")
+        updates[preset_path] = render_joint_poses(preset_path.read_text(), poses)
     if target in ("joint", "both"):
         updates[joint_path] = render_joint_poses(joint_path.read_text(), poses)
     if target in ("cartesian", "both"):
@@ -328,8 +335,9 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--side", required=True, choices=("left", "right", "both"))
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--desc-config", type=Path, default=DEFAULT_DESC_CONFIG)
-    parser.add_argument("--target", choices=("joint", "cartesian", "both"), default="both",
-                        help="Save joint home, Cartesian teleoperation zero, or both (default)")
+    parser.add_argument("--preset-config", type=Path, default=DEFAULT_PRESET_CONFIG)
+    parser.add_argument("--target", choices=("joint", "cartesian", "both", "preset"), default="both",
+                        help="Save joint home, Cartesian zero, both (default), or the right-B preset")
     parser.add_argument("--duration", type=float, default=1.0)
     parser.add_argument("--timeout", type=float, default=10.0)
     args = parser.parse_args()
@@ -374,8 +382,9 @@ def main() -> None:
         feedback,
         qos_profile_sensor_data,
     )
+    pose_label = "right-B preset pose" if args.target == "preset" else "zero pose"
     print(
-        f"Capturing {args.side} arm zero pose. Keep the arm stationary; "
+        f"Capturing {args.side} arm {pose_label}. Keep the arm stationary; "
         "this tool will not send motor commands."
     )
     deadline = time.monotonic() + args.timeout
@@ -389,6 +398,7 @@ def main() -> None:
                     {side: window.samples for side, window in windows.items()},
                     target=args.target,
                     kinematics=kinematics,
+                    preset_path=args.preset_config,
                 )
                 print(f"Saved calibration target: {args.target}")
                 for side, pose in poses.items():

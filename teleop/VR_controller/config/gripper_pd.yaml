@@ -1,4 +1,4 @@
-# 遥操作位姿映射；双夹爪 PD/端点已移至 grippers.yaml。
+# 遥操作位姿映射；夹爪端点见 grippers.yaml，电机位控 PD 见 controllerConfig.yaml。
 # ============================================================
 # 手臂位姿增量的基准坐标系
 # ============================================================
@@ -14,11 +14,11 @@ reference_frame: head
 
 # 手臂增量缩放（1.0 = Pico 移动/旋转多少，机械臂目标跟随多少）
 position_scale: 1.0
-orientation_scale: 1.0
+orientation_scale: 2.0
 # Robot-frame per-axis calibration: [x=front, y=left, z=up].
 # Set a sign to -1 only if that physical axis is reversed on this setup.
 position_axis_scale: [1.0, 1.0, 1.0]
-position_axis_sign: [-1.0, -1.0, 1.0]
+position_axis_sign: [1.0, 1.0, 1.0]
 # 水平面标定：绕机器人竖直轴（z=上）旋转下发平移量，补偿“手的前/左”与
 # 机器人“前/左”之间的固定角度偏差（表现为前后/左右平移出来是斜线）。
 # 正值 = 从上方看逆时针（绕 +z），单位：度。校直后把值写回这里即可。
