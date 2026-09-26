@@ -408,3 +408,20 @@ class TeleVuerWrapper:
                 right_trigger_value=10.0 - self.tvuer.right_controller_trigger_value * 10,
                 tele_state=controller_state
             )
+
+    def controller_debug_snapshot(self):
+        """Return raw controller-input status without publishing any ROS command."""
+        return {
+            "events": self.tvuer.controller_event_count,
+            "errors": self.tvuer.controller_event_error_count,
+            "left_seen": bool(self.tvuer.left_controller_seen),
+            "right_seen": bool(self.tvuer.right_controller_seen),
+            "left_trigger": bool(self.tvuer.left_controller_trigger_state),
+            "left_trigger_value": float(self.tvuer.left_controller_trigger_value),
+            "right_trigger": bool(self.tvuer.right_controller_trigger_state),
+            "right_trigger_value": float(self.tvuer.right_controller_trigger_value),
+            "left_a": bool(self.tvuer.left_controller_aButton),
+            "left_b": bool(self.tvuer.left_controller_bButton),
+            "right_a": bool(self.tvuer.right_controller_aButton),
+            "right_b": bool(self.tvuer.right_controller_bButton),
+        }

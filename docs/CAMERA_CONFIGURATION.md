@@ -66,7 +66,8 @@ make check-record
 make preview
 ```
 
-该命令只启动采集器和 RViz，不启动伺服、电机、双臂控制或 VR。RViz 应显示三路图像。
+该命令只打开 `Head camera`、`Left wrist camera`、`Right wrist camera` 三个 OpenCV 窗口，
+不启动 ROS、伺服、电机、双臂控制、VR 或录制器。按 `q` 或 `Esc` 关闭全部窗口。
 
 逐路确认：画面来自正确位置、方向正确、没有长期断流、分辨率符合 `width`/`height`，且头部、左右腕的物理对应关系正确。
 确认完毕后按 `Ctrl+C` 停止 `make preview`；没有按录制键或调用 `/towel/record` 不会创建 episode。

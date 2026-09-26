@@ -1,12 +1,4 @@
-# 遥操作映射与右臂力前馈；双夹爪 PD/端点已移至 grippers.yaml。
-# 右臂六维前馈力（按住右手柄 B 键触发）
-# ============================================================
-# 按住右手柄 B 键时，右臂输出该恒定前馈力；松开输出零。
-# 六维顺序：[fx, fy, fz, tx, ty, tz]
-#   - fx / fy / fz：笛卡尔力 [N]
-#   - tx / ty / tz：笛卡尔力矩 [Nm]
-right_arm_feedforward_force: [0.0, 0.0, -2.0, 0.0, 0.0, 0.0]
-
+# 遥操作位姿映射；双夹爪 PD/端点已移至 grippers.yaml。
 # ============================================================
 # 手臂位姿增量的基准坐标系
 # ============================================================
@@ -26,7 +18,7 @@ orientation_scale: 1.0
 # Robot-frame per-axis calibration: [x=front, y=left, z=up].
 # Set a sign to -1 only if that physical axis is reversed on this setup.
 position_axis_scale: [1.0, 1.0, 1.0]
-position_axis_sign: [1.0, 1.0, 1.0]
+position_axis_sign: [-1.0, -1.0, 1.0]
 # 水平面标定：绕机器人竖直轴（z=上）旋转下发平移量，补偿“手的前/左”与
 # 机器人“前/左”之间的固定角度偏差（表现为前后/左右平移出来是斜线）。
 # 正值 = 从上方看逆时针（绕 +z），单位：度。校直后把值写回这里即可。

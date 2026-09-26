@@ -157,7 +157,7 @@ class xr_telepercation_ctl{
         bool desc_ret_valid = false;
 
         //构建关节空间回零指令：mode 1（关节模式）+ 点位插补。
-        //起点由中层节点依据当前反馈确定（ifUseRet=1），目标为 refTargetAngle.yaml
+        //起点由中层节点依据当前反馈确定（ifUseRet=1），目标为 zeropos.yaml
         void build_joint_return_cmd();
 
         // A 键回零参数，从 controllerConfig.yaml 的 vrJointReturn 读取。
@@ -178,9 +178,6 @@ class xr_telepercation_ctl{
         //左右臂末端位置
         std::vector<double> l_arm_end_delta;
         std::vector<double> r_arm_end_delta;
-
-        //右臂六维前馈力（右手柄侧面按键 grip/squeeze 触发，[fx, fy, fz, tx, ty, tz]）
-        std::vector<double> r_arm_feedforward;
 
         //A 键触发关节空间回零（由回零触发回调调用，仅置位请求标志）
         void trigger_joint_return();

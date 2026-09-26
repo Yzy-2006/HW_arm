@@ -35,7 +35,7 @@ if args.scope in ['all','control']:
     for name in ['casadi', 'pinocchio', 'pinocchio.casadi', 'meshcat', 'scipy', 'televuer']:
         check(name, lambda name=name: module(name))
     from ament_index_python.packages import get_package_share_directory
-    for name in ['ctl_msgs_hw','dual_arm_hw','chassis_control_hw','servo_control_hw','dual_arm_control_hw','robot_control_hw','encos_force_sensor']:
+    for name in ['ctl_msgs_hw','dual_arm_hw','chassis_control_hw','servo_control_hw','dual_arm_control_hw','robot_control_hw']:
         check(name+' ROS package', lambda name=name: get_package_share_directory(name))
     for name in ['cert.pem','key.pem']:
         check(name, lambda name=name: (root/'teleop'/name).stat().st_size)

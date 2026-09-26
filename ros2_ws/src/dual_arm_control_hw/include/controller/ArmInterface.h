@@ -2,7 +2,6 @@
 #define __ArmInterfaceNew__H__
 
 #include "controller/ArmController.h"
-#include "controller/ImpedanceAdmittanceController.h"
 #include "robot_config/config.h"
 
 /*
@@ -344,57 +343,6 @@ class ArmCtlOptInterface{
         };
 };
 
-class admittance_Impendence_Ctl{
-    private:
-        //阻抗-导纳核心类
-        DualArmImpAdmCtl AdmCtl_core;
-
-        //阻抗控制参数
-        CartImpAdmParams l_param_imp;
-        CartImpAdmParams r_param_imp;
-
-        //导纳控制参数
-        CartImpAdmParams l_param_adm;
-        CartImpAdmParams r_param_adm;
-
-        //加速度求解辅助变量
-        //上一轮目标速度
-        std::vector<double> lArm_desVelLast;
-        std::vector<double> rArm_desVelLast;
-        //上一轮反馈速度
-        std::vector<double> lArm_velRetLast;
-        std::vector<double> rArm_velRetLast;
-
-        //力矩传感器滤波器
-        int ifUseFilter;
-        std::vector<Kernel::lowpassFilter> l_6DTorSensorFtr;
-        std::vector<Kernel::lowpassFilter> r_6DTorSensorFtr;
-
-
-        double Temp_Time;
-
-    public:
-        //初始化
-        void init();
-
-        RobotFrameTor impendance_outp(
-            std::vector<double> lArm_desPos, std::vector<double> rArm_desPos,
-            std::vector<double> lArm_desVel, std::vector<double> rArm_desVel,
-            std::vector<double> lArm_posRet, std::vector<double> rArm_posRet,
-            std::vector<double> lArm_velRet, std::vector<double> rArm_velRet
-        );
-
-        std::vector<CartMotionState> admittance_outp(
-            RobotFrameTor extWrench,
-            std::vector<double> lArm_desPosOri, std::vector<double> rArm_desPosOri,
-            std::vector<double> lArm_desVelOri, std::vector<double> rArm_desVelOri
-        ); 
-
-        void reset_admittance(
-            std::vector<double> lArm_pos, std::vector<double> rArm_pos,
-            std::vector<double> lArm_vel, std::vector<double> rArm_vel
-        );
-};
 
 
 #endif

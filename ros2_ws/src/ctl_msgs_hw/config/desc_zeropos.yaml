@@ -5,19 +5,21 @@
 #   1. 位姿格式：[x, y, z, roll, pitch, yaw]
 #      - x, y, z      — 末端位置，单位：米 (m)
 #      - roll, pitch, yaw — 末端姿态（RPY 欧拉角），单位：弧度 (rad)
-#   2. 零位定义：双臂竖直下垂时的笛卡尔末端位姿
+#   2. 零位定义：zeropos.yaml 关节回零位置的正运动学末端位姿
+#      基坐标系 arm_base_link；末端 arm_l_link_8 / arm_r_link_8。
+#      make save-arm-zero SIDE=both TARGET=both 可同步两种零位。
 #   3. 顺序与 msgPublish.h 中 lArm_desPos_descartes / rArm_desPos_descartes 一致
 # ============================================================
 
 left_arm:
   position:
-    x: 0.0000
-    y: 0.17
-    z: -0.6000
+    x: 0.2392143639
+    y: 0.1702366417
+    z: -0.3909217829
   orientation:
-    roll:  0.0
-    pitch: 0.0
-    yaw:   0.0
+    roll:  0.1200563659
+    pitch: 0.0156732804
+    yaw:   0.0479307312
 
 #right_arm:
 #  position:
@@ -41,10 +43,10 @@ left_arm:
 
 right_arm:
   position:
-    x: 0.149
-    y: -0.17
-    z: -0.391
+    x: 0.2509551508
+    y: -0.1677643888
+    z: -0.3982702683
   orientation:
-    roll:  0.0
-    pitch: -1.57
-    yaw:   0.0
+    roll:  -0.0065591844
+    pitch: -0.0767684213
+    yaw:   -0.0083035628

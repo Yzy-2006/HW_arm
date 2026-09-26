@@ -1,7 +1,9 @@
 """Start selected towel-task processes in a controlled order.
 
 The launch file intentionally defaults every hardware-affecting process to false.
-Use `make experiment` after completing the preflight checklist.
+The normal real-robot workflow starts servo, arms, robot, recorder and VR in
+separate terminals; this launch entry remains for individual visualization or
+diagnostic components selected explicitly through launch arguments.
 """
 
 import os
@@ -49,7 +51,6 @@ def generate_launch_description():
 
     arguments = [
         DeclareLaunchArgument("start_servo", default_value="false"),
-        DeclareLaunchArgument("start_force", default_value="false"),
         DeclareLaunchArgument("start_arms", default_value="false"),
         DeclareLaunchArgument("start_robot", default_value="false"),
         DeclareLaunchArgument("start_record", default_value="false"),
@@ -82,7 +83,6 @@ def generate_launch_description():
         *arguments,
         SetEnvironmentVariable("TOWEL_PUBLISH_RVIZ", visualize),
         timed_node(0.0, "servo_control_hw", "servo_node", LaunchConfiguration("start_servo")),
-        timed_node(0.0, "encos_force_sensor", "force_sensor_node", LaunchConfiguration("start_force")),
         timed_node(2.0, "dual_arm_control_hw", "dual_arm_control_node", LaunchConfiguration("start_arms")),
         timed_node(4.0, "robot_control_hw", "robot_control_node", LaunchConfiguration("start_robot")),
         timed_node(5.0, "towel_bringup", "towel_state_visualizer.py", visualize),

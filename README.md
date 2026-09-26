@@ -22,32 +22,53 @@ sudo 密码并配置 `servo_node`，具体见[环境与构建](environments/READ
 
 | 要做的事 | 使用的文档 | 常用命令 |
 |---|---|---|
-| 按正确顺序完成一次真机实验 | [真机实验流程](docs/REAL_ROBOT_EXPERIMENT.md) | `make experiment VISUALIZE=true` |
+| 按正确顺序启动并采集真机数据 | [真机数据采集流程](docs/DATA_COLLECTION_WORKFLOW.md) | 分终端：`make servo` → `make arms` → `make robot` → `make record` → `make vr` |
 | 填写并核对三台 RealSense 的序列号和画面 | [相机序列号配置](docs/CAMERA_CONFIGURATION.md) | `make preview` |
 | 记录单臂或双臂新的安全初始姿态 | [机械臂零位标定](docs/ARM_ZERO_CALIBRATION.md) | `make calibrate-arm-zero SIDE=both` |
 | 采样左右夹爪开/闭端点 | [双夹爪标定](docs/GRIPPER_CALIBRATION.md) | `make servo`、`make calibrate ...` |
-| 配置、检查和去皮两路六维力传感器 | [力传感器检查与去皮](docs/FORCE_SENSOR.md) | `make tare-force SIDE=left` |
-| 连接 XR、检查按键与空载遥操 | [VR 遥操作检查](docs/VR_TELEOP_CHECK.md) | `make teleop` |
+| 连接 XR、检查按键与空载遥操 | [VR 遥操作检查](docs/VR_TELEOP_CHECK.md) | 分终端依次执行 `make servo`、`make arms`、`make robot`、`make vr` |
 | 理解原始片段、字段、校验与 LeRobot 导出 | [数据集约定](docs/DATASET.md) | `make validate-data` |
 | 训练 π0.5 | [π0.5 训练说明](training/README_PI05.md) | 在训练环境运行 |
 | 排查环境或历史验证范围 | [依赖说明](docs/DEPENDENCIES.md)、[验证记录](docs/VALIDATION.md) | `make check` |
 
-`REAL_ROBOT_EXPERIMENT.md` 是当天操作的总清单；表中每个专项步骤都跳转到唯一的模块文档。不要同时启动 `make teleop`、`make experiment` 或分节点命令，它们会发布同名控制话题。
+`DATA_COLLECTION_WORKFLOW.md` 是正式录制的唯一启动入口；`REAL_ROBOT_EXPERIMENT.md` 保留当天
+预检和验收总清单。控制、采集和 VR 必须分终端运行，避免重复节点发布同名控制话题。
 
 ## 常用启动命令
 
+正式采集使用五个独立终端。每个终端先进入项目根目录：
+
 ```bash
-make preview                         # 仅采集器 + RViz，检查三路相机，不启动机器人控制
-make teleop                          # servo → force → arms → robot → VR，不启动采集器
-make teleop VISUALIZE=true           # 上述空载遥操 + RViz
-make experiment VISUALIZE=true       # 完整实验：控制、三相机采集、VR 和 RViz
-make watch                           # 观察 /towel/gripper_state；可通过 WATCH_TOPIC=... 改话题
-make tare-force SIDE=left            # 力节点运行时，对左传感器去皮
-make calibrate-arm-zero SIDE=both    # 双臂零电流的零位标定模式
-make save-arm-zero SIDE=both         # 将稳定的双臂反馈写入源码零位配置
+cd /home/yanziyu/projects/HW_arm/towel_task
 ```
 
-`make preview`、`make teleop` 和 `make experiment` 都是前台进程；按 `Ctrl+C` 只结束本次软件进程。完整实验开始前，必须先完成相机配置、夹爪标定和空载 VR 检查。
+先执行一次 `make check-control`，通过后按顺序启动，每一步等待前一个节点初始化完成：
+
+| 顺序 | 命令 | 作用 |
+|---|---|---|
+| 终端 1 | `make servo` | 启动底层伺服，机械臂执行初始回零 |
+| 终端 2 | `make arms` | 启动双臂运动学与轨迹控制 |
+| 终端 3 | `make robot` | 启动上层控制，输出遥操作初始位姿 |
+| 终端 4 | `make record` | 启动唯一的相机采集器；未按左 B 不会创建 episode |
+| 终端 5 | `make vr` | 启动 VR 输入，接收手柄操作 |
+
+头显连接页面并进入 **Virtual Reality** 后，回到终端 5 按 **Enter**。
+出现“开始发布位姿增量（扣动扳机生效）”后，按住对应手柄的扳机、小幅移动手柄进行遥操作。
+`make vr-debug` 只显示诊断数据，不发送控制指令，不能替代 `make vr`。
+
+其他常用命令：
+
+```bash
+make preview                         # 三个 OpenCV 窗口检查相机，不启动 ROS 或录制
+make record-opencv                   # 正式采集 + 三个 OpenCV 实时窗口；替代 make record
+make record-rviz                     # 可选：向 ROS 发布 RViz 图像话题
+make launch ARGS="visualize:=true"   # 可选：单独启动 RViz、状态桥接和独立 TF
+make watch                           # 观察 /towel/gripper_state；可通过 WATCH_TOPIC=... 改话题
+make calibrate-arm-zero SIDE=left    # 被选中左/右臂零电流；SIDE 可为 left、right、both
+make save-arm-zero SIDE=left TARGET=both  # 同步所选侧关节与末端零位；也可选 joint / cartesian
+```
+
+上述命令均为前台进程；在一个终端按 `Ctrl+C` 不会停止其他终端的节点。开始正式采集前，必须先完成相机配置、夹爪标定和空载 VR 检查；完整步骤见[真机数据采集流程](docs/DATA_COLLECTION_WORKFLOW.md)。
 
 ## 配置归属
 
@@ -55,15 +76,15 @@ make save-arm-zero SIDE=both         # 将稳定的双臂反馈写入源码零�
 |---|---|---|
 | `config/recording.yaml` | 任务文本、原始数据目录、三相机序列号、采集频率与时序阈值 | [相机序列号配置](docs/CAMERA_CONFIGURATION.md)、[数据集约定](docs/DATASET.md) |
 | `teleop/VR_controller/config/grippers.yaml` | 左右夹爪端点、PD、力矩限制和标定状态 | [双夹爪标定](docs/GRIPPER_CALIBRATION.md) |
-| `teleop/VR_controller/config/gripper_pd.yaml` | VR 位姿映射、缩放和右臂力前馈 | [VR 遥操作检查](docs/VR_TELEOP_CHECK.md) |
-| `ros2_ws/src/ctl_msgs_hw/config/zeropos.yaml` | 双臂自动回零目标；专用标定命令可写入左臂或双臂初始姿态 | [机械臂零位标定](docs/ARM_ZERO_CALIBRATION.md) |
-| `ros2_ws/src/encos_force_sensor/config/force_sensor.yaml` | 力传感器 CAN、坐标符号、话题名称和去皮采样数 | [力传感器检查与去皮](docs/FORCE_SENSOR.md) |
+| `teleop/VR_controller/config/gripper_pd.yaml` | VR 位姿映射与缩放 | [VR 遥操作检查](docs/VR_TELEOP_CHECK.md) |
+| `ros2_ws/src/ctl_msgs_hw/config/zeropos.yaml` | 伺服启动和 VR A 键关节回零目标；`TARGET=joint/both` 保存 | [机械臂零位标定](docs/ARM_ZERO_CALIBRATION.md) |
+| `ros2_ws/src/ctl_msgs_hw/config/desc_zeropos.yaml` | 遥操作初始末端位姿；`TARGET=cartesian/both` 从关节反馈正运动学计算并保存 | [机械臂零位标定](docs/ARM_ZERO_CALIBRATION.md) |
 
 当前 `recording.yaml` 的 `right_wrist` 是占位值时，采集器会拒绝启动；请先完成相机模块。配置发生变化后，应使用新的原始数据目录，避免混合不兼容 episode。
 
 ## 数据与训练
 
-采集器记录双臂关节反馈/目标、TCP 反馈/名义目标、夹爪二值状态、可选力话题和三路 RGB 图像。字段定义、时间对齐限制、数据质量规则和 LeRobot 映射都在 [数据集约定](docs/DATASET.md)。
+采集器记录双臂关节反馈/目标、TCP 反馈/名义目标、夹爪二值状态和三路 RGB 图像。字段定义、时间对齐限制、数据质量规则和 LeRobot 映射都在 [数据集约定](docs/DATASET.md)。
 
 当前默认原始目录与 `Makefile` 的 `DATASET_ROOT` 一致，为 `data/raw/fold_towel`：
 

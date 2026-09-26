@@ -1,6 +1,6 @@
 # 采集数据约定 v2
 
-本文件只定义原始数据、时序、质量规则和 LeRobot 映射。真机当天的操作顺序见[真机实验流程](REAL_ROBOT_EXPERIMENT.md)，三相机和夹爪的专项准备分别见[相机序列号配置](CAMERA_CONFIGURATION.md)和[双夹爪标定](GRIPPER_CALIBRATION.md)。
+本文件只定义原始数据、时序、质量规则和 LeRobot 映射。真机正式录制的操作顺序见[真机数据采集流程](DATA_COLLECTION_WORKFLOW.md)，当天预检和验收总清单见[真机实验流程](REAL_ROBOT_EXPERIMENT.md)，三相机和夹爪的专项准备分别见[相机序列号配置](CAMERA_CONFIGURATION.md)和[双夹爪标定](GRIPPER_CALIBRATION.md)。
 
 ## 原始片段
 
@@ -25,13 +25,12 @@
 | `tcp` | 左 XYZ/RPY + 右 XYZ/RPY；m/rad | `/dexbotCtl/DescPub/Fk_ret_data_pub` |
 | `tcp_target` | 左 XYZ/RPY + 右 XYZ/RPY；m/rad | `/dexbotCtl/upperMonitor_msg_send` |
 | `gripper_state` | [左反馈、右反馈、左目标、右目标]；0=开，1=闭 | `/towel/gripper_state` |
-| `force_topic_left/right` | Fx/Fy/Fz/Tx/Ty/Tz；N/Nm；可选 | 同名原力话题 |
 | `timestamp_s` | 自片段开始的单调时钟秒数 | 采样端 |
 | `stream_timestamps` | 各话题到达时间、存在时的 ROS 消息时间 | 回调端 |
 | `camera_timestamps` | 相机帧号、设备时间戳和时钟域、到达时间 | RealSense 接收线程 |
 
-`tcp_target` 是导纳修正前的上层名义目标；`joint_target` 是中层发布的关节目标，
-已经过逆解/当前中层控制逻辑，随后仍由伺服层插补。二者不能混为同一个动作标签。
+`tcp_target` 是上层名义位置目标；`joint_target` 是中层发布的关节目标，
+已经过逆解/当前中层位置控制逻辑，随后仍由伺服层插补。二者不能混为同一个动作标签。
 `tcp` 和 `q` 是观测，不能拿它们冒充已下发动作。
 
 ## 时间对齐
@@ -61,7 +60,7 @@ ROS 各话题和三台 USB 相机没有共享硬件触发。本采集器进行�
 未标定、未收到反馈或反馈超时时，VR 发布 -1，采集器拒绝开始/中止当前片段。
 已经切换闭合目标但夹爪尚未移动完成时，观测可以为 0，动作是 1，不能用同一个按键位替代两者。
 
-此版 schema_version=2，不兼容旧版力矩标签。导出器拒绝 v1；旧数据不能只改维度名当作开合状态。
+此版 schema_version=2，仅包含位置、夹爪与图像数据。导出器拒绝 v1；旧数据不能只改维度名当作开合状态。
 旧片段如需迁移，必须有对应的端点标定与真实开合目标来源，当前没有自动迁移。
 
 ## 数据质量与拆分
@@ -76,7 +75,7 @@ ROS 各话题和三台 USB 相机没有共享硬件触发。本采集器进行�
 
 ```bash
 make validate-data
-make export-data OUTPUT=/absolute/path/to/fold_towel_lerobot
+make export-data OUTPUT=/home/yanziyu/projects/HW_arm/towel_task/data/final
 ```
 
 如果修改了 `config/recording.yaml` 的 `dataset_root`，两个命令均增加 `DATASET_ROOT=/absolute/path/to/raw_data`。导出需要在安装 LeRobot 的训练环境执行；训练侧的后续步骤见[π0.5 训练说明](../training/README_PI05.md)。

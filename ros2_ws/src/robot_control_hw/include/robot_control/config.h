@@ -27,7 +27,6 @@ extern std::string yaml_path_zeroPos;
 extern std::string yaml_path_desc_zeroPos;
 extern std::string yaml_path_initialPD;
 extern std::string yaml_path_initCtlInte;
-extern std::string yaml_path_refTargetAngle;
 
 //默认位置定义
 extern std::vector<double> lArm_zeroPos;
@@ -35,10 +34,6 @@ extern std::vector<double> rArm_zeroPos;
 
 extern std::vector<double> l_descZeroPos;
 extern std::vector<double> r_descZeroPos;
-
-//参考目标关节角度（回零目标，读取自 refTargetAngle.yaml）
-extern std::vector<double> lArm_refTargetAngle;
-extern std::vector<double> rArm_refTargetAngle;
 
 //默认PD参数定义
 extern std::vector<double> lArm_defaultKp_low;
@@ -245,10 +240,6 @@ bool loadZeroPosFromYaml(const std::string& yaml_path);
 // ----- 笛卡尔零位配置 -----
 //将零位笛卡尔空间配置读取到全局变量中
 bool loadDescZeroPosFromYaml(const std::string& yaml_path);
-
-// ----- 参考目标关节角度配置 -----
-//将回零目标关节角度配置读取到全局变量中（来自 refTargetAngle.yaml）
-bool loadRefTargetAngleFromYaml(const std::string& yaml_path);
 
 // ----- 默认PD参数配置 -----
 //加载 PD 配置文件 -- 从 initialPD.yaml 读取 PD 参数并填入全局变量

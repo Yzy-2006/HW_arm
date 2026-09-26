@@ -4,13 +4,13 @@ SHELL := /bin/bash
 
 ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 LAUNCH_FILE := towel_experiment.launch.py
-VISUALIZE ?= false
 ARGS ?=
 VENV ?= $(ROOT)/.venv-robot
 OPENROBOTS_PREFIX ?= /opt/openrobots
 WATCH_TOPIC ?= /towel/gripper_state
 WATCH_ARGS ?=
 RATE ?= 3
+TARGET ?= both
 DATASET_ROOT ?= $(ROOT)/data/raw/fold_towel
 SERVO_NODE := $(ROOT)/ros2_ws/install/servo_control_hw/lib/servo_control_hw/servo_node
 
@@ -26,28 +26,26 @@ export TOWEL_OPENROBOTS_PREFIX="$(OPENROBOTS_PREFIX)"
 source "$(ROOT)/scripts/env.sh"
 endef
 
-.PHONY: help env check check-control check-record check-visualize build test launch experiment teleop teleop-watch preview camera-list servo arms robot force vr record record-rviz watch watch-arm calibrate calibrate-arm-zero save-arm-zero tare-force validate-data export-data clean-build
+.PHONY: help env check check-control check-record check-visualize build test launch teleop experiment teleop-watch preview camera-list servo arms robot vr vr-debug record record-opencv record-rviz watch watch-arm calibrate calibrate-arm-zero scan-arm-can save-arm-zero validate-data export-data clean-build
 
 help:
 	@echo "Towel task commands"
 	@echo "  make check                  Read-only dependency check"
 	@echo "  make build                  Build the ROS workspace"
-	@echo "  make teleop                 Check and start servo, force, arms, robot and VR"
-	@echo "  make teleop VISUALIZE=true  Start the same VR teleoperation with RViz"
+	@echo "  make vr-debug               Diagnose XR controller events without publishing control commands"
 	@echo "  make watch                  Observe /towel/gripper_state (override WATCH_TOPIC=... )"
 	@echo "  make watch-arm SIDE=both RATE=3  Print one or both arms' joint angles at a controlled rate"
-	@echo "  make servo|force            Start only the servo or force-sensor node"
-	@echo "  make tare-force SIDE=left   Tare one running force sensor (left or right)"
-	@echo "  make experiment             Start servo, force, arms, robot, recorder and VR"
-	@echo "  make experiment VISUALIZE=true  Start the same experiment with RViz"
+	@echo "  make servo                  Start only the servo node"
 	@echo "  make camera-list            List connected RealSense serial numbers"
-	@echo "  make preview                Start recorder and RViz without robot control"
+	@echo "  make preview                Show three OpenCV camera windows without recording"
 	@echo "  make record                 Start only the passive recorder"
+	@echo "  make record-opencv          Recorder plus three OpenCV camera windows"
 	@echo "  make record-rviz            Recorder plus camera topics for RViz"
-	@echo "  make launch ARGS='...'      Start selected processes through launch arguments"
+	@echo "  make launch ARGS=\"visualize:=true\"  Start optional RViz/TF visualization"
 	@echo "  make calibrate SIDE=left ENDPOINT=open   Capture one gripper endpoint"
-	@echo "  make calibrate-arm-zero SIDE=both        Start passive dual-arm zero calibration"
-	@echo "  make save-arm-zero SIDE=both             Save stable dual-arm zero poses"
+	@echo "  make calibrate-arm-zero SIDE=left|right|both  Start passive arm zero calibration"
+	@echo "  make scan-arm-can                         Passively scan CAN0-CAN2 for motor replies"
+	@echo "  make save-arm-zero SIDE=left|right|both [TARGET=joint|cartesian|both]  Save arm zero poses (default: both files)"
 	@echo "  make validate-data          Validate completed raw episodes"
 	@echo "  make export-data OUTPUT=/absolute/output  Export with the training environment"
 	@echo "  Defaults: VENV=$(VENV), OPENROBOTS_PREFIX=$(OPENROBOTS_PREFIX), DATASET_ROOT=$(DATASET_ROOT)"
@@ -87,13 +85,12 @@ launch:
 	@$(ROBOT_ENV)
 	@ros2 launch towel_bringup "$(LAUNCH_FILE)" $(ARGS)
 
-experiment:
-	@$(MAKE) --no-print-directory launch ARGS="start_servo:=true start_force:=true start_arms:=true start_robot:=true start_record:=true start_vr:=true visualize:=$(VISUALIZE)"
-
-# Single-command empty-workspace VR check: omit recorder and cameras, but
-# retain the same safe launch ordering as the full experiment.
-teleop: check-control
-	@$(MAKE) --no-print-directory launch ARGS="start_servo:=true start_force:=true start_arms:=true start_robot:=true start_vr:=true visualize:=$(VISUALIZE)"
+# Keep the removed one-command names as explicit failures: `teleop/` is a
+# source directory, so omitting this recipe would otherwise make `make teleop`
+# exit successfully without starting anything.
+teleop experiment:
+	@echo "make $@ has been removed. Start each process separately: servo -> arms -> robot -> record -> vr." >&2
+	@exit 2
 
 watch:
 	@$(ROBOT_ENV)
@@ -112,13 +109,17 @@ servo:
 	@bash "$(ROOT)/scripts/run.sh" servo $(ARGS)
 
 calibrate-arm-zero:
-	@if [[ "$(SIDE)" != "left" && "$(SIDE)" != "both" ]]; then echo "Usage: make calibrate-arm-zero SIDE={left|both}"; exit 2; fi
+	@if [[ "$(SIDE)" != "left" && "$(SIDE)" != "right" && "$(SIDE)" != "both" ]]; then echo "Usage: make calibrate-arm-zero SIDE={left|right|both}"; exit 2; fi
 	@$(MAKE) --no-print-directory servo ARGS="--ros-args -p arm_zero_calibration_side:=$(SIDE)"
 
+scan-arm-can:
+	@$(MAKE) --no-print-directory servo ARGS="--ros-args -p can_channel_scan:=true"
+
 save-arm-zero:
-	@if [[ "$(SIDE)" != "left" && "$(SIDE)" != "both" ]]; then echo "Usage: make save-arm-zero SIDE={left|both}"; exit 2; fi
+	@if [[ "$(SIDE)" != "left" && "$(SIDE)" != "right" && "$(SIDE)" != "both" ]]; then echo "Usage: make save-arm-zero SIDE={left|right|both}"; exit 2; fi
+	@if [[ "$(TARGET)" != "joint" && "$(TARGET)" != "cartesian" && "$(TARGET)" != "both" ]]; then echo "TARGET must be joint, cartesian, or both"; exit 2; fi
 	@$(ROBOT_ENV)
-	@python3 "$(ROOT)/scripts/calibrate_arm_zero.py" --side "$(SIDE)"
+	@python3 "$(ROOT)/scripts/calibrate_arm_zero.py" --side "$(SIDE)" --target "$(TARGET)"
 
 arms:
 	@$(ROBOT_ENV)
@@ -128,12 +129,9 @@ robot:
 	@$(ROBOT_ENV)
 	@bash "$(ROOT)/scripts/run.sh" robot
 
-force:
-	@$(ROBOT_ENV)
-	@bash "$(ROOT)/scripts/run.sh" force
-
 preview:
-	@$(MAKE) --no-print-directory launch ARGS="start_record:=true visualize:=true"
+	@$(ROBOT_ENV)
+	@python3 "$(ROOT)/collection/record.py" --preview-opencv
 
 camera-list:
 	@$(ROBOT_ENV)
@@ -143,6 +141,10 @@ record:
 	@$(ROBOT_ENV)
 	@python3 "$(ROOT)/collection/record.py"
 
+record-opencv:
+	@$(ROBOT_ENV)
+	@python3 "$(ROOT)/collection/record.py" --show-opencv
+
 record-rviz:
 	@$(ROBOT_ENV)
 	@python3 "$(ROOT)/collection/record.py" --publish-rviz
@@ -151,15 +153,14 @@ vr:
 	@$(ROBOT_ENV)
 	@python3 "$(ROOT)/teleop/VR_controller/vr_pose_increment_publisher.py"
 
+vr-debug:
+	@$(ROBOT_ENV)
+	@python3 "$(ROOT)/teleop/VR_controller/vr_pose_increment_publisher.py" --debug-controller-input
+
 calibrate:
 	@if [[ -z "$(SIDE)" || -z "$(ENDPOINT)" ]]; then echo "Usage: make calibrate SIDE={left|right} ENDPOINT={open|closed}"; exit 2; fi
 	@$(ROBOT_ENV)
 	@python3 "$(ROOT)/scripts/calibrate_grippers.py" --side "$(SIDE)" --endpoint "$(ENDPOINT)"
-
-tare-force:
-	@if [[ "$(SIDE)" != "left" && "$(SIDE)" != "right" ]]; then echo "Usage: make tare-force SIDE={left|right}"; exit 2; fi
-	@$(ROBOT_ENV)
-	@ros2 service call "/force_sensor/$(SIDE)/tare" std_srvs/srv/Trigger '{}'
 
 validate-data:
 	@python3 "$(ROOT)/collection/export_lerobot.py" --root "$(DATASET_ROOT)" --validate-only

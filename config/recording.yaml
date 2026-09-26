@@ -10,20 +10,10 @@ max_stream_skew_s: 0.10
 max_camera_age_s: 0.15
 max_camera_skew_s: 0.07
 max_frame_gap_s: 0.10
-# Optional: publish the two captured RGB streams to RViz. This does not publish
+# Optional: publish all three captured RGB streams to RViz. This does not publish
 # robot commands and does not change the frames written to disk.
 publish_rviz: false
 cameras:
   head: "261222075640"
-  # The previously configured wrist camera. Confirm its physical side before
-  # recording; move this serial to right_wrist if it is mounted on the right arm.
-  right_wrist: "260422274993"
-  # Replace this placeholder with the serial printed on the right wrist camera.
-  # The recorder deliberately refuses to start until all configured serials are
-  # nonempty and distinct.
   left_wrist: "260422271922"
-# Original driver publishes these names; its arm controller currently swaps the
-# left/right subscriptions. Preserve topic names verbatim in diagnostics.
-force_topics:
-  force_topic_left: /force_sensor/left/wrench
-  force_topic_right: /force_sensor/right/wrench
+  right_wrist: "260422274509"

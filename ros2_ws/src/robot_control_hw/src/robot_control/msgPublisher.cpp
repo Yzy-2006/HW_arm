@@ -1,7 +1,6 @@
 #include "robot_control/msgPublisher.h"
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <limits>
-#include <fstream>
 
 //===================================================================================
 //全局信息参量初始化
@@ -76,7 +75,6 @@ RobotCtlNode::RobotCtlNode() : Node("robot_upperMonitor") ,
     yaml_path_desc_zeroPos = ament_index_cpp::get_package_share_directory("ctl_msgs_hw") + "/config/desc_zeropos.yaml";
     yaml_path_initialPD = ament_index_cpp::get_package_share_directory("ctl_msgs_hw") + "/config/initialPD.yaml";
     yaml_path_initCtlInte = ament_index_cpp::get_package_share_directory("ctl_msgs_hw") + "/config/controllerConfig.yaml";
-    yaml_path_refTargetAngle = ament_index_cpp::get_package_share_directory("ctl_msgs_hw") + "/config/refTargetAngle.yaml";
     std::cout << " ===== 初始化控制流程参数配置 ===== " << std::endl;
     loadRobotCtlNodeFromYaml(yaml_path_initCtlInte);
     //全局变量赋值
@@ -87,8 +85,6 @@ RobotCtlNode::RobotCtlNode() : Node("robot_upperMonitor") ,
     loadZeroPosFromYaml(yaml_path_zeroPos);
     std::cout << " ===== 初始化笛卡尔空间零位配置 ===== " << std::endl;
     loadDescZeroPosFromYaml(yaml_path_desc_zeroPos);
-    std::cout << " ===== 初始化参考目标关节角度配置 ===== " << std::endl;
-    loadRefTargetAngleFromYaml(yaml_path_refTargetAngle);
     std::cout << " ===== 初始化PD参数配置 ===== " << std::endl;
     loadInitialPDFromYaml(yaml_path_initialPD);
 
@@ -479,9 +475,6 @@ void RobotCtlNode::run()
     //开始ros2循环
     while ((rclcpp::ok()) || shutting_down){
 
-        //运行轮数计数
-        roundCount++;
-
         //------------------------------
         //----------键盘监听代码----------
         //本代码段用于暂停程序执行
@@ -580,13 +573,6 @@ void RobotCtlNode::run()
         //获取一次反馈
         fdback_get();
 
-        //记录参考目标关节角度 -- 运行满 RefAngRecordRounds 轮后，将中层节点反馈的目标关节角度写入yaml
-        if(!refAngRecorded && roundCount >= msgPublish_ctl.refAngRecordRounds && this->has_received_ret_){
-            recordRefTargetAngle();
-            refAngRecorded = true;
-        }
-
-
         //-----初始段控制-----
 
         //若为初始轮，则依据反馈值特性判断是否要进入强制初始化，以保证执行其他命令前机械臂一定在零位
@@ -676,52 +662,6 @@ void RobotCtlNode::run()
 
     RCLCPP_INFO(this->get_logger(), "程序已安全退出");
 }
-
-//将中层节点反馈的目标关节角度记录到yaml作为参考目标关节角度
-void RobotCtlNode::recordRefTargetAngle(){
-    const std::vector<std::string> left_joint_names = {
-        "left_shoulder_pitch_joint", "left_shoulder_roll_joint", "left_shoulder_yaw_joint",
-        "left_elbow_joint", "left_wrist_roll_joint", "left_wrist_pitch_joint", "left_wrist_yaw_joint"
-    };
-    const std::vector<std::string> right_joint_names = {
-        "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
-        "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint"
-    };
-
-    try{
-        YAML::Emitter out;
-        out << YAML::Comment("参考目标关节角度配置 -- 顶层节点运行满 RefAngRecordRounds 轮后自动记录");
-        out << YAML::BeginMap;
-
-        out << YAML::Key << "left_arm" << YAML::Value << YAML::BeginMap;
-        for(size_t i = 0; i < LARMDOF && i < left_joint_names.size(); i++){
-            out << YAML::Key << left_joint_names[i] << YAML::Value << lArm_temp_desPos[i];
-        }
-        out << YAML::EndMap;
-
-        out << YAML::Key << "right_arm" << YAML::Value << YAML::BeginMap;
-        for(size_t i = 0; i < RARMDOF && i < right_joint_names.size(); i++){
-            out << YAML::Key << right_joint_names[i] << YAML::Value << rArm_temp_desPos[i];
-        }
-        out << YAML::EndMap;
-
-        out << YAML::EndMap;
-
-        std::ofstream fout(yaml_path_refTargetAngle);
-        if(!fout.is_open()){
-            std::cerr << "错误：无法打开参考目标关节角度文件 " << yaml_path_refTargetAngle << std::endl;
-            return;
-        }
-        fout << out.c_str();
-        fout.close();
-
-        std::cout << "===============参考目标关节角度已记录到 " << yaml_path_refTargetAngle << " ===============" << std::endl;
-    }
-    catch(const std::exception& e){
-        std::cerr << "错误：记录参考目标关节角度失败 -- " << e.what() << std::endl;
-    }
-}
-
 
 //--------------
 

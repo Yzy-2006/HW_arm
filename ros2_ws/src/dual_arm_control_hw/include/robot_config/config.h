@@ -35,7 +35,6 @@ extern std::string yaml_path_initialPD;
 extern std::string yaml_path_jointLink;
 extern std::string yaml_path_robotStructConfig;
 extern std::string yaml_path_gravCompConfig;
-extern std::string yaml_path_impAdm;
 
 //默认位置定义
 extern std::vector<double> lArm_zeroPos;
@@ -86,10 +85,6 @@ extern optiPrintMsgCtl msgPringControlParam;
 
 //总控流程参数集合
 extern TransLoopCtl dataTransLoopCtl;
-
-//阻抗参数
-extern ImpAdmPara imp_adm_ParaPak;
-
 
 /*  机械臂零位配置读取类
 ---------------------------
@@ -471,61 +466,6 @@ class TransLoopCtlConfig{
         bool isLoaded() const;
 };
 
-/*  阻抗-导纳控制参数配置读取
----------------------------
-功能：
-    1. 从 admittanceImpPara.yaml 读取双臂末端笛卡尔空间阻抗/导纳控制参数
-    2. 封装到 ImpAdmPara 结构体中并输出
-    3. 打印配置摘要到控制台
-
-协议：
-    imp_adm_switch : 0 -- 不开启；1 -- 阻抗控制；2 -- 导纳控制
-    阻抗/导纳参数 K、B、M 均为 6x6 矩阵，行/列顺序为 [x, y, z, roll, pitch, yaw]
-    注意：笛卡尔空间阻抗/导纳控制尚未完成，本类仅负责参数的读取与存储，
-    控制核心类 DualArmImpAdmCtl 尚未实例化接入控制回路
-*/
-class ImpAdmConfig{
-    private:
-        // 阻抗-导纳参数数据
-        ImpAdmPara mImpAdmData;
-
-        // YAML 文件路径
-        std::string yaml_path_;
-
-        // 加载状态标志
-        bool loaded_;
-
-        // ---- 辅助函数 ----
-
-        // 将全部参数复位到默认值（开关关闭、矩阵全零）
-        void initDefaults();
-
-        // 从 YAML node 读取 6x6 矩阵（按行存储），非法/缺失时返回 false 并置零
-        bool readMat6(const YAML::Node& node,
-                      Eigen::Matrix<double, 6, 6>& mat);
-
-        // 从 YAML node 读取 6 维 double 向量（对应六维力/力矩），非法/缺失时返回 false 并清空
-        bool readVec6(const YAML::Node& node,
-                      std::vector<double>& vec);
-
-    public:
-        // 构造函数
-        ImpAdmConfig();
-        ImpAdmConfig(const std::string& yaml_path);
-
-        // 从 YAML 文件加载阻抗-导纳控制配置
-        bool loadFromYaml(const std::string& yaml_path);
-
-        // 获取阻抗-导纳控制数据
-        ImpAdmPara getImpAdmData() const;
-
-        // 打印配置摘要
-        void printConfig() const;
-
-        // 检查是否已成功加载
-        bool isLoaded() const;
-};
-
 // --------------- 封装读取函数 ---------------
 
 //注意关节空间与笛卡尔空间零位的匹配
@@ -563,10 +503,5 @@ bool loadSolverControlFromYaml(const std::string& yaml_path);
 // ----- 总控流程参数配置 -----
 // 从 controllerConfig.yaml 读取总控流程参数并填入全局变量 dataTransLoopCtl
 bool loadTransLoopCtlFromYaml(const std::string& yaml_path);
-
-// ----- 阻抗-导纳控制参数配置 -----
-// 从 admittanceImpPara.yaml 读取阻抗-导纳控制参数并填入全局变量 imp_adm_ParaPak
-bool loadImpAdmFromYaml(const std::string& yaml_path);
-
 
 #endif

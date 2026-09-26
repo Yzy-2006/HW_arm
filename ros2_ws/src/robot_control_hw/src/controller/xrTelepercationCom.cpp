@@ -385,7 +385,6 @@ void xr_telepercation_ctl::init(){
     last_arm_zyx_valid = false;
     l_arm_end_delta.assign(3, 0.0);
     r_arm_end_delta.assign(3, 0.0);
-    r_arm_feedforward.assign(6, 0.0);
     lArm_end_pos_rpy.assign(6, 0.0);
     rArm_end_pos_rpy.assign(6, 0.0);
 
@@ -575,11 +574,7 @@ void xr_telepercation_ctl::trans_and_outp_core(){
     ctlDesMsg.desPos_l_Descartes = lArm_end_pos_rpy;
     ctlDesMsg.desPos_r_Descartes = rArm_end_pos_rpy;
 
-    //右臂六维前馈力：直接透传到中层节点（笛卡尔空间力前馈）
-    //未按侧面按键时 r_arm_feedforward 为全零，等效无力前馈。
-    ctlDesMsg.desTor_r_Descartes = r_arm_feedforward;
-    //启用笛卡尔空间力前馈补偿模式（左臂 desTor 保持全零，不受影响）
-    mdataSend.TorCompMod = 1;
+    mdataSend.TorCompMod = 0;
 
     mdataSend.ctlDesMsg = ctlDesMsg;
 }
@@ -629,7 +624,7 @@ void xr_telepercation_ctl::build_joint_return_cmd(){
     mdataSend.runinMod = 3;
     mdataSend.TorCompMod = 0;
 
-    //起点使用当前关节反馈（ifUseRet=1），目标为 refTargetAngle.yaml
+    //起点使用当前关节反馈（ifUseRet=1），目标为 zeropos.yaml
     mdataSend.ifUseRet = 1;
     mdataSend.ifUseTemp = 0;
 
@@ -652,9 +647,9 @@ void xr_telepercation_ctl::build_joint_return_cmd(){
         mdataSend.m_stabMsg[1][i].des_stabTimes = joint_return_end_stable_cycles;
     }
 
-    //目标关节角度：refTargetAngle.yaml
-    mdataSend.ctlDesMsg.desPos_l_JointSpace = lArm_refTargetAngle;
-    mdataSend.ctlDesMsg.desPos_r_JointSpace = rArm_refTargetAngle;
+    // Match the servo startup home; Cartesian zero is its FK after TARGET=both calibration.
+    mdataSend.ctlDesMsg.desPos_l_JointSpace = lArm_zeroPos;
+    mdataSend.ctlDesMsg.desPos_r_JointSpace = rArm_zeroPos;
 }
 
 
@@ -687,7 +682,7 @@ dataSendWrap xr_telepercation_ctl::trans_and_outp(){
     if(returnRequested){
         returnRequested = false;
         std::cout << "[遥操作] A 键按下：以 " << joint_return_trajectory_time_sec
-                  << "s 平滑关节轨迹回归参考目标角度" << std::endl;
+                  << "s 平滑关节轨迹回归 zeropos.yaml 零位" << std::endl;
         build_joint_return_cmd();
         returning = true;
         const double cycle_time = (std::isfinite(TempTime) && TempTime > 0.0) ? TempTime : 0.02;

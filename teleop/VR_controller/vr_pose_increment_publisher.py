@@ -3,11 +3,12 @@
 Left/right squeeze toggle the matching left/right gripper.
 Left B toggles recording, left A discards, right A returns arms home.
 Gripper encoder endpoints and PD: config/grippers.yaml (calibration required).
-Motion mapping and right B force feedforward: config/gripper_pd.yaml.
+Motion mapping: config/gripper_pd.yaml.
 /towel/gripper_state: [measured_left, measured_right, commanded_left, commanded_right],
 0=open, 1=closed, -1=unavailable. Motor torque stays on /gripper/ctl only.
 """
 
+import argparse
 import os
 import time
 from pathlib import Path
@@ -18,7 +19,7 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSHistoryPolicy, QoSReliabilityPolicy
-from geometry_msgs.msg import Vector3, Wrench
+from geometry_msgs.msg import Vector3
 from std_msgs.msg import Bool, Float64MultiArray, Int8MultiArray
 from std_srvs.srv import SetBool, Trigger
 from ctl_msgs_hw.msg import GripperCtl
@@ -36,6 +37,39 @@ except ImportError:  # pragma: no cover
 LEFT_RECORD_BUTTON_ATTR = "left_bButton"
 # 左手柄 X 键：丢弃当前录制（不保存）。物理 X 键由 televuer 暴露为 left_aButton。
 LEFT_DISCARD_BUTTON_ATTR = "left_aButton"
+
+
+def format_controller_debug(snapshot):
+    """Render a concise, human-readable controller-input diagnostic line."""
+    def yes_no(value):
+        return "yes" if value else "no"
+
+    return (
+        f"XR controller: events={int(snapshot.get('events', 0))}, "
+        f"errors={int(snapshot.get('errors', 0))}; "
+        "left("
+        f"seen={yes_no(snapshot.get('left_seen', False))}, "
+        f"trigger={yes_no(snapshot.get('left_trigger', False))}/"
+        f"{float(snapshot.get('left_trigger_value', 0.0)):.2f}, "
+        f"left_a={yes_no(snapshot.get('left_a', False))}, "
+        f"left_b={yes_no(snapshot.get('left_b', False))}); "
+        "right("
+        f"seen={yes_no(snapshot.get('right_seen', False))}, "
+        f"trigger={yes_no(snapshot.get('right_trigger', False))}/"
+        f"{float(snapshot.get('right_trigger_value', 0.0)):.2f}, "
+        f"right_a={yes_no(snapshot.get('right_a', False))}, "
+        f"right_b={yes_no(snapshot.get('right_b', False))})"
+    )
+
+
+def run_vr_tick(node, tv_wrapper, debug_controller_input=False):
+    """Process one VR frame; debug mode intentionally emits no control commands."""
+    telemetry = tv_wrapper.get_motion_state_data()
+    if debug_controller_input:
+        node.report_controller_debug(tv_wrapper.controller_debug_snapshot())
+        return
+    node.publish_increment(telemetry)
+    node.update_gripper(telemetry)
 
 
 # -----------------------------------------------------------------------------
@@ -99,9 +133,6 @@ GRIPPER_PD_YAML_DEFAULT = str(Path(__file__).resolve().parent / "config/gripper_
 
 # 默认值：文件缺失/字段缺失时兜底
 GRIPPER_PD_DEFAULTS = {
-    # 右手臂六维前馈力 [fx, fy, fz, tx, ty, tz]，单位 N / Nm。
-    # 按下右手柄 B 键时按此值输出，松开输出零。
-    "right_arm_feedforward_force": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
     # 手臂位姿增量的基准坐标系：
     #   "head" —— 以头部为基准（抵消头部/身体平移和水平转向，仅手柄相对头部的移动生效，安全默认）
     #   "room" —— 以房间（世界）坐标系为基准（叠加头部/身体平移，手臂做房间内绝对运动）
@@ -371,7 +402,7 @@ class VRPoseIncrementPublisher(Node):
         self.max_position_speed_mps = 0.75
         self.max_orientation_speed_radps = 4.0
 
-        # 笛卡尔零位（仅作日志/参考；真正的回零目标 refTargetAngle.yaml 由下游
+        # 笛卡尔零位（仅作日志/参考；真正的回零目标 zeropos.yaml 由下游
         # robot_control_hw 加载并在关节空间执行，这里不再做笛卡尔空间复位）
         self.zero_pos = load_zero_position()
         if self.zero_pos is not None:
@@ -437,13 +468,11 @@ class VRPoseIncrementPublisher(Node):
         self.prev_left_gripper_button = False
         self.prev_right_gripper_button = False
 
-        # ---------- 右臂六维前馈力（右手柄 B 键，按住才输出）----------
-        self.right_arm_ff_pub = self.create_publisher(Wrench, "/vr/right_arm_force_feedforward", 10)
-        self.right_arm_ff_force = gripper_cfg["right_arm_feedforward_force"]  # [fx, fy, fz, tx, ty, tz]
         # 左手柄 B 键上一次状态（用于录制上升沿）。
         self.prev_record_button = False
         # 左手柄 X 键上一次状态（用于丢弃录制上升沿）
         self.prev_discard_button = False
+        self._last_controller_debug_log = 0.0
 
         # 左手柄 B 键录制切换；录制器未启动时不阻塞遥操作。
         self.record_service_name = "/towel/record"
@@ -462,10 +491,6 @@ class VRPoseIncrementPublisher(Node):
 
         self.get_logger().info("双夹爪：左/右 squeeze 分别切换左/右夹爪；未标定侧不输出力矩")
         self.get_logger().info(
-            f"右臂六维前馈力初始化：[fx,fy,fz,tx,ty,tz]={self.right_arm_ff_force} "
-            f"（按住 right_bButton 触发）"
-        )
-        self.get_logger().info(
             f"手臂位姿增量基准坐标系：{self.reference_frame} "
             f"（room=房间/世界坐标系，head=头部坐标系），"
             f"位置缩放={self.position_scale:.2f}，姿态缩放={self.orientation_scale:.2f}"
@@ -475,8 +500,16 @@ class VRPoseIncrementPublisher(Node):
                 f"水平面平移标定角：{float(gripper_cfg['translation_yaw_offset_deg']):.1f} deg（绕 z 旋转）"
             )
         self.get_logger().info(
-            "VR 初始化完成：左右 squeeze 控制对应夹爪；左 B 录制、左 A 丢弃、右 A 回零、右 B 前馈"
+            "VR 初始化完成：左右 squeeze 控制对应夹爪；左 B 录制、左 A 丢弃、右 A 回零"
         )
+
+    def report_controller_debug(self, snapshot):
+        """Log raw XR input at a readable rate; this method publishes nothing."""
+        now = time.monotonic()
+        if now - self._last_controller_debug_log < 0.5:
+            return
+        self._last_controller_debug_log = now
+        self.get_logger().info(format_controller_debug(snapshot))
 
     def publish_increment(self, teleData):
         """逐帧计算位姿增量并发布。未扣扳机时发布零增量。"""
@@ -521,7 +554,7 @@ class VRPoseIncrementPublisher(Node):
         # ---- A 键触发关节空间回零（由下游 robot_control_hw 执行）----
         # 物理 A 键位于右手柄：WebXR gamepad button[4]，vuer 将其映射为 right_aButton。
         # 在「按下」的上升沿发布一次 /vr/zero_return_cmd=True，由 robot_control_hw
-        # 以 controllerConfig.yaml 配置的平滑关节轨迹从当前反馈角回归 refTargetAngle.yaml。
+        # 以 controllerConfig.yaml 配置的平滑关节轨迹从当前反馈角回归 zeropos.yaml。
         a_button = bool(state.right_aButton) if state is not None else False
         if a_button and not self.prev_a_button:
             self.get_logger().info("检测到 A 键按下，发布关节空间回零触发指令")
@@ -771,23 +804,6 @@ class VRPoseIncrementPublisher(Node):
 
         future.add_done_callback(_done)
 
-    def publish_arm_feedforward(self, teleData):
-        """按住右手柄 B 键时，右臂输出恒定六维前馈力；松开输出零。"""
-        state = teleData.tele_state if teleData is not None else None
-        side_button = bool(state.right_bButton) if state is not None else False
-
-        msg = Wrench()
-        if side_button:
-            fx, fy, fz, tx, ty, tz = self.right_arm_ff_force
-            msg.force.x = float(fx)
-            msg.force.y = float(fy)
-            msg.force.z = float(fz)
-            msg.torque.x = float(tx)
-            msg.torque.y = float(ty)
-            msg.torque.z = float(tz)
-        # 未按下时保持零（默认 0），维持恒定发布频率
-        self.right_arm_ff_pub.publish(msg)
-
     @staticmethod
     def _to_vec3(arr):
         msg = Vector3()
@@ -802,6 +818,14 @@ class VRPoseIncrementPublisher(Node):
 # -----------------------------------------------------------------------------
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--debug-controller-input",
+        action="store_true",
+        help="print raw XR controller status without publishing control commands",
+    )
+    args = parser.parse_args()
+
     # 1. 用一块全零共享内存替代相机图像（位姿数据走 CONTROLLER_MOVE 事件，与图像无关）
     img_shape = (480, 1280, 3)  # 双目（宽 = 2 * 640）
     shm_size = int(np.prod(img_shape) * np.uint8().itemsize)
@@ -831,17 +855,19 @@ def main():
         input("请先用 XR 设备浏览器打开 https://<本机IP>:8012?ws=wss://<本机IP>:8012，"
               "点击 'Virtual Reality' 后，回到终端按 Enter 开始...\n")
 
-        node.get_logger().info("开始发布位姿增量（扣动扳机生效）")
+        if args.debug_controller_input:
+            node.get_logger().warning(
+                "开始 XR 控制器输入诊断：不会发布机械臂、夹爪、回零或力前馈命令"
+            )
+        else:
+            node.get_logger().info("开始发布位姿增量（扣动扳机生效）")
         target_fps = 50
         frame_interval = 1.0 / target_fps
 
         while rclpy.ok():
             start_time = time.time()
 
-            teleData = tv_wrapper.get_motion_state_data()
-            node.publish_increment(teleData)
-            node.update_gripper(teleData)
-            node.publish_arm_feedforward(teleData)
+            run_vr_tick(node, tv_wrapper, args.debug_controller_input)
 
             rclpy.spin_once(node, timeout_sec=0.0)
 

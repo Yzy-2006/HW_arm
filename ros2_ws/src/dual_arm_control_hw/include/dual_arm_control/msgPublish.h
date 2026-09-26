@@ -24,7 +24,6 @@
 #include <kdl_parser/kdl_parser/kdl_parser.hpp>
 
 #include "std_srvs/srv/set_bool.hpp"
-#include "geometry_msgs/msg/wrench_stamped.hpp"
 
 #include "ctl_msgs_hw/msg/ctl_information.hpp"
 #include "ctl_msgs_hw/msg/ret_information.hpp"
@@ -167,17 +166,6 @@ extern std::vector<double> waist_desc_spd;
 extern std::vector<bool> lArm_ifReachEnd;   //左臂是否到达插补终点
 extern std::vector<bool> rArm_ifReachEnd;   //右臂是否到达插补终点
 
-//-----------------------------------------------------
-//独立下层节点消息获取 -- 传感器通讯节点
-
-//左右臂六维力矩传感器初始修正值
-extern std::vector<double> lArm_6DTorSensorCor;
-extern std::vector<double> rArm_6DTorSensorCor;
-
-//左右臂力矩传感器反馈值
-extern std::vector<double> lArm_6DTorSensorRet;
-extern std::vector<double> rArm_6DTorSensorRet;
-
 //---------------中层节点与上位机通讯全局变量---------------
 
 //-----控制信息-----
@@ -206,14 +194,10 @@ extern bool ifRedefineJntTrajStab_get; //是否重新定义静止关节的角度
 extern std::vector<double> lArm_desPos_descartes;
 extern std::vector<double> lArm_desPos_JntSpace;
 
-extern std::vector<double> lArm_desTor_descartes;
-extern std::vector<double> lArm_desTor_JntSpace;
 
 extern std::vector<double> rArm_desPos_descartes;
 extern std::vector<double> rArm_desPos_JntSpace;
 
-extern std::vector<double> rArm_desTor_descartes;
-extern std::vector<double> rArm_desTor_JntSpace;
 
 //适配MDP接口的速度传输变量
 extern std::vector<double> lArm_desVel_MDP_JntSpace;
@@ -231,9 +215,6 @@ extern std::vector<double> rArm_Kd_;
 辅助目标前馈力矩包含上层求解器目标力矩在关节空间的映射，以及阻抗力矩
 辅助目标前馈力矩的作用为用用作位置保持模式中目标力矩的力前馈。
 */
-extern std::vector<double> lArm_torFeedForward_assist;
-extern std::vector<double> rArm_torFeedForward_assist;
-
 //---------------通讯辅助变量---------------
 
 //debug用的辅助变量
@@ -444,24 +425,6 @@ class ArmCtlNode : public rclcpp::Node{
         rclcpp::Publisher<ctl_msgs_hw::msg::FkDataPub>::SharedPtr mFkRetRes_pub;
         rclcpp::Publisher<ctl_msgs_hw::msg::FkDataPub>::SharedPtr mFkDesRes_pub;
 
-        //-----------------------------------------------
-        //六维力传感器通讯
-
-        //通讯消息类型
-        rclcpp::Subscription<geometry_msgs::msg::WrenchStamped>::SharedPtr left_torsensor_6D;
-        rclcpp::Subscription<geometry_msgs::msg::WrenchStamped>::SharedPtr right_torsensor_6D;
-
-        //六维力传感器通讯函数
-        void lArm_TorSensor_msg(const geometry_msgs::msg::WrenchStamped::SharedPtr msg);
-        void rArm_TorSensor_msg(const geometry_msgs::msg::WrenchStamped::SharedPtr msg);
-
-        //六维力传感器偏置量控制
-        int TorSensor_InitTrajLen = 0;
-        std::vector<std::vector<double>> l_6DTorSensorInitTraj;
-        std::vector<std::vector<double>> r_6DTorSensorInitTraj;
-
-        //-----------------------------------------------
-
         //添加标志位
         bool has_received_command_;
         bool has_received_upperMonitor_command_;
@@ -589,42 +552,6 @@ class ArmCtlNode : public rclcpp::Node{
         MDP_trans MDP_outp();
 
         //------------------------------
-        //阻抗/导纳控制架构
-        //阻抗控制 -- 依据位置偏差计算前馈力
-        //导纳控制 -- 依据力矩传感器计算结果修正位置
-
-        //阻抗 - 导纳核心类
-        admittance_Impendence_Ctl AdmImpCtlCore;
-
-        //辅助量 -- 力矩前馈值储存
-        RobotFrameTor ImpTorFeedForward;
-
-        //开关量 -- 阻抗-导纳控制开关
-        int AdmImpSwitch;
-
-        //过程变量 -- 上一轮的目标位置
-        std::vector<double> l_desPos_last;
-        std::vector<double> r_desPos_last;
-
-        //------------------------------
-        //力前馈求解接口函数
-
-        int TorTrajLen;
-        int TorTrajTempTime;
-        std::vector<std::vector<double>> TorOutp_lArm;
-        std::vector<std::vector<double>> TorOutp_rArm;
-        
-        //力前馈映射 -- 将笛卡尔空间前馈力映射到关节空间
-        RobotJntTor TorFeedforward_DescToJntspace(
-            std::vector<double> lArm_endTorFdForward, std::vector<double> rArm_endTorFdForward
-        );
-
-        //力前馈插补函数
-        void TorDes_runin();
-
-        //力前馈输出函数
-        RobotJntTor TorDes_outp();
-
         //------------------------------
         //回调函数
 

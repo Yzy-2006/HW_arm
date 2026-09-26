@@ -12,8 +12,7 @@
   - 损坏图像和不连续时间戳拒绝。
   - 导出 API 测试替身验证特征集合、形状、标签和 schema 元信息。
   - 真实生成的 ROS 消息类型配合替身 Node，验证采集回调字段、服务状态及连续片段边界。
-- 新工作区编译通过：`chassis_control_hw`、`ctl_msgs_hw`、`dual_arm_hw`、`encos_force_sensor`。
-  力传感器编译有原厂头文件 visibility 属性警告。
+- 新工作区编译通过：`dual_arm_control_hw`。该检查覆盖已移除力传感器和阻抗/导纳路径后的双臂位置控制节点。
 - 新 Python 代码和复制的 VR/IK Python 语法检查通过；shell 脚本语法检查通过。
 - 采集/导出 `--help` 可运行，不需要 ROS 硬件或 LeRobot。
 

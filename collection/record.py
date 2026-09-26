@@ -16,6 +16,61 @@ from core import EpisodeWriter, StreamCache
 
 ROOT = Path(__file__).resolve().parents[1]
 
+WINDOW_TITLES = {
+    "head": "Head camera",
+    "left_wrist": "Left wrist camera",
+    "right_wrist": "Right wrist camera",
+}
+
+
+class OpenCVPreview:
+    """Display the recorder's latest frames in one window per configured camera."""
+
+    def __init__(self, camera_names, *, cv2_module=cv2):
+        self.camera_names = tuple(camera_names)
+        self.cv2 = cv2_module
+        self.visible = True
+        self._opened = False
+
+    def show(self, images):
+        if not self.visible:
+            return False
+        if not self._opened:
+            for name in self.camera_names:
+                self.cv2.namedWindow(WINDOW_TITLES.get(name, name), self.cv2.WINDOW_NORMAL)
+            self._opened = True
+        for name in self.camera_names:
+            self.cv2.imshow(WINDOW_TITLES.get(name, name), images[name])
+        key = self.cv2.waitKey(1) & 0xFF
+        if key in (27, ord("q"), ord("Q")):
+            self.close()
+        return self.visible
+
+    def close(self):
+        if self.visible:
+            self.visible = False
+            self.cv2.destroyAllWindows()
+
+
+def run_opencv_preview(cameras, camera_names, *, startup_timeout_s=5.0):
+    """Run a standalone preview until q/Esc, Ctrl+C, or a camera failure."""
+    preview = OpenCVPreview(camera_names)
+    deadline = time.monotonic() + startup_timeout_s
+    try:
+        while preview.visible:
+            try:
+                images, _ = cameras.snapshot(time.monotonic())
+            except ValueError as error:
+                if str(error) == "Waiting for all cameras" and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                    continue
+                raise
+            preview.show(images)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        preview.close()
+
 # 为每一个配置好的RealSense相机创建一个独立线程来不断接受图像
 class Cameras:
     # 根据序列号创建摄像头并给每一个摄像头开一个接受线程
@@ -86,12 +141,11 @@ class Cameras:
             pipeline.stop()
 
 # 用于处理与ROS的交互，将各个topic的信息整合为一帧
-def make_node(config, cameras):
+def make_node(config, cameras, *, show_opencv=False):
     import rclpy
     from rclpy.node import Node
     from rclpy.qos import qos_profile_sensor_data
     from ctl_msgs_hw.msg import CtlInformation, FkDataPub, MidNodeCtlMsgRet, MidNodeCtlMsgSend
-    from geometry_msgs.msg import WrenchStamped
     from std_msgs.msg import Int8MultiArray, Bool
     from sensor_msgs.msg import Image
     from std_srvs.srv import SetBool, Trigger
@@ -104,8 +158,10 @@ def make_node(config, cameras):
             self.camera_ids = {}
             self.status = self.create_publisher(Bool, "/towel/recording", 10)
             self.publish_rviz = bool(config.get("publish_rviz", False))
+            self.opencv_preview = OpenCVPreview(config["cameras"]) if show_opencv else None
             self.image_publishers = {}
             self._last_visualization_error = ""
+            self._last_opencv_error = ""
             if self.publish_rviz:
                 self.image_publishers = {
                     name: self.create_publisher(
@@ -125,10 +181,6 @@ def make_node(config, cameras):
                     "tcp_target", list(m.l_arm_des_pos_descartes) + list(m.r_arm_des_pos_descartes), m)),
                 (Int8MultiArray, "/towel/gripper_state", lambda m: self.put("gripper_state", m.data, m)),
             ]
-            for key, topic in config.get("force_topics", {}).items():
-                subs.append((WrenchStamped, topic, lambda m, key=key: self.put(key,
-                    [m.wrench.force.x, m.wrench.force.y, m.wrench.force.z,
-                     m.wrench.torque.x, m.wrench.torque.y, m.wrench.torque.z], m)))
             for typ, topic, callback in subs:
                 self.create_subscription(typ, topic, callback, qos_profile_sensor_data)
             self.create_service(SetBool, "/towel/record", self.record)
@@ -228,9 +280,24 @@ def make_node(config, cameras):
                     self._last_visualization_error = detail
                     self.get_logger().warning(f"RViz camera preview unavailable: {detail}")
 
+        def publish_opencv_preview(self):
+            if self.opencv_preview is None:
+                return
+            try:
+                images, _ = cameras.snapshot(time.monotonic())
+                if not self.opencv_preview.show(images):
+                    self.opencv_preview = None
+                self._last_opencv_error = ""
+            except Exception as exc:
+                detail = str(exc)
+                if detail != self._last_opencv_error:
+                    self._last_opencv_error = detail
+                    self.get_logger().warning(f"OpenCV camera preview unavailable: {detail}")
+
         def sample(self):
             if self.publish_rviz:
                 self.publish_preview()
+            self.publish_opencv_preview()
             if self.episode is None:
                 return
             try:
@@ -252,6 +319,8 @@ def make_node(config, cameras):
                 self.get_logger().error(f"Recording aborted; retained .partial: {exc}")
 
         def close(self):
+            if self.opencv_preview is not None:
+                self.opencv_preview.close()
             if self.episode:
                 self.episode.abort("Recorder stopped without explicit save")
                 self.episode = None
@@ -269,7 +338,17 @@ def main():
         "--publish-rviz", action="store_true", default=None,
         help="Publish every configured camera frame to its RViz image topic.",
     )
+    parser.add_argument(
+        "--preview-opencv", action="store_true",
+        help="Show three OpenCV camera windows without ROS or recording.",
+    )
+    parser.add_argument(
+        "--show-opencv", action="store_true",
+        help="Show OpenCV camera windows while the recorder remains active.",
+    )
     args = parser.parse_args()
+    if args.preview_opencv and args.show_opencv:
+        parser.error("--preview-opencv and --show-opencv cannot be used together")
     config = yaml.safe_load(args.config.read_text())
     if args.task:
         config["task"] = args.task
@@ -281,12 +360,16 @@ def main():
         config["publish_rviz"] = args.publish_rviz
     path = args.dataset_root or Path(config["dataset_root"])
     config["dataset_root"] = str(path if path.is_absolute() else ROOT / path)
-    import rclpy
-    cameras, node = None, None
-    rclpy.init()
+    cameras, node, rclpy = None, None, None
     try:
         cameras = Cameras(config)
-        node = make_node(config, cameras)
+        if args.preview_opencv:
+            run_opencv_preview(cameras, config["cameras"])
+            return
+        import rclpy as rclpy_module
+        rclpy = rclpy_module
+        rclpy.init()
+        node = make_node(config, cameras, show_opencv=args.show_opencv)
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
@@ -295,7 +378,7 @@ def main():
             node.close()
         if cameras:
             cameras.close()
-        if rclpy.ok():
+        if rclpy is not None and rclpy.ok():
             rclpy.shutdown()
 
 

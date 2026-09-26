@@ -5,7 +5,6 @@ std::string yaml_path_zeroPos;
 std::string yaml_path_desc_zeroPos;
 std::string yaml_path_initialPD;
 std::string yaml_path_initCtlInte;
-std::string yaml_path_refTargetAngle;
 
 //默认位置定义
 std::vector<double> lArm_zeroPos;
@@ -13,10 +12,6 @@ std::vector<double> rArm_zeroPos;
 
 std::vector<double> l_descZeroPos;
 std::vector<double> r_descZeroPos;
-
-//参考目标关节角度（回零目标）
-std::vector<double> lArm_refTargetAngle;
-std::vector<double> rArm_refTargetAngle;
 
 //默认PD参数定义
 std::vector<double> lArm_defaultKp_low;
@@ -657,63 +652,6 @@ bool loadDescZeroPosFromYaml(const std::string& yaml_path){
     }
 }
 
-// ----- 参考目标关节角度配置 -----
-//将回零目标关节角度配置读取到全局变量中（来自 refTargetAngle.yaml）
-bool loadRefTargetAngleFromYaml(const std::string& yaml_path){
-    try{
-        YAML::Node config = YAML::LoadFile(yaml_path);
-
-        // 读取左臂参考目标角度
-        if(config["left_arm"]){
-            const YAML::Node& left = config["left_arm"];
-            lArm_refTargetAngle.clear();
-            lArm_refTargetAngle.push_back(left["left_shoulder_pitch_joint"].as<double>(0.0));
-            lArm_refTargetAngle.push_back(left["left_shoulder_roll_joint"].as<double>(0.0));
-            lArm_refTargetAngle.push_back(left["left_shoulder_yaw_joint"].as<double>(0.0));
-            lArm_refTargetAngle.push_back(left["left_elbow_joint"].as<double>(0.0));
-            lArm_refTargetAngle.push_back(left["left_wrist_roll_joint"].as<double>(0.0));
-            lArm_refTargetAngle.push_back(left["left_wrist_pitch_joint"].as<double>(0.0));
-            lArm_refTargetAngle.push_back(left["left_wrist_yaw_joint"].as<double>(0.0));
-        }else{
-            std::cerr << "警告：refTargetAngle.yaml 中未找到 left_arm 配置节点，回退为零位" << std::endl;
-            lArm_refTargetAngle = lArm_zeroPos;
-        }
-
-        // 读取右臂参考目标角度
-        if(config["right_arm"]){
-            const YAML::Node& right = config["right_arm"];
-            rArm_refTargetAngle.clear();
-            rArm_refTargetAngle.push_back(right["right_shoulder_pitch_joint"].as<double>(0.0));
-            rArm_refTargetAngle.push_back(right["right_shoulder_roll_joint"].as<double>(0.0));
-            rArm_refTargetAngle.push_back(right["right_shoulder_yaw_joint"].as<double>(0.0));
-            rArm_refTargetAngle.push_back(right["right_elbow_joint"].as<double>(0.0));
-            rArm_refTargetAngle.push_back(right["right_wrist_roll_joint"].as<double>(0.0));
-            rArm_refTargetAngle.push_back(right["right_wrist_pitch_joint"].as<double>(0.0));
-            rArm_refTargetAngle.push_back(right["right_wrist_yaw_joint"].as<double>(0.0));
-        }else{
-            std::cerr << "警告：refTargetAngle.yaml 中未找到 right_arm 配置节点，回退为零位" << std::endl;
-            rArm_refTargetAngle = rArm_zeroPos;
-        }
-
-        // 维度校验
-        if(lArm_refTargetAngle.size() != LARMDOF || rArm_refTargetAngle.size() != RARMDOF){
-            std::cerr << "错误：参考目标关节角度配置维度不匹配，回退为零位" << std::endl;
-            lArm_refTargetAngle = lArm_zeroPos;
-            rArm_refTargetAngle = rArm_zeroPos;
-            return false;
-        }
-
-        std::cout << "===============参考目标关节角度配置加载完毕===============" << std::endl;
-        return true;
-    }
-    catch(const YAML::Exception& e){
-        std::cerr << "警告：参考目标关节角度配置加载失败，回退为零位：" << e.what() << std::endl;
-        lArm_refTargetAngle = lArm_zeroPos;
-        rArm_refTargetAngle = rArm_zeroPos;
-        return false;
-    }
-}
-
 // ----- 默认PD参数配置 -----
 //加载 PD 配置文件 -- 从 initialPD.yaml 读取 PD 参数并填入全局变量
 bool loadInitialPDFromYaml(const std::string& yaml_path){
@@ -801,7 +739,6 @@ RobotCtlNodeConfig::RobotCtlNodeConfig()
     mData.trmpTime  = 0.02;
     mData.lArm_Dof  = 7;
     mData.rArm_Dof  = 7;
-    mData.refAngRecordRounds = 100;
 }
 
 RobotCtlNodeConfig::RobotCtlNodeConfig(const std::string& yaml_path)
@@ -811,7 +748,6 @@ RobotCtlNodeConfig::RobotCtlNodeConfig(const std::string& yaml_path)
     mData.trmpTime  = 0.02;
     mData.lArm_Dof  = 7;
     mData.rArm_Dof  = 7;
-    mData.refAngRecordRounds = 100;
     loadFromYaml(yaml_path);
 }
 
@@ -824,7 +760,6 @@ bool RobotCtlNodeConfig::loadFromYaml(const std::string& yaml_path){
             mData.trmpTime  = rn["TempTime"].as<double>(0.02);
             mData.lArm_Dof  = rn["lArm_DOF"].as<int>(7);
             mData.rArm_Dof  = rn["rArm_DOF"].as<int>(7);
-            mData.refAngRecordRounds = rn["RefAngRecordRounds"].as<int>(100);
         } else {
             std::cerr << "警告：未找到 TransLoopCtlInte/robot_ctlNode_loop_ctl 节点" << std::endl;
         }
@@ -855,7 +790,6 @@ void RobotCtlNodeConfig::printConfig() const{
     std::cout << "  TempTime:  " << mData.trmpTime << " s" << std::endl;
     std::cout << "  lArm_DOF:  " << mData.lArm_Dof << std::endl;
     std::cout << "  rArm_DOF:  " << mData.rArm_Dof << std::endl;
-    std::cout << "  RefAngRecordRounds: " << mData.refAngRecordRounds << std::endl;
     std::cout << "========================================" << std::endl;
 }
 

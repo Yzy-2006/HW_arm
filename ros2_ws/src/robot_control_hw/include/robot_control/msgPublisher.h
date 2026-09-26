@@ -16,7 +16,6 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/vector3.hpp>
-#include <geometry_msgs/msg/wrench.hpp>
 
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2/LinearMath/Quaternion.h>
@@ -193,11 +192,6 @@ class RobotCtlNode : public rclcpp::Node{
         int shutdown_count = 0;
         int old_transMod;
 
-        //记录参考目标关节角度
-        int roundCount = 0;             //当前已运行轮数
-        bool refAngRecorded = false;    //是否已记录参考目标关节角度
-        void recordRefTargetAngle();    //将中层节点反馈的目标关节角度记录到yaml作为参考
-
         //通讯信息回调函数
         void message_callback(const ctl_msgs_hw::msg::MidNodeCtlMsgRet::SharedPtr msg);
 
@@ -223,8 +217,6 @@ class RobotCtlNode : public rclcpp::Node{
         rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr zeroReturnCmd_sub;
         //末端笛卡尔位姿反馈订阅（回零完成后重新锚定笛卡尔遥操作基准）
         rclcpp::Subscription<ctl_msgs_hw::msg::EndDescPub>::SharedPtr endDescPub_sub;
-        //右臂六维前馈力订阅（右手柄侧面按键触发）
-        rclcpp::Subscription<geometry_msgs::msg::Wrench>::SharedPtr rArm_feedforward_sub;
 
         //遥操作通讯初始化
         void xr_teleComu_init();
@@ -237,7 +229,6 @@ class RobotCtlNode : public rclcpp::Node{
         void rArm_xrTele_endDelta_callback(const geometry_msgs::msg::Vector3::SharedPtr msg);
         void zeroReturnCmd_callback(const std_msgs::msg::Bool::SharedPtr msg);
         void endDescPub_callback(const ctl_msgs_hw::msg::EndDescPub::SharedPtr msg);
-        void rArm_feedforward_callback(const geometry_msgs::msg::Wrench::SharedPtr msg);
 
         //---------------------------------
         //桥接通讯定义

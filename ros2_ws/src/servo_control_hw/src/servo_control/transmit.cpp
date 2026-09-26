@@ -439,6 +439,63 @@ std::pair<std::vector<std::vector<double>>, std::vector<std::vector<double>>> Ge
 //直接获取EtherCAT反馈值的函数
 MotorBlock Tx_Msg_01[CAN_CHANNELS][MOTORS_PER_CH];
 MotorBlock Rx_Msg_01[CAN_CHANNELS][MOTORS_PER_CH];
+
+static uint32_t can_scan_cycles = 0;
+static uint32_t can_scan_reply_counts[CAN_CHANNELS][MOTORS_PER_CH];
+
+void CanChannelScanBegin()
+{
+    can_scan_cycles = 0;
+    memset(can_scan_reply_counts, 0, sizeof(can_scan_reply_counts));
+}
+
+void CanChannelScanStep()
+{
+    if (ecat_phys <= 0) {
+        return;
+    }
+
+    MotorBlock scan_tx[CAN_CHANNELS][MOTORS_PER_CH];
+    MotorBlock scan_rx[CAN_CHANNELS][MOTORS_PER_CH];
+    memset(scan_tx, 0, sizeof(scan_tx));
+
+    for (int channel = 0; channel < CAN_CHANNELS; ++channel) {
+        for (int slot = 0; slot < MOTORS_PER_CH; ++slot) {
+            const int motor_id = slot + 1;
+            // Current mode with a zero target is the only command emitted by
+            // the scanner.  ack_status requests a reply without holding or
+            // moving any joint.
+            set_motor_cur_tor(&scan_tx[channel][slot], motor_id, 0, 0, 1);
+        }
+    }
+
+    memcpy(ec_slave[ecat_phys].outputs, scan_tx, ETC_PDO_SIZE);
+    ec_send_processdata();
+    ec_receive_processdata(EC_TIMEOUTRET);
+    memcpy(scan_rx, ec_slave[ecat_phys].inputs, ETC_PDO_SIZE);
+    ++can_scan_cycles;
+
+    for (int channel = 0; channel < CAN_CHANNELS; ++channel) {
+        for (int slot = 0; slot < MOTORS_PER_CH; ++slot) {
+            if (scan_rx[channel][slot].dlc > 0) {
+                ++can_scan_reply_counts[channel][slot];
+            }
+        }
+    }
+}
+
+void CanChannelScanPrintResult()
+{
+    printf("[CAN scan] sampled %u zero-current cycles\n", can_scan_cycles);
+    for (int channel = 0; channel < CAN_CHANNELS; ++channel) {
+        printf("[CAN scan] CAN%d:", channel);
+        for (int slot = 0; slot < MOTORS_PER_CH; ++slot) {
+            printf(" ID%d=%u", slot + 1, can_scan_reply_counts[channel][slot]);
+        }
+        printf("\n");
+    }
+}
+
 void EtherCAT_direGetFdback(){
     if (wkc_err_iteration_count > K_ETHERCAT_ERR_PERIOD)
     {

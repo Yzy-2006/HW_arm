@@ -114,7 +114,6 @@ src/controller/JntController.cpp
 src/controller/ArmController.cpp
 src/controller/ArmInterface.cpp
 src/controller/IKFKsolver.cpp
-src/controller/ImpedanceAdmittanceController.cpp
 )
 
 target_include_directories(dual_arm_control_node PUBLIC

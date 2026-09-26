@@ -30,14 +30,23 @@ ServoNode::ServoNode() : Node ("servo_node"),
     if (
         !calibration_side.empty()
         && calibration_side != "left"
+        && calibration_side != "right"
         && calibration_side != "both"
     ) {
         throw std::runtime_error(
-            "arm_zero_calibration_side must be left, both, or empty"
+            "arm_zero_calibration_side must be left, right, both, or empty"
         );
     }
-    left_arm_zero_calibration_ = !calibration_side.empty();
+    arm_zero_calibration_ = !calibration_side.empty();
+    left_arm_zero_calibration_ = calibration_side == "left";
+    right_arm_zero_calibration_ = calibration_side == "right";
     both_arm_zero_calibration_ = calibration_side == "both";
+    can_channel_scan_ = this->declare_parameter<bool>("can_channel_scan", false);
+    if (can_channel_scan_ && arm_zero_calibration_) {
+        throw std::runtime_error(
+            "can_channel_scan cannot be combined with arm zero calibration"
+        );
+    }
 
     //显式 executor 替代全局 rclcpp::spin_some
     executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
@@ -294,24 +303,37 @@ void ServoNode::EtherCATrun(){
     retMsg_unpack_func();
 }
 
-void ServoNode::apply_left_arm_zero_calibration_commands(
+void ServoNode::apply_arm_zero_calibration_commands(
+    const std::vector<double>& left_hold_positions,
     const std::vector<double>& right_hold_positions
 ){
+    if (static_cast<int>(left_hold_positions.size()) != LARMDOF) {
+        throw std::runtime_error("Missing left-arm calibration hold positions");
+    }
     if (static_cast<int>(right_hold_positions.size()) != RARMDOF) {
         throw std::runtime_error("Missing right-arm calibration hold positions");
     }
 
     for(int i = 0; i < LARMDOF; i++){
-        servo_desMsg_orig[i].transMod = 5;
-        servo_desMsg_orig[i].joint_pos = 0.0;
+        if (left_arm_zero_calibration_ || both_arm_zero_calibration_) {
+            servo_desMsg_orig[i].transMod = 5;
+            servo_desMsg_orig[i].joint_pos = 0.0;
+            servo_desMsg_orig[i].joint_spd = 0.0;
+            servo_desMsg_orig[i].joint_tor = 0.0;
+            servo_desMsg_orig[i].joint_Kp = 0.0;
+            servo_desMsg_orig[i].joint_Kd = 0.0;
+            continue;
+        }
+        servo_desMsg_orig[i].transMod = 1;
+        servo_desMsg_orig[i].joint_pos = left_hold_positions[i];
         servo_desMsg_orig[i].joint_spd = 0.0;
         servo_desMsg_orig[i].joint_tor = 0.0;
-        servo_desMsg_orig[i].joint_Kp = 0.0;
-        servo_desMsg_orig[i].joint_Kd = 0.0;
+        servo_desMsg_orig[i].joint_Kp = lArm_defaultKp[i];
+        servo_desMsg_orig[i].joint_Kd = lArm_defaultKd[i];
     }
     for(int i = 0; i < RARMDOF; i++){
         const int index = i + LARMDOF;
-        if (both_arm_zero_calibration_) {
+        if (right_arm_zero_calibration_ || both_arm_zero_calibration_) {
             servo_desMsg_orig[index].transMod = 5;
             servo_desMsg_orig[index].joint_pos = 0.0;
             servo_desMsg_orig[index].joint_spd = 0.0;
@@ -353,6 +375,26 @@ void ServoNode::run(){
     //初始化传输相关变量
     rosLoopVar_Init();
 
+    if (can_channel_scan_) {
+        if (ec_slavecount <= 0) {
+            throw std::runtime_error(
+                "Cannot scan CAN channels without an EtherCAT gateway"
+            );
+        }
+        RCLCPP_WARN(
+            this->get_logger(),
+            "CAN scan: zero-current only; support both arms and do not run another servo node"
+        );
+        CanChannelScanBegin();
+        constexpr int scan_cycles = 2000;
+        for (int cycle = 0; rclcpp::ok() && cycle < scan_cycles; ++cycle) {
+            CanChannelScanStep();
+            loop_rate.sleep();
+        }
+        CanChannelScanPrintResult();
+        return;
+    }
+
 
     //-----------------------------------------------
     //初始位置获取
@@ -361,31 +403,62 @@ void ServoNode::run(){
         rclcpp::sleep_for(std::chrono::milliseconds(1));
     }
 
-    if (left_arm_zero_calibration_) {
+    if (arm_zero_calibration_) {
         if (static_cast<int>(servo_retMsg_unpacked.size()) < LARMDOF + RARMDOF) {
             throw std::runtime_error(
-                "Cannot start left-arm calibration without full arm feedback"
+                "Cannot start arm calibration without full arm feedback"
             );
+        }
+        left_arm_calibration_hold_positions_.resize(LARMDOF);
+        for (int i = 0; i < LARMDOF; i++) {
+            left_arm_calibration_hold_positions_[i] =
+                servo_retMsg_unpacked[i].joint_posRet;
         }
         right_arm_calibration_hold_positions_.resize(RARMDOF);
         for (int i = 0; i < RARMDOF; i++) {
             right_arm_calibration_hold_positions_[i] =
                 servo_retMsg_unpacked[i + LARMDOF].joint_posRet;
         }
+
+        const auto has_nonzero_feedback = [](const std::vector<double>& positions) {
+            return std::any_of(
+                positions.begin(),
+                positions.end(),
+                [](double position) { return std::abs(position) > 1e-6; }
+            );
+        };
+        if (left_arm_zero_calibration_
+            && !has_nonzero_feedback(right_arm_calibration_hold_positions_)) {
+            throw std::runtime_error(
+                "Cannot hold right arm without feedback; use both-arm calibration instead"
+            );
+        }
+        if (right_arm_zero_calibration_
+            && !has_nonzero_feedback(left_arm_calibration_hold_positions_)) {
+            throw std::runtime_error(
+                "Cannot hold left arm without feedback; use both-arm calibration instead"
+            );
+        }
+
         if (both_arm_zero_calibration_) {
             RCLCPP_WARN(
                 this->get_logger(),
                 "both-arm calibration: zero-current; support both arms before moving them"
             );
-        } else {
+        } else if (left_arm_zero_calibration_) {
             RCLCPP_WARN(
                 this->get_logger(),
                 "left arm calibration: zero-current; support the arm before moving it"
             );
+        } else {
+            RCLCPP_WARN(
+                this->get_logger(),
+                "right arm calibration: zero-current; support the arm before moving it"
+            );
         }
     }
 
-    if (!left_arm_zero_calibration_) {
+    if (!arm_zero_calibration_) {
         //-----------------------------------------------
         //检查是否有电机反馈
         bool hasFeedback = false;
@@ -511,8 +584,9 @@ void ServoNode::run(){
     while (rclcpp::ok()){
         ecatcheck();
 
-        if (left_arm_zero_calibration_) {
-            apply_left_arm_zero_calibration_commands(
+        if (arm_zero_calibration_) {
+            apply_arm_zero_calibration_commands(
+                left_arm_calibration_hold_positions_,
                 right_arm_calibration_hold_positions_
             );
             msg_publish();

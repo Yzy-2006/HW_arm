@@ -117,6 +117,13 @@ std::pair<std::vector<std::vector<double>>, std::vector<std::vector<double>>> Ge
 
 void EtherCAT_direGetFdback();    //直接获取EtherCAT返回值的函数
 
+// Passive ECAT-8CAN topology scan.  It sends zero-current frames to every
+// protocol channel/slot and counts non-empty reply frames; it never sends a
+// position command or changes the configured arm mapping.
+void CanChannelScanBegin();
+void CanChannelScanStep();
+void CanChannelScanPrintResult();
+
 void EtherCAT_Run();                    //EtherCAT运行主要流程代码
 void EtherCAT_Command_Set();            //EtherCAT运行主要流程成员函数 -- 设定EtherCAT命令
 

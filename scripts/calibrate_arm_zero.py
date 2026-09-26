@@ -21,6 +21,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "ros2_ws/src/ctl_msgs_hw/config/zeropos.yaml"
+DEFAULT_DESC_CONFIG = DEFAULT_CONFIG.with_name("desc_zeropos.yaml")
 ARM_JOINT_KEYS = {
     "left": (
         "left_shoulder_pitch_joint",
@@ -42,7 +43,7 @@ ARM_JOINT_KEYS = {
     ),
 }
 MIN_SAMPLES = 20
-MAX_POSITION_SPREAD_RAD = 0.01
+MAX_POSITION_SPREAD_RAD = 0.2
 NONZERO_POSITION_EPSILON_RAD = 1e-6
 
 
@@ -109,7 +110,13 @@ def validate_pose_samples(samples: list[tuple[float, ...]]) -> list[float]:
 
     for index in range(7):
         joint_values = [sample[index] for sample in values]
-        if max(joint_values) - min(joint_values) > MAX_POSITION_SPREAD_RAD:
+        spread = max(joint_values) - min(joint_values)
+        if (
+            spread > MAX_POSITION_SPREAD_RAD
+            and not math.isclose(
+                spread, MAX_POSITION_SPREAD_RAD, rel_tol=0.0, abs_tol=1e-9
+            )
+        ):
             raise ValueError("Arm is moving; hold the calibration pose still and retry")
 
     median_pose = [statistics.median(sample[index] for sample in values) for index in range(7)]
@@ -167,22 +174,11 @@ def replace_arm_positions_in_yaml(
     return "".join(rendered_lines)
 
 
-def save_zero_poses(
-    path: Path, arm_samples: dict[str, list[tuple[float, ...]]]
-) -> dict[str, dict[str, float]]:
-    """Atomically replace one or both arms after every requested side validates."""
-    if not arm_samples or any(side not in ARM_JOINT_KEYS for side in arm_samples):
-        raise ValueError("Unknown or missing arm side")
-
-    updated_poses = {}
-    for side, samples in arm_samples.items():
-        pose = validate_pose_samples(samples)
-        updated_poses[side] = dict(zip(ARM_JOINT_KEYS[side], pose, strict=True))
-
-    original = path.read_text()
+def render_joint_poses(original: str, poses: dict[str, list[float]]) -> str:
     config = yaml.safe_load(original)
     updated_text = original
-    for side, updated_pose in updated_poses.items():
+    for side, pose in poses.items():
+        updated_pose = dict(zip(ARM_JOINT_KEYS[side], pose, strict=True))
         arm_key = f"{side}_arm"
         joint_keys = ARM_JOINT_KEYS[side]
         if not isinstance(config, dict) or not isinstance(config.get(arm_key), dict):
@@ -192,22 +188,132 @@ def save_zero_poses(
         updated_text = replace_arm_positions_in_yaml(
             updated_text, arm_key, updated_pose
         )
+    return updated_text
 
-    backup = path.with_name(path.name + f".{time.time_ns()}.backup")
-    backup.write_text(original)
+
+def render_cartesian_poses(original: str, poses: dict[str, list[float]]) -> str:
+    """Use YAML scalar locations to preserve comments and untouched arm sections."""
+    if any(isinstance(event, yaml.AliasEvent) for event in yaml.parse(original)):
+        raise ValueError("Aliases are not supported in Cartesian zero configuration")
+    root = yaml.compose(original)
+    replacements = []
+
+    def child(node, key):
+        if not isinstance(node, yaml.MappingNode):
+            raise ValueError(f"Expected a YAML mapping containing {key}")
+        matches = [value for name, value in node.value if name.value == key]
+        if len(matches) != 1:
+            raise ValueError(f"Expected exactly one YAML key: {key}")
+        return matches[0]
+
+    for side, pose in poses.items():
+        if len(pose) != 6 or not all(math.isfinite(value) for value in pose):
+            raise ValueError("Expected six finite Cartesian pose values")
+        arm = child(root, f"{side}_arm")
+        for section, keys, values in (
+            ("position", ("x", "y", "z"), pose[:3]),
+            ("orientation", ("roll", "pitch", "yaw"), pose[3:]),
+        ):
+            mapping = child(arm, section)
+            for key, value in zip(keys, values, strict=True):
+                node = child(mapping, key)
+                if not isinstance(node, yaml.ScalarNode):
+                    raise ValueError(f"Expected a scalar for {side}.{section}.{key}")
+                replacements.append((node.start_mark.index, node.end_mark.index, f"{value:.10f}"))
+    for start, end, value in sorted(replacements, reverse=True):
+        original = original[:start] + value + original[end:]
+    parsed = yaml.safe_load(original)
+    for side, pose in poses.items():
+        arm = parsed[f"{side}_arm"]
+        actual = [arm["position"][key] for key in ("x", "y", "z")]
+        actual += [arm["orientation"][key] for key in ("roll", "pitch", "yaw")]
+        if any(abs(a - b) > 1e-9 for a, b in zip(actual, pose, strict=True)):
+            raise ValueError("Cartesian YAML did not preserve the requested pose")
+    return original
+
+
+def stage_text(path: Path, text: str) -> str:
     file_descriptor, temporary = tempfile.mkstemp(
         prefix=path.name + ".", dir=path.parent, text=True
     )
     try:
         with os.fdopen(file_descriptor, "w") as file:
-            file.write(updated_text)
+            file.write(text)
             file.flush()
             os.fsync(file.fileno())
-        os.replace(temporary, path)
+        os.chmod(temporary, path.stat().st_mode & 0o777)
+        return temporary
+    except BaseException:
+        os.unlink(temporary)
+        raise
+
+
+def write_configs(updates: dict[Path, str]) -> dict[Path, Path]:
+    """Stage all files first, back up, and roll back on a replacement failure."""
+    originals = {path: path.read_text() for path in updates}
+    staged = {}
+    rollback = {}
+    backups = {}
+    replaced = []
+    stamp = time.time_ns()
+    try:
+        for path, text in updates.items():
+            staged[path] = stage_text(path, text)
+            rollback[path] = stage_text(path, originals[path])
+        for path, original in originals.items():
+            backup = path.with_name(path.name + f".{stamp}.backup")
+            backup.write_text(original)
+            backups[path] = backup
+        try:
+            for path, temporary in staged.items():
+                os.replace(temporary, path)
+                replaced.append(path)
+        except OSError:
+            for path in reversed(replaced):
+                os.replace(rollback[path], path)
+            raise
     finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
-    return updated_poses
+        for temporary in (*staged.values(), *rollback.values()):
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+    return backups
+
+
+def save_calibration(
+    joint_path: Path,
+    desc_path: Path,
+    arm_samples: dict[str, list[tuple[float, ...]]],
+    target: str = "both",
+    kinematics=None,
+) -> tuple[dict[str, list[float]], dict[str, list[float]], dict[Path, Path]]:
+    if target not in ("joint", "cartesian", "both"):
+        raise ValueError("Unknown calibration target")
+    if not arm_samples or any(side not in ARM_JOINT_KEYS for side in arm_samples):
+        raise ValueError("Unknown or missing arm side")
+    poses = {side: validate_pose_samples(samples) for side, samples in arm_samples.items()}
+    joint_path, desc_path = joint_path.resolve(), desc_path.resolve()
+    if joint_path == desc_path:
+        raise ValueError("Joint and Cartesian configurations must be different files")
+    updates = {}
+    cartesian = {}
+    if target in ("joint", "both"):
+        updates[joint_path] = render_joint_poses(joint_path.read_text(), poses)
+    if target in ("cartesian", "both"):
+        if kinematics is None:
+            from arm_kinematics import ArmKinematics
+
+            kinematics = ArmKinematics()
+        cartesian = {side: kinematics.pose(side, pose) for side, pose in poses.items()}
+        updates[desc_path] = render_cartesian_poses(desc_path.read_text(), cartesian)
+    return poses, cartesian, write_configs(updates)
+
+
+def save_zero_poses(
+    path: Path, arm_samples: dict[str, list[tuple[float, ...]]]
+) -> dict[str, dict[str, float]]:
+    """Compatibility entry point for joint-only calibration."""
+    poses, _, _ = save_calibration(path, DEFAULT_DESC_CONFIG, arm_samples, target="joint")
+    return {side: dict(zip(ARM_JOINT_KEYS[side], pose, strict=True)) for side, pose in poses.items()}
 
 
 def save_zero_pose(
@@ -221,6 +327,9 @@ def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--side", required=True, choices=("left", "right", "both"))
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    parser.add_argument("--desc-config", type=Path, default=DEFAULT_DESC_CONFIG)
+    parser.add_argument("--target", choices=("joint", "cartesian", "both"), default="both",
+                        help="Save joint home, Cartesian teleoperation zero, or both (default)")
     parser.add_argument("--duration", type=float, default=1.0)
     parser.add_argument("--timeout", type=float, default=10.0)
     args = parser.parse_args()
@@ -236,6 +345,12 @@ def parse_arguments() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_arguments()
+
+    kinematics = None
+    if args.target in ("cartesian", "both"):
+        from arm_kinematics import ArmKinematics
+
+        kinematics = ArmKinematics()
 
     # Keep pure YAML validation importable by pytest without a ROS installation.
     import rclpy
@@ -268,19 +383,22 @@ def main() -> None:
         while rclpy.ok() and time.monotonic() < deadline:
             rclpy.spin_once(node, timeout_sec=0.05)
             if all(window.is_ready(args.duration) for window in windows.values()):
-                before_backups = set(args.config.parent.glob(args.config.name + ".*.backup"))
-                poses = save_zero_poses(
+                poses, cartesian, backups = save_calibration(
                     args.config,
+                    args.desc_config,
                     {side: window.samples for side, window in windows.items()},
+                    target=args.target,
+                    kinematics=kinematics,
                 )
-                created_backups = set(args.config.parent.glob(args.config.name + ".*.backup")) - before_backups
-                backup = next(iter(created_backups), None)
-                print("Saved source zero pose:")
+                print(f"Saved calibration target: {args.target}")
                 for side, pose in poses.items():
-                    print(f"{side} arm:")
-                    for key, value in pose.items():
+                    print(f"{side} arm captured joints:")
+                    for key, value in zip(ARM_JOINT_KEYS[side], pose, strict=True):
                         print(f"  {key}: {value:+.6f} rad")
-                print(f"Backup: {backup}" if backup else "Backup: created")
+                    if side in cartesian:
+                        print(f"  Cartesian [x, y, z, roll, pitch, yaw] (m, rad): {cartesian[side]}")
+                for path, backup in backups.items():
+                    print(f"Saved: {path}\nBackup: {backup}")
                 return
         raise RuntimeError("Timed out waiting for a complete, contiguous feedback window; config unchanged")
     finally:

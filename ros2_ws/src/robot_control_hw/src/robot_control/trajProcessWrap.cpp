@@ -179,12 +179,6 @@ void RobotCtlNode::xr_teleComu_init(){
         std::bind(&RobotCtlNode::endDescPub_callback, this, std::placeholders::_1)
     );
 
-    rArm_feedforward_sub = this->create_subscription<geometry_msgs::msg::Wrench>(
-        "/vr/right_arm_force_feedforward",
-        10,
-        std::bind(&RobotCtlNode::rArm_feedforward_callback, this, std::placeholders::_1)
-    );
-
     xrTeleComuCtl.init();
 }
 
@@ -240,19 +234,6 @@ void RobotCtlNode::endDescPub_callback(const ctl_msgs_hw::msg::EndDescPub::Share
         r_desc_ret[i] = msg->r_desc_pos_ret[i];
     }
     xrTeleComuCtl.update_desc_ret(l_desc_ret, r_desc_ret);
-}
-
-//右臂六维前馈力回调：接收 VR 发布的 /vr/right_arm_force_feedforward，
-//转存到遥操作控制类，随下一轮 trans_and_outp() 透传到中层节点。
-void RobotCtlNode::rArm_feedforward_callback(const geometry_msgs::msg::Wrench::SharedPtr msg){
-    std::vector<double> ff(6, 0.0);
-    ff[0] = msg->force.x;
-    ff[1] = msg->force.y;
-    ff[2] = msg->force.z;
-    ff[3] = msg->torque.x;
-    ff[4] = msg->torque.y;
-    ff[5] = msg->torque.z;
-    xrTeleComuCtl.r_arm_feedforward = ff;
 }
 
 //-----------------------------------------------------------

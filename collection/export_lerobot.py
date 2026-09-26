@@ -115,7 +115,7 @@ def export(root, output, repo_id, validate_only=False):
             "state_names": STATE_NAMES, "action_names": ACTION_NAMES,
             "schema_version": SCHEMA_VERSION,
             "gripper_encoding": "0=open, 1=closed; observed state vs commanded action",
-            "joint_action_source": "/dexbotCtl/ctl_data_pub (post-IK/admittance target)",
+            "joint_action_source": "/dexbotCtl/ctl_data_pub (post-IK position target)",
             "resampling": "previous sample hold on fixed FPS grid",
             "raw_episodes": [str(path.resolve()) for path in episodes],
             "source_calibration": reference[1],

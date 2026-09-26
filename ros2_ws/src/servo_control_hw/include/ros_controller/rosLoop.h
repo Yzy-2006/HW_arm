@@ -180,10 +180,15 @@ class ServoNode : public rclcpp::Node {
 
         // Arm zero calibration is an explicit, isolated mode.  It must never
         // fall through to the normal homing or upper-controller path.
+        bool arm_zero_calibration_ = false;
         bool left_arm_zero_calibration_ = false;
+        bool right_arm_zero_calibration_ = false;
         bool both_arm_zero_calibration_ = false;
+        bool can_channel_scan_ = false;
+        std::vector<double> left_arm_calibration_hold_positions_;
         std::vector<double> right_arm_calibration_hold_positions_;
-        void apply_left_arm_zero_calibration_commands(
+        void apply_arm_zero_calibration_commands(
+            const std::vector<double>& left_hold_positions,
             const std::vector<double>& right_hold_positions
         );
 

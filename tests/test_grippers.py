@@ -133,28 +133,3 @@ def test_vr_left_buttons_record_discard_and_squeezes_toggle_matching_grippers(mo
     buttons.left_squeeze_ctrl_state=True;buttons.right_bButton=True
     module.VRPoseIncrementPublisher.update_gripper(fake,data)
     assert list(states[-1].data)==[0,0,0,1]
-
-
-def test_vr_right_b_holds_right_arm_feedforward(monkeypatch):
-    import importlib.util
-    import types
-    pytest.importorskip('rclpy')
-    pytest.importorskip('ctl_msgs_hw.msg')
-    televuer=types.ModuleType('televuer');televuer.TeleVuerWrapper=object
-    monkeypatch.setitem(sys.modules,'televuer',televuer)
-    spec=importlib.util.spec_from_file_location('towel_vr_feedforward_test',ROOT/'teleop/VR_controller/vr_pose_increment_publisher.py')
-    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
-    published=[]
-    fake=types.SimpleNamespace(
-        right_arm_ff_pub=types.SimpleNamespace(publish=published.append),
-        right_arm_ff_force=[1., 2., 3., 4., 5., 6.],
-    )
-    buttons=types.SimpleNamespace(right_bButton=True, right_squeeze_ctrl_state=False)
-
-    module.VRPoseIncrementPublisher.publish_arm_feedforward(
-        fake, types.SimpleNamespace(tele_state=buttons)
-    )
-
-    msg=published[-1]
-    assert (msg.force.x, msg.force.y, msg.force.z)==(1., 2., 3.)
-    assert (msg.torque.x, msg.torque.y, msg.torque.z)==(4., 5., 6.)

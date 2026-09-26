@@ -20,7 +20,7 @@ vrTeleoperationLimit:
 
 #============================================
 # VR A 键关节空间回零参数
-# trajectory_time_sec 为从当前反馈关节角到 refTargetAngle.yaml 的运动时间。
+# trajectory_time_sec 为从当前反馈关节角到 zeropos.yaml 的运动时间。
 # acceleration_time_ratio 越接近 1，加减速段越长，回零越平缓（必须大于 1.05）。
 # stable_cycles 的控制周期为 0.02 s；分别为运动前、到达目标后的驻留周期。
 #============================================
@@ -182,7 +182,6 @@ TransLoopCtlInte:
     TempTime: 0.02
     lArm_DOF: 7
     rArm_DOF: 7
-    RefAngRecordRounds: 100   #运行多少轮后，将中层节点反馈的目标关节角度记录为参考目标关节角度
 
   #位置反馈值通用卡尔曼滤波参数
   posRetKalmanFilterInte:

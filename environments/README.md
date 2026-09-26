@@ -72,9 +72,9 @@ sudo 密码；成功时会打印 `getcap` 结果，其中应包含
 `cap_net_admin,cap_net_raw=ep`。
 
 必须从可交互输入 sudo 密码的本机终端运行 `make build`。若取消、输错密码或授权失败，
-`make build` 会返回失败；重新运行它完成授权后，才可直接以当前用户运行 `make servo`、
-`make teleop` 或 `make experiment VISUALIZE=true`，使所有 ROS 节点处于同一用户和 DDS
-通信域。
+`make build` 会返回失败；重新运行它完成授权后，才可直接以当前用户在独立终端依次运行
+`make servo`、`make arms`、`make robot`、`make record`、`make vr`，使所有 ROS 节点处于同一
+用户和 DDS 通信域。具体顺序、可选 RViz 和停止顺序见[真机数据采集流程](../docs/DATA_COLLECTION_WORKFLOW.md)。
 
 `sudo -E make servo` 仍可作为临时诊断命令：`sudo` 让伺服节点获得原始网卡权限，`-E`
 请求保留当前 ROS 域、虚拟环境和 OpenRobots 等环境变量。但 root 伺服与普通用户节点

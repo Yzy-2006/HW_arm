@@ -49,37 +49,9 @@ std::vector<double> rArm_joint_tor_grav;
 std::vector<double> rArm_joint_tor_interia;
 std::vector<double> rArm_joint_tor_feedforward;
 
-std::vector<double> lArm_torFeedForward_assist;
-std::vector<double> rArm_torFeedForward_assist;
-
 //控制状态向上位机反馈：
 std::vector<bool> lArm_ifReachEnd;
 std::vector<bool> rArm_ifReachEnd;
-
-//-----------------------------------------------------
-//独立下层节点消息获取 -- 传感器通讯节点
-
-//左右臂六维力矩传感器初始修正值
-std::vector<double> lArm_6DTorSensorCor;
-std::vector<double> rArm_6DTorSensorCor;
-
-//左右臂力矩传感器反馈值
-std::vector<double> lArm_6DTorSensorRet;
-std::vector<double> rArm_6DTorSensorRet;
-
-//左右臂是否处于接触状态（导纳接触门控状态位，带滞回；未接触时跟随遥操作，接触时施加恒力）
-bool lArm_forceContact = false;
-bool rArm_forceContact = false;
-
-//上一周期是否处于接触状态（用于检测“全未接触 -> 接触”边沿，触发导纳积分重置）
-bool anyContact_prev = false;
-
-//空中净力基线（基座系 6 维）：仅在未接触时以一阶低通跟踪净外力，
-//用于接触检测时扣除悬空伪力/重力残差（力传感器悬空读数并非全零）。
-std::vector<double> lArm_forceBaseline(6, 0.0);
-std::vector<double> rArm_forceBaseline(6, 0.0);
-bool lArm_baselineInit = false;
-bool rArm_baselineInit = false;
 
 //---------------中层节点与上位机通讯全局变量---------------
 
@@ -109,14 +81,10 @@ bool ifRedefineJntTrajStab_get;
 std::vector<double> lArm_desPos_descartes;
 std::vector<double> lArm_desPos_JntSpace;
 
-std::vector<double> lArm_desTor_descartes;
-std::vector<double> lArm_desTor_JntSpace;
 
 std::vector<double> rArm_desPos_descartes;
 std::vector<double> rArm_desPos_JntSpace;
 
-std::vector<double> rArm_desTor_descartes;
-std::vector<double> rArm_desTor_JntSpace;
 
 //适配MDP接口的速度传输变量
 std::vector<double> lArm_desVel_MDP_JntSpace;
@@ -220,8 +188,6 @@ ArmCtlNode::ArmCtlNode() : Node("dual_arm_control_node") ,
     yaml_path_initialPD = ament_index_cpp::get_package_share_directory("ctl_msgs_hw") + "/config/initialPD.yaml";
     yaml_path_jointLink = ament_index_cpp::get_package_share_directory("ctl_msgs_hw") + "/config/jointLink_config.yaml";
     yaml_path_robotStructConfig = ament_index_cpp::get_package_share_directory("ctl_msgs_hw") + "/config/robot_config.yaml";
-    yaml_path_impAdm = ament_index_cpp::get_package_share_directory("ctl_msgs_hw") + "/config/admittanceImpPara.yaml";
-
     std::cout << " ===== 初始化关节层零位配置 ===== " << std::endl;
     loadZeroPosFromYaml(yaml_path_zeroPos);
     std::cout << " ===== 初始化笛卡尔空间零位配置 ===== " << std::endl;
@@ -247,12 +213,6 @@ ArmCtlNode::ArmCtlNode() : Node("dual_arm_control_node") ,
     std::cout << " ===== 初始化机器人结构模型 ===== " << std::endl;
     if(!loadRobotConfigFromYaml(yaml_path_robotStructConfig, urdf_path)){
         std::cerr << "警告：robot_config.yaml 加载失败，机器人结构模型将为空" << std::endl;
-    }
-
-    // 初始化机器人阻抗参数
-    std::cout << " ===== 初始化机器人阻抗参数 ===== " << std::endl;
-    if(!loadImpAdmFromYaml(yaml_path_impAdm)){
-        std::cerr << "警告：阻抗参数加载失败，机器人阻抗参数为空" << std::endl;
     }
 
     //--------------------------------------------------------------------
@@ -348,18 +308,6 @@ ArmCtlNode::ArmCtlNode() : Node("dual_arm_control_node") ,
     mFkRetRes_pub = this->create_publisher<ctl_msgs_hw::msg::FkDataPub>(
         "/dexbotCtl/DescPub/Fk_ret_data_pub",
         10
-    );
-
-    //初始化力矩传感器接受消息类型
-    left_torsensor_6D = this->create_subscription<geometry_msgs::msg::WrenchStamped>(
-        "/force_sensor/right/wrench",
-        10,
-        std::bind(&ArmCtlNode::lArm_TorSensor_msg, this, std::placeholders::_1)
-    );
-    right_torsensor_6D = this->create_subscription<geometry_msgs::msg::WrenchStamped>(
-        "/force_sensor/left/wrench",
-        10,
-        std::bind(&ArmCtlNode::rArm_TorSensor_msg, this, std::placeholders::_1)
     );
 
     //初始化画图代码
@@ -744,6 +692,9 @@ void ArmCtlNode::controlCal(){
     KDL::JntArray lArm_desPos_Jnt, rArm_desPos_Jnt;
     KDL::JntArray lArm_posRet_Jnt, rArm_posRet_Jnt;
     KDL::JntArray lArm_velRet_Jnt, rArm_velRet_Jnt;
+    const std::vector<double> zero_cartesian_force(6, 0.0);
+    const std::vector<double> zero_left_joint_force(LARMDOF, 0.0);
+    const std::vector<double> zero_right_joint_force(RARMDOF, 0.0);
 
     lArm_desPos_Frame = vec_to_Frame(lArm_desPos_descartes);
     rArm_desPos_Frame = vec_to_Frame(rArm_desPos_descartes);
@@ -762,10 +713,10 @@ void ArmCtlNode::controlCal(){
         allArm_LimMsg_get,
 
         lArm_desPos_Frame, rArm_desPos_Frame,
-        lArm_desTor_descartes, rArm_desTor_descartes,
+        zero_cartesian_force, zero_cartesian_force,
 
         lArm_desPos_Jnt, rArm_desPos_Jnt,
-        lArm_desTor_JntSpace, rArm_desTor_JntSpace,
+        zero_left_joint_force, zero_right_joint_force,
 
         lArm_posRet_Jnt, rArm_posRet_Jnt,
         lArm_velRet_Jnt, rArm_velRet_Jnt,
@@ -825,6 +776,9 @@ void ArmCtlNode::retZeroControlInit(){
     KDL::JntArray lArm_desPos_Jnt, rArm_desPos_Jnt;
     KDL::JntArray lArm_posRet_Jnt, rArm_posRet_Jnt;
     KDL::JntArray lArm_velRet_Jnt, rArm_velRet_Jnt;
+    const std::vector<double> zero_cartesian_force(6, 0.0);
+    const std::vector<double> zero_left_joint_force(LARMDOF, 0.0);
+    const std::vector<double> zero_right_joint_force(RARMDOF, 0.0);
 
     lArm_desPos_Frame = vec_to_Frame(l_descZeroPos);
     rArm_desPos_Frame = vec_to_Frame(r_descZeroPos);
@@ -843,10 +797,10 @@ void ArmCtlNode::retZeroControlInit(){
         allArm_LimMsg_get,
 
         lArm_desPos_Frame, rArm_desPos_Frame,
-        lArm_desTor_descartes, rArm_desTor_descartes,
+        zero_cartesian_force, zero_cartesian_force,
 
         lArm_desPos_Jnt, rArm_desPos_Jnt,
-        lArm_desTor_JntSpace, rArm_desTor_JntSpace,
+        zero_left_joint_force, zero_right_joint_force,
 
         lArm_posRet_Jnt, rArm_posRet_Jnt,
         lArm_velRet_Jnt, rArm_velRet_Jnt,
@@ -901,250 +855,12 @@ void ArmCtlNode::control_seal(){
         // 造成明显滞后以及改变方向时的过冲。每周期用反馈位置重规划，
         // IK 仍以当前关节角为种子，保持解的连续性。
         if(ifFirstTemp || ifAllEnd || modCtlMsg_get.runinMod == 1){
-            //进行阻抗-导纳控制，仅当机器人处于笛卡尔空间轨迹模式下会开启阻抗-导纳控制模式
-            if(modCtlMsg_get.transMod == 4){
-
-                //若采用导纳控制，需要依据反馈空间六维力去修正目标位置，目标位置修正需要在计算之前进行
-                if(AdmImpSwitch == 2){
-                    //依据反馈关节力矩映射得到末端外部六维力（反馈空间六维力），再用其驱动导纳控制器修正目标位置
-                    RobotFrameTor extWrench;
-                    extWrench.lArm_EndTor.assign(6, 0.0);
-                    extWrench.rArm_EndTor.assign(6, 0.0);
-                    // 传感器系净外力 = 原始读数 - 初始偏置（含工具自重/零漂）
-                    for(int i = 0; i < 6; i++){
-                        extWrench.lArm_EndTor[i] = lArm_6DTorSensorRet[i] - lArm_6DTorSensorCor[i];
-                        extWrench.rArm_EndTor[i] = rArm_6DTorSensorRet[i] - rArm_6DTorSensorCor[i];
-                    }
-
-                    // 六维力传感器安装在末端随末端一起转动，其测得的外力/力矩在传感器坐标系下；
-                    // 而导纳控制在基座（末端位姿 [x,y,z,rpy] 所表达的固定坐标系）下解算。
-                    // 因此先把净外力旋转到基座系，再在基座系减去期望接触力（恒力目标），
-                    // 否则末端姿态一旦偏离零位，力方向就会“串”。
-                    // 旋转链：传感器系 --(安装角 R_mount)--> 工具系 --(末端姿态 R_tool2base)--> 基座系
-                    const KDL::Rotation lR_mount = KDL::Rotation::RPY(
-                        imp_adm_ParaPak.lArm_sensorMountRPY[0],
-                        imp_adm_ParaPak.lArm_sensorMountRPY[1],
-                        imp_adm_ParaPak.lArm_sensorMountRPY[2]);
-                    const KDL::Rotation rR_mount = KDL::Rotation::RPY(
-                        imp_adm_ParaPak.rArm_sensorMountRPY[0],
-                        imp_adm_ParaPak.rArm_sensorMountRPY[1],
-                        imp_adm_ParaPak.rArm_sensorMountRPY[2]);
-                    const KDL::Rotation lR_tool2base = KDL::Rotation::RPY(
-                        nominal_l_pose[3], nominal_l_pose[4], nominal_l_pose[5]);
-                    const KDL::Rotation rR_tool2base = KDL::Rotation::RPY(
-                        nominal_r_pose[3], nominal_r_pose[4], nominal_r_pose[5]);
-                    const KDL::Rotation lR_sensor2base = lR_tool2base * lR_mount;
-                    const KDL::Rotation rR_sensor2base = rR_tool2base * rR_mount;
-                    // 1) 净外力：传感器系 -> 基座系
-                    extWrench.lArm_EndTor = vec6ToStdVec(
-                        rotateWrench(stdVecToVec6(extWrench.lArm_EndTor), lR_sensor2base));
-                    extWrench.rArm_EndTor = vec6ToStdVec(
-                        rotateWrench(stdVecToVec6(extWrench.rArm_EndTor), rR_sensor2base));
-                    // 2) 接触检测门控：力传感器悬空读数并非全零（工具重力随姿态变化、零漂），
-                    //    故以“净外力相对空中基线的增量”合力幅值判定，而不是绝对幅值。
-                    //    基线仅在未接触时以一阶低通跟踪，贴板期间冻结，从而可靠区分悬空/贴板。
-                    if(!lArm_baselineInit){
-                        lArm_forceBaseline = extWrench.lArm_EndTor;
-                        lArm_baselineInit = true;
-                    }
-                    if(!rArm_baselineInit){
-                        rArm_forceBaseline = extWrench.rArm_EndTor;
-                        rArm_baselineInit = true;
-                    }
-                    const double lDx = extWrench.lArm_EndTor[0] - lArm_forceBaseline[0];
-                    const double lDy = extWrench.lArm_EndTor[1] - lArm_forceBaseline[1];
-                    const double lDz = extWrench.lArm_EndTor[2] - lArm_forceBaseline[2];
-                    const double rDx = extWrench.rArm_EndTor[0] - rArm_forceBaseline[0];
-                    const double rDy = extWrench.rArm_EndTor[1] - rArm_forceBaseline[1];
-                    const double rDz = extWrench.rArm_EndTor[2] - rArm_forceBaseline[2];
-                    const double lFmag = std::sqrt(lDx*lDx + lDy*lDy + lDz*lDz);
-                    const double rFmag = std::sqrt(rDx*rDx + rDy*rDy + rDz*rDz);
-                    const double lEnter = imp_adm_ParaPak.lArm_contactGateThresh[0];
-                    const double lExit  = imp_adm_ParaPak.lArm_contactGateThresh[1];
-                    const double rEnter = imp_adm_ParaPak.rArm_contactGateThresh[0];
-                    const double rExit  = imp_adm_ParaPak.rArm_contactGateThresh[1];
-                    // 阈值滞回之外再做连续采样确认，过滤力传感器单帧噪声。
-                    // 控制周期通常为 20 ms，因此进入约 60 ms、退出约 100 ms。
-                    constexpr int kContactEnterSamples = 3;
-                    constexpr int kContactExitSamples = 5;
-                    static int lEnterSamples = 0;
-                    static int lExitSamples = 0;
-                    static int rEnterSamples = 0;
-                    static int rExitSamples = 0;
-                    if(!lArm_forceContact){
-                        lExitSamples = 0;
-                        lEnterSamples = (lFmag > lEnter) ? lEnterSamples + 1 : 0;
-                        if(lEnterSamples >= kContactEnterSamples){
-                            lArm_forceContact = true;
-                            lEnterSamples = 0;
-                        }
-                    }else{
-                        lEnterSamples = 0;
-                        lExitSamples = (lFmag < lExit) ? lExitSamples + 1 : 0;
-                        if(lExitSamples >= kContactExitSamples){
-                            lArm_forceContact = false;
-                            lExitSamples = 0;
-                        }
-                    }
-                    if(!rArm_forceContact){
-                        rExitSamples = 0;
-                        rEnterSamples = (rFmag > rEnter) ? rEnterSamples + 1 : 0;
-                        if(rEnterSamples >= kContactEnterSamples){
-                            rArm_forceContact = true;
-                            rEnterSamples = 0;
-                        }
-                    }else{
-                        rEnterSamples = 0;
-                        rExitSamples = (rFmag < rExit) ? rExitSamples + 1 : 0;
-                        if(rExitSamples >= kContactExitSamples){
-                            rArm_forceContact = false;
-                            rExitSamples = 0;
-                        }
-                    }
-
-                    // 仅在未接触时更新空中基线（低通），贴板期间基线冻结，避免把接触力吸收进基线
-                    const double alpha = imp_adm_ParaPak.contactBaselineAlpha;
-                    if(!lArm_forceContact){
-                        for(int i = 0; i < 6; i++){
-                            lArm_forceBaseline[i] += alpha * (extWrench.lArm_EndTor[i] - lArm_forceBaseline[i]);
-                        }
-                    }
-                    if(!rArm_forceContact){
-                        for(int i = 0; i < 6; i++){
-                            rArm_forceBaseline[i] += alpha * (extWrench.rArm_EndTor[i] - rArm_forceBaseline[i]);
-                        }
-                    }
-
-                    // 调试输出：打印接触门控状态与增量幅值（节流约每秒一次），便于上机观察门控触发情况
-                    {
-                        static int contactDbgCnt = 0;
-                        if(imp_adm_ParaPak.ifDebugContact && (++contactDbgCnt % 50 == 0)){
-                            std::cout << "[导纳门控] L贴板=" << (lArm_forceContact ? 1 : 0)
-                                      << " L增量=" << lFmag
-                                      << " | R贴板=" << (rArm_forceContact ? 1 : 0)
-                                      << " R增量=" << rFmag << std::endl;
-                        }
-                    }
-
-                    // 3) 构造驱动导纳的净外力 F_ext：
-                    //    接触臂   F_ext = (F_meas - 空中基线) - F_des，用“相对基线的真实接触力”做恒力跟踪，
-                    //            扣除悬空伪力/重力残差，保证恒力目标就是真实接触力（如 5N）；
-                    //    未接触臂 F_ext = 0（隔离悬空伪力，导纳不再产生偏移，末端精确跟随遥操作）。
-                    for(int i = 0; i < 6; i++){
-                        if(lArm_forceContact){
-                            extWrench.lArm_EndTor[i] =
-                                (extWrench.lArm_EndTor[i] - lArm_forceBaseline[i])
-                                - imp_adm_ParaPak.lArm_desForce_base[i];
-                        }else{
-                            extWrench.lArm_EndTor[i] = 0.0;
-                        }
-                        if(rArm_forceContact){
-                            extWrench.rArm_EndTor[i] =
-                                (extWrench.rArm_EndTor[i] - rArm_forceBaseline[i])
-                                - imp_adm_ParaPak.rArm_desForce_base[i];
-                        }else{
-                            extWrench.rArm_EndTor[i] = 0.0;
-                        }
-                    }
-
-                    const bool anyContact = lArm_forceContact || rArm_forceContact;
-
-                    // 只有贴住时才启用导纳修正；悬空时完全跳过，末端精确跟随遥操作目标。
-                    if(anyContact){
-                        std::vector<double> l_desVel, r_desVel;
-                        l_desVel.assign(6, 0.0);
-                        r_desVel.assign(6, 0.0);
-                        for(int i = 0; i < 6; i++){
-                            l_desVel[i] = (nominal_l_pose[i] - l_desPos_last[i]) / TEMPTIME;
-                            r_desVel[i] = (nominal_r_pose[i] - r_desPos_last[i]) / TEMPTIME;
-                        }
-
-                        // 从“全未接触”进入接触的瞬间，重置导纳积分到当前遥操作参考，
-                        // 避免导纳沿悬空期间冻结的旧积分状态继续导致输出突变。
-                        if(!anyContact_prev){
-                            AdmImpCtlCore.reset_admittance(
-                                nominal_l_pose, nominal_r_pose,
-                                l_desVel, r_desVel
-                            );
-                        }
-
-                        std::vector<CartMotionState> admRes = AdmImpCtlCore.admittance_outp(
-                            extWrench,
-                            nominal_l_pose, nominal_r_pose,
-                            l_desVel, r_desVel
-                        );
-
-                        //用导纳修正后的位姿覆盖目标位姿，送入后续逆解
-                        lArm_desPos_descartes = vec6ToStdVec(admRes[0].pos);
-                        rArm_desPos_descartes = vec6ToStdVec(admRes[1].pos);
-                    }
-
-                    anyContact_prev = anyContact;
-                }
-            }
             controlCal();
         }
 
         //进行输出
         controlOutp();
 
-        //若采用阻抗控制，需要依据本论目标位置及反馈位置计算笛卡尔空间力前馈，并映射到关节空间
-        if(modCtlMsg_get.transMod == 4){
-            if(AdmImpSwitch == 1){
-                //反馈末端位姿由关节反馈正解得到
-                std::vector<KDL::Frame> Arm_actPose = solverInterface.FKsolver(
-                    vec_to_JntArray(lArm_pos_fdback), vec_to_JntArray(rArm_pos_fdback)
-                );
-                std::vector<double> lArm_posRet = Frame_to_vec(Arm_actPose[0]);
-                std::vector<double> rArm_posRet = Frame_to_vec(Arm_actPose[1]);
-
-                //目标速度由目标位置差分得到
-                std::vector<double> l_desVel, r_desVel;
-                l_desVel.assign(6, 0.0);
-                r_desVel.assign(6, 0.0);
-                for(int i = 0; i < 6; i++){
-                    l_desVel[i] = (nominal_l_pose[i] - l_desPos_last[i]) / TEMPTIME;
-                    r_desVel[i] = (nominal_r_pose[i] - r_desPos_last[i]) / TEMPTIME;
-                }
-
-                //反馈速度由逆解得到
-                std::vector<KDL::Frame> Arm_actVel = solverInterface.FKsolver(
-                    vec_to_JntArray(lArm_spd_fdback), vec_to_JntArray(rArm_spd_fdback)
-                );
-                std::vector<double> lArm_descSpdFdback = Frame_to_vec(Arm_actVel[0]);
-                std::vector<double> rArm_descSpdFdback = Frame_to_vec(Arm_actVel[1]);
-
-                //依据本轮目标位姿及反馈位姿计算末端笛卡尔空间阻抗力前馈
-                ImpTorFeedForward = AdmImpCtlCore.impendance_outp(
-                    lArm_desPos_descartes, rArm_desPos_descartes,
-                    l_desVel, r_desVel,
-                    lArm_posRet, rArm_posRet,
-                    lArm_descSpdFdback, rArm_descSpdFdback
-                );
-
-                //映射到关节空间
-                RobotJntTor ImpTor_Jnt = EndTor_To_Jnt(
-                    ImpTorFeedForward.lArm_EndTor, ImpTorFeedForward.rArm_EndTor,
-                    vec_to_JntArray(lArm_posFdback_Ftred), vec_to_JntArray(rArm_posFdback_Ftred)
-                );
-
-                //叠加到关节前馈力矩，并记录到辅助前馈力矩供位置保持模式使用
-                for(int i = 0; i < LARMDOF; i++){
-                    lArm_joint_tor_feedforward[i] += ImpTor_Jnt.lArm_JntTor[i];
-                }
-                for(int i = 0; i < RARMDOF; i++){
-                    rArm_joint_tor_feedforward[i] += ImpTor_Jnt.rArm_JntTor[i];
-                }
-
-                lArm_torFeedForward_assist = ImpTor_Jnt.lArm_JntTor;
-                rArm_torFeedForward_assist = ImpTor_Jnt.rArm_JntTor;
-            }
-        }
-
-        //更新上一轮目标位置参量
-        // 只记录上层名义目标，不能记录导纳修正后的输出目标。
-        l_desPos_last = nominal_l_pose;
-        r_desPos_last = nominal_r_pose;
 
         //向着上位机输出反馈值
         midMonitor_msg_publish();
@@ -1193,20 +909,9 @@ void ArmCtlNode::control_seal(){
         has_received_upperMonitor_command_ = false;
     }
 
-    //力矩前馈量计算
-    RobotJntTor CtlJntTorDes = TorDes_outp();
-    if(modCtlMsg_get.transMod == 0 || modCtlMsg_get.transMod == 5){
-        //力前馈通路不叠加目标力矩
-
-    }else{
-        //针对其他控制模式，需要叠加目标力矩
-        for(int i = 0; i < LARMDOF; i++){
-            lArm_joint_tor_feedforward[i] += CtlJntTorDes.lArm_JntTor[i];
-        }
-        for(int i = 0; i < RARMDOF; i++){
-            rArm_joint_tor_feedforward[i] += CtlJntTorDes.rArm_JntTor[i];
-        }
-    }
+    // Position-only teleoperation does not accept external torque feedforward.
+    lArm_joint_tor_feedforward.assign(LARMDOF, 0.0);
+    rArm_joint_tor_feedforward.assign(RARMDOF, 0.0);
 
     ifFirstTemp = false;
 }
@@ -1313,15 +1018,6 @@ void ArmCtlNode::rosloop_var_init(){
     rArm_joint_tor_interia.assign(RARMDOF, 0.0);
     rArm_joint_tor_feedforward.assign(RARMDOF, 0.0);
 
-    lArm_torFeedForward_assist.assign(LARMDOF, 0.0);
-    rArm_torFeedForward_assist.assign(RARMDOF, 0.0);
-    
-    lArm_6DTorSensorCor.assign(6, 0.0);
-    rArm_6DTorSensorCor.assign(6, 0.0);
-
-    lArm_6DTorSensorRet.assign(6, 0.0);
-    rArm_6DTorSensorRet.assign(6, 0.0);
-
     //反馈接收：
     lArm_pos_fdback = lArm_zeroPos;
     lArm_spd_fdback.assign(LARMDOF, 0.0);
@@ -1351,13 +1047,9 @@ void ArmCtlNode::rosloop_var_init(){
     //目标位置等信息
     lArm_desPos_descartes = l_descZeroPos;
     lArm_desPos_JntSpace = lArm_zeroPos;
-    lArm_desTor_descartes.assign(6, 0.0);
-    lArm_desTor_JntSpace.assign(LARMDOF, 0.0);
 
     rArm_desPos_descartes = r_descZeroPos;
     rArm_desPos_JntSpace = rArm_zeroPos;
-    rArm_desTor_descartes.assign(6, 0.0);
-    rArm_desTor_JntSpace.assign(RARMDOF, 0.0);
 
     lArm_desVel_MDP_JntSpace.assign(LARMDOF, 0.0);
     rArm_desVel_MDP_JntSpace.assign(RARMDOF, 0.0);
@@ -1459,29 +1151,6 @@ void ArmCtlNode::rosloop_var_init(){
     MDP_trajLen = 1;
     MDP_tempTimes = 0;
 
-    TorOutp_lArm.resize(1);
-    TorOutp_lArm[0].assign(LARMDOF, 0.0);
-    TorOutp_rArm.resize(1);
-    TorOutp_rArm[0].assign(RARMDOF, 0.0);
-
-    TorTrajLen = 1;
-    TorTrajTempTime = 0;
-
-    //-----------------------------------
-    //阻抗控制参量初始化
-    AdmImpSwitch = imp_adm_ParaPak.imp_adm_switch;
-
-    TorSensor_InitTrajLen = 1;
-    l_6DTorSensorInitTraj.resize(6);
-    r_6DTorSensorInitTraj.resize(6);
-    for(int i = 0; i < 6; i++){
-        l_6DTorSensorInitTraj[i].assign(1, 0.0);
-        r_6DTorSensorInitTraj[i].assign(1, 0.0);
-    }
-
-    l_desPos_last = l_descZeroPos;
-    r_desPos_last = r_descZeroPos;
-
     lArmLastPos = lArm_zeroPos;
     rArmLastPos = rArm_zeroPos;
 
@@ -1491,8 +1160,6 @@ void ArmCtlNode::rosloop_var_init(){
     ifTrigger = false;
     ifInitTrigger = true;
 
-    //初始化阻抗-导纳核心类（读取 imp_adm_ParaPak 中的 K/B/M 参数，并初始化导纳积分状态）
-    AdmImpCtlCore.init();
     std::cout << "全局变量初始化完毕 (rosloop_var_init)" << std::endl;
 }
 
@@ -1545,15 +1212,6 @@ void ArmCtlNode::run(){
             if(ifUse_gravComp == 1){
                 gravCompInit(); }
 
-            //力矩传感器反馈值轨迹初始化
-            l_6DTorSensorInitTraj.clear();
-            r_6DTorSensorInitTraj.clear();
-            l_6DTorSensorInitTraj.resize(6);
-            r_6DTorSensorInitTraj.resize(6);
-            for(int i = 0; i < 6; i++){
-                l_6DTorSensorInitTraj[i].push_back(lArm_6DTorSensorRet[i]);
-                r_6DTorSensorInitTraj[i].push_back(rArm_6DTorSensorRet[i]);
-            }
         }
 
         //更新时间戳
@@ -1562,12 +1220,6 @@ void ArmCtlNode::run(){
         fdback_get();
         //进行一次反馈值全局滤波
         GlobalFilterCal();
-
-        //储存力矩传感器反馈值
-        for(int i = 0; i < 6; i++){
-            l_6DTorSensorInitTraj[i].push_back(lArm_6DTorSensorRet[i]);
-            r_6DTorSensorInitTraj[i].push_back(rArm_6DTorSensorRet[i]);
-        }
 
         //控制参量赋值
         lArm_joint_pos = lArm_zeroPos;
@@ -1618,18 +1270,6 @@ void ArmCtlNode::run(){
     //重置底层循环指令
     loop_rate.reset();
 
-    lArm_6DTorSensorCor.clear();
-    rArm_6DTorSensorCor.clear();
-    lArm_6DTorSensorCor.assign(6, 0.0);
-    rArm_6DTorSensorCor.assign(6, 0.0);
-    //计算力矩传感器自适应偏置量
-    for(int i = 0; i < 6; i++){
-        int TorInitTrajLen = l_6DTorSensorInitTraj[i].size();
-        
-        lArm_6DTorSensorCor[i] = (std::accumulate(l_6DTorSensorInitTraj[i].begin(), l_6DTorSensorInitTraj[i].end(), 0.0)) / static_cast<double>(TorInitTrajLen);
-        rArm_6DTorSensorCor[i] = (std::accumulate(r_6DTorSensorInitTraj[i].begin(), r_6DTorSensorInitTraj[i].end(), 0.0)) / static_cast<double>(TorInitTrajLen);
-    }
-
     //开始ros2循环
     while(rclcpp::ok()){
         //更新时间戳
@@ -1644,7 +1284,6 @@ void ArmCtlNode::run(){
         //若能接受到上位机的反馈值时，开始计算
         if(has_received_upperMonitor_command_){
             control_seal();  
-            TorDes_runin();    
         }else{
             /*
             此时应当进入位置保持模式，因此位置、Kp、Kd、重力补偿不刷新，
@@ -1663,8 +1302,8 @@ void ArmCtlNode::run(){
             //rArm_joint_spd.assign(RARMDOF, 0.0);0
             //rArm_joint_tor_interia.assign(RARMDOF, .0);
 
-            lArm_joint_tor_feedforward = lArm_torFeedForward_assist;
-            rArm_joint_tor_feedforward = rArm_torFeedForward_assist;
+            lArm_joint_tor_feedforward.assign(LARMDOF, 0.0);
+            rArm_joint_tor_feedforward.assign(RARMDOF, 0.0);
 
             //向着上位机输出反馈值
             midMonitor_msg_publish();
@@ -1736,36 +1375,6 @@ void ArmCtlNode::run(){
     PyGILState_Release(gstate);
     RCLCPP_INFO(this->get_logger(), "程序已安全退出");
 }
-
-//------------------------------
-//六维力矩传感器通讯函数
-
-void ArmCtlNode::lArm_TorSensor_msg(const geometry_msgs::msg::WrenchStamped::SharedPtr msg){
-    lArm_6DTorSensorRet.clear();
-    lArm_6DTorSensorRet.assign(6, 0.0);
-
-    lArm_6DTorSensorRet[0] = msg->wrench.force.x;
-    lArm_6DTorSensorRet[1] = msg->wrench.force.y;
-    lArm_6DTorSensorRet[2] = msg->wrench.force.z;
-
-    lArm_6DTorSensorRet[3] = msg->wrench.torque.x;
-    lArm_6DTorSensorRet[4] = msg->wrench.torque.y;
-    lArm_6DTorSensorRet[5] = msg->wrench.torque.z;
-}
-
-void ArmCtlNode::rArm_TorSensor_msg(const geometry_msgs::msg::WrenchStamped::SharedPtr msg){
-    rArm_6DTorSensorRet.clear();
-    rArm_6DTorSensorRet.assign(6, 0.0);
-
-    rArm_6DTorSensorRet[0] = msg->wrench.force.x;
-    rArm_6DTorSensorRet[1] = msg->wrench.force.y;
-    rArm_6DTorSensorRet[2] = msg->wrench.force.z;
-
-    rArm_6DTorSensorRet[3] = msg->wrench.torque.x;
-    rArm_6DTorSensorRet[4] = msg->wrench.torque.y;
-    rArm_6DTorSensorRet[5] = msg->wrench.torque.z;
-}
-
 
 //------------------------------
 //全局通用滤波器成员函数
@@ -2051,115 +1660,6 @@ MDP_trans ArmCtlNode::MDP_outp(){
     return mRes;
 }
 
-//------------------------------
-
-//力前馈映射
-RobotJntTor ArmCtlNode::TorFeedforward_DescToJntspace(std::vector<double> lArm_endTorFdForward, std::vector<double> rArm_endTorFdForward){
-    
-    KDL::JntArray lArmJntAng, rArmJntAng;
-    //获取关节角度 -- 依据是否使用反馈值，决定角度来源，另外若使用
-    if(modCtlMsg_get.ifUseRet){
-        //采用反馈值作为输入
-        lArmJntAng = vec_to_JntArray(lArm_posFdback_Ftred);
-        rArmJntAng = vec_to_JntArray(rArm_posFdback_Ftred);
-    }else{
-        lArmJntAng = vec_to_JntArray(lArm_joint_pos);
-        rArmJntAng = vec_to_JntArray(rArm_joint_pos);
-    }
-    
-    //计算关节力矩映射
-    RobotJntTor DescFdForwardTor_inJntSpace;
-    DescFdForwardTor_inJntSpace = solverInterface.EndTor_To_Jnt(lArm_endTorFdForward, rArm_endTorFdForward, lArmJntAng, rArmJntAng);
-
-    return DescFdForwardTor_inJntSpace;
-}
-
-//力前馈插补函数
-void ArmCtlNode::TorDes_runin(){
-
-    std::vector<double> TorOutp_last_l, TorOutp_last_r;
-    TorOutp_last_l = TorOutp_lArm.back();
-    TorOutp_last_r = TorOutp_rArm.back();
-
-    TorTrajLen = std::round(modCtlMsg_get.upperMonitor_time / TEMPTIME);
-    TorTrajTempTime = 0;
-
-    TorOutp_lArm.clear();
-    TorOutp_lArm.resize(TorTrajLen);
-    TorOutp_rArm.clear();
-    TorOutp_rArm.resize(TorTrajLen);
-
-    std::vector<double> desJntTor_l, desJntTor_r;       //目标关节力矩
-    std::vector<double> derTor_l, derTor_r;             //关节力矩轨迹增量
-
-    //依据力前馈模式处理目标关节力矩
-    if(modCtlMsg_get.transMod == 0 || modCtlMsg_get.transMod == 5){
-        //归零模式或者零力拖动模式 -- 不能有前馈力
-        desJntTor_l.assign(LARMDOF, 0.0);
-        desJntTor_r.assign(RARMDOF, 0.0);
-    }else if(modCtlMsg_get.transMod == 6){
-        //只能用关节空间前馈力
-        desJntTor_l = lArm_desTor_JntSpace;
-        desJntTor_r = rArm_desTor_JntSpace;
-    }else{
-        //依据力前馈模式选择前馈力计算方法
-        if(modCtlMsg_get.TorFeedforwardCtl == 1){
-            //笛卡尔空间轨迹控制
-            RobotJntTor TorComp_JntSpace;
-            TorComp_JntSpace = TorFeedforward_DescToJntspace(lArm_desTor_descartes, rArm_desTor_descartes);
-            desJntTor_l = TorComp_JntSpace.lArm_JntTor;
-            desJntTor_r = TorComp_JntSpace.rArm_JntTor;
-        }else if(modCtlMsg_get.TorFeedforwardCtl == 2){
-            //关节空间轨迹规划
-            desJntTor_l = lArm_desTor_JntSpace;
-            desJntTor_r = rArm_desTor_JntSpace;
-        }else{
-            //不做处理
-            desJntTor_l.assign(LARMDOF, 0.0);
-            desJntTor_r.assign(RARMDOF, 0.0);
-        }
-    }
-
-    //-------------------------
-    //计算力矩轨迹
-    for(int i = 0; i < LARMDOF; i++){
-        derTor_l.push_back((desJntTor_l[i] - TorOutp_last_l[i]) / static_cast<double>(TorTrajLen));
-    }
-    for(int i = 0; i < RARMDOF; i++){
-        derTor_r.push_back((desJntTor_r[i] - TorOutp_last_r[i]) / static_cast<double>(TorTrajLen));
-    }
-
-    for(int i = 0; i < TorTrajLen; i++){
-        TorOutp_lArm[i].assign(LARMDOF, 0.0);
-        TorOutp_rArm[i].assign(RARMDOF, 0.0);
-        for(int j = 0; j < LARMDOF; j++){
-            TorOutp_lArm[i][j] = TorOutp_last_l[j] + (i+1)*derTor_l[j];
-        }
-        for(int j = 0; j < RARMDOF; j++){
-            TorOutp_rArm[i][j] = TorOutp_last_r[j] + (i+1)*derTor_r[j];
-        }
-    }
-    //-------------------------
-}
-
-//力前馈输出函数
-RobotJntTor ArmCtlNode::TorDes_outp(){
-    RobotJntTor mRes;
-
-    if(TorTrajTempTime < TorTrajLen){
-        mRes.lArm_JntTor = TorOutp_lArm[TorTrajTempTime];
-        mRes.rArm_JntTor = TorOutp_rArm[TorTrajTempTime];
-
-        TorTrajTempTime += 1;
-    }else{
-        mRes.lArm_JntTor = TorOutp_lArm.back();
-        mRes.rArm_JntTor = TorOutp_rArm.back();
-    }
-
-    return mRes;
-}
-
-//------------------------------
 //回调函数
 void ArmCtlNode::set_joint_angles(const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
                         std::shared_ptr<std_srvs::srv::SetBool::Response> response) {
@@ -2213,9 +1713,6 @@ void ArmCtlNode::upperMonitor_msg_callback(const ctl_msgs_hw::msg::MidNodeCtlMsg
     //数据传输模式
     modCtlMsg_get.transMod = msg->ctl_trans_mod;
     modCtlMsg_get.runinMod = msg->runin_mod;
-
-    //力前馈模式（0--不使用；1--笛卡尔空间力前馈；2--关节空间力前馈）
-    modCtlMsg_get.TorFeedforwardCtl = msg->tor_feedforward_ctl;
 
     //求解模式
     modCtlMsg_get.ifUseRet = msg->if_use_ret;
@@ -2321,23 +1818,18 @@ void ArmCtlNode::upperMonitor_msg_callback(const ctl_msgs_hw::msg::MidNodeCtlMsg
         }
     }
 
-    //----------关节目标位置、目标力矩等目标量信息----------
+    //----------关节目标位置等目标量信息----------
     
     for(int i = 0; i < 6; i++){
         lArm_desPos_descartes[i] = msg->l_arm_des_pos_descartes[i];
-        lArm_desTor_descartes[i] = msg->l_arm_des_tor_descartes[i];
-        
         rArm_desPos_descartes[i] = msg->r_arm_des_pos_descartes[i];
-        rArm_desTor_descartes[i] = msg->r_arm_des_tor_descartes[i];
     }
 
     for(int i = 0; i < LARMDOF; i++){
         lArm_desPos_JntSpace[i] = msg->l_arm_des_pos_jntspace[i];
-        lArm_desTor_JntSpace[i] = msg->l_arm_des_tor_jntspace[i];
     }
     for(int i = 0; i < RARMDOF; i++){
         rArm_desPos_JntSpace[i] = msg->r_arm_des_pos_jntspace[i];
-        rArm_desTor_JntSpace[i] = msg->r_arm_des_tor_jntspace[i];
     }
 
     for(int i = 0; i < LARMDOF; i++){

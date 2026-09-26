@@ -77,6 +77,12 @@ class TeleVuer:
             self.right_squeeze_state_shared = Value('b', False, lock=True)
             self.right_squeeze_value_shared = Value('d', 0.0, lock=True)
         else:
+            # Input diagnostics are shared because Vuer dispatches controller
+            # events from its server process while ROS reads the snapshot.
+            self.controller_event_count_shared = Value('L', 0, lock=True)
+            self.controller_event_error_count_shared = Value('L', 0, lock=True)
+            self.left_controller_seen_shared = Value('b', False, lock=True)
+            self.right_controller_seen_shared = Value('b', False, lock=True)
             self.left_trigger_state_shared = Value('b', False, lock=True)
             self.left_trigger_value_shared = Value('d', 0.0, lock=True)
             self.left_squeeze_state_shared = Value('b', False, lock=True)
@@ -110,6 +116,8 @@ class TeleVuer:
             pass
 
     async def on_controller_move(self, event, session, fps=60):
+        with self.controller_event_count_shared.get_lock():
+            self.controller_event_count_shared.value += 1
         try:
             with self.left_arm_pose_shared.get_lock():
                 self.left_arm_pose_shared[:] = event.value["left"]
@@ -118,6 +126,10 @@ class TeleVuer:
 
             left_controller_state = event.value["leftState"]
             right_controller_state = event.value["rightState"]
+            with self.left_controller_seen_shared.get_lock():
+                self.left_controller_seen_shared.value = isinstance(left_controller_state, dict)
+            with self.right_controller_seen_shared.get_lock():
+                self.right_controller_seen_shared.value = isinstance(right_controller_state, dict)
 
             def extract_controller_states(state_dict, prefix):
                 # trigger
@@ -144,7 +156,8 @@ class TeleVuer:
             extract_controller_states(left_controller_state, "left")
             extract_controller_states(right_controller_state, "right")
         except:
-            pass
+            with self.controller_event_error_count_shared.get_lock():
+                self.controller_event_error_count_shared.value += 1
 
     async def on_hand_move(self, event, session, fps=60):
         try:
@@ -477,6 +490,28 @@ class TeleVuer:
         """float, right controller trigger analog value (0.0 ~ 1.0)."""
         with self.right_trigger_value_shared.get_lock():
             return self.right_trigger_value_shared.value
+
+    @property
+    def controller_event_count(self):
+        """Number of raw CONTROLLER_MOVE events received from the XR client."""
+        with self.controller_event_count_shared.get_lock():
+            return self.controller_event_count_shared.value
+
+    @property
+    def controller_event_error_count(self):
+        """Number of controller events that could not be decoded."""
+        with self.controller_event_error_count_shared.get_lock():
+            return self.controller_event_error_count_shared.value
+
+    @property
+    def left_controller_seen(self):
+        with self.left_controller_seen_shared.get_lock():
+            return self.left_controller_seen_shared.value
+
+    @property
+    def right_controller_seen(self):
+        with self.right_controller_seen_shared.get_lock():
+            return self.right_controller_seen_shared.value
 
     @property
     def right_controller_squeeze_state(self):

@@ -16,10 +16,6 @@
     "destination": "ros2_ws/src/robot_control_hw"
   },
   {
-    "source": "catkin_ws_ENCOS3不抖动/catkin_ws_ENCOS/src/encos_force_sensor",
-    "destination": "ros2_ws/src/encos_force_sensor"
-  },
-  {
     "source": "catkin_ws_ENCOS3不抖动/catkin_ws_ENCOS/install/chassis_control_hw/share/chassis_control_hw/msg",
     "destination": "ros2_ws/src/chassis_control_hw/msg"
   },

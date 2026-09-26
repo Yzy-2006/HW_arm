@@ -1,12 +1,90 @@
 import sys
+import subprocess
 from pathlib import Path
 
+import numpy as np
 import pytest
 import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "collection"))
+
+
+def make_dry_run(target):
+    return subprocess.run(
+        ["make", "-n", target],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_make_preview_uses_opencv_without_starting_ros_launch():
+    result = make_dry_run("preview")
+
+    assert result.returncode == 0
+    assert "collection/record.py" in result.stdout
+    assert "--preview-opencv" in result.stdout
+    assert "ros2 launch" not in result.stdout
+
+
+def test_make_record_opencv_keeps_the_recorder_and_enables_windows():
+    result = make_dry_run("record-opencv")
+
+    assert result.returncode == 0
+    assert "collection/record.py" in result.stdout
+    assert "--show-opencv" in result.stdout
+
+
+def test_opencv_preview_renders_three_cameras_and_closes_on_q():
+    import record
+
+    class FakeOpenCV:
+        WINDOW_NORMAL = 0
+
+        def __init__(self):
+            self.windows = []
+            self.frames = []
+            self.waits = []
+            self.destroyed = False
+
+        def namedWindow(self, title, mode):
+            self.windows.append((title, mode))
+
+        def imshow(self, title, image):
+            self.frames.append((title, image))
+
+        def waitKey(self, timeout_ms):
+            self.waits.append(timeout_ms)
+            return ord("q")
+
+        def destroyAllWindows(self):
+            self.destroyed = True
+
+    cv = FakeOpenCV()
+    preview = record.OpenCVPreview(("head", "left_wrist", "right_wrist"), cv2_module=cv)
+    images = {
+        "head": np.zeros((2, 3, 3), dtype=np.uint8),
+        "left_wrist": np.ones((2, 3, 3), dtype=np.uint8),
+        "right_wrist": np.full((2, 3, 3), 2, dtype=np.uint8),
+    }
+
+    assert preview.show(images) is False
+    assert [title for title, _ in cv.windows] == [
+        "Head camera",
+        "Left wrist camera",
+        "Right wrist camera",
+    ]
+    assert [title for title, _ in cv.frames] == [
+        "Head camera",
+        "Left wrist camera",
+        "Right wrist camera",
+    ]
+    assert cv.waits == [1]
+    preview.close()
+    assert cv.destroyed
 
 
 def test_rviz_image_displays_use_the_current_topic_property_to_subscribe_to_camera_topics():

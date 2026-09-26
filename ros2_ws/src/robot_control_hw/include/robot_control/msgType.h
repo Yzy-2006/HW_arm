@@ -36,7 +36,6 @@ typedef struct{
     int lArm_Dof;
     int rArm_Dof;
     double trmpTime;
-    int refAngRecordRounds;   //运行多少轮后，将中层节点反馈的目标关节角度记录为参考目标关节角度
 }MsgPubCtl;
 
 /*  数据类型：数据发送包裹 -- 上层上位机向着中层节点发送的数据
