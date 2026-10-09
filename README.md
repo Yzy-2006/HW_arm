@@ -22,6 +22,7 @@ sudo 密码并配置 `servo_node`，具体见[环境与构建](environments/READ
 
 | 要做的事 | 使用的文档 | 常用命令 |
 |---|---|---|
+| 把当前代码迁移到另一台电脑 | [新电脑迁移与交接](docs/MIGRATION_HANDOVER.md) | 环境重建、参数核对、分阶段验收 |
 | 按正确顺序启动并采集真机数据 | [真机数据采集流程](docs/DATA_COLLECTION_WORKFLOW.md) | 分终端：`make servo` → `make arms` → `make robot` → `make record` → `make vr` |
 | 填写并核对三台 RealSense 的序列号和画面 | [相机序列号配置](docs/CAMERA_CONFIGURATION.md) | `make preview` |
 | 记录单臂或双臂新的安全初始姿态 | [机械臂零位标定](docs/ARM_ZERO_CALIBRATION.md) | `make calibrate-arm-zero SIDE=both` |
@@ -54,14 +55,15 @@ cd /home/yanziyu/projects/HW_arm/towel_task
 
 头显连接页面并进入 **Virtual Reality** 后，回到终端 5 按 **Enter**。
 出现“开始发布位姿增量（扣动扳机生效）”后，按住对应手柄的扳机、小幅移动手柄进行遥操作。
+当前双臂开启工具轴自转锁定：过滤绕手腕到夹爪末端方向（工具局部 Z 轴）的 VR 旋转，
+保留另外两个方向的倾转和平移；不锁定某个实体关节，也不限制右 A/B 的关节姿态运动。
+恢复自转可将 `controllerConfig.yaml` 的 `vrOrientationControl.lock_tool_twist` 改为 `false`，
+同步配置包后重启 `make robot`。
 `make vr-debug` 只显示诊断数据，不发送控制指令，不能替代 `make vr`。
 
-右手 A 键让双臂回到零位，右手 B 键让双臂到达 `vr_preset_pose.yaml` 中的预设关节姿态。
-两者共用 `controllerConfig.yaml` 的 `vrJointReturn` 平滑轨迹参数，完成后恢复遥操作。
-预设初始与当前零位一致，但后续零位标定不会修改预设文件。关节角单位为弧度；修改预设后运行
-`bash scripts/build.sh --packages-select ctl_msgs_hw` 更新安装配置，再重启 `make robot`。
-预设标定使用 `make save-arm-zero SIDE=both TARGET=preset`，进入被动标定模式与摆臂步骤见
-[机械臂标定](docs/ARM_ZERO_CALIBRATION.md)。`SIDE=left/right` 可分别保存单侧预设。
+右手 A 键让双臂回到零位。右手 B 键在“快速移动”和“精细微调”两种 VR 响应模式之间切换；
+当前模式只影响手柄位姿增量的倍率与限速，不会移动机械臂到预设姿态。
+两套参数位于 `teleop/VR_controller/config/gripper_pd.yaml`，切换后立即作用于后续 VR 增量。
 
 其他常用命令：
 
@@ -86,7 +88,6 @@ make save-arm-zero SIDE=left TARGET=both  # 同步所选侧关节与末端零位
 | `ros2_ws/src/ctl_msgs_hw/config/controllerConfig.yaml` 的 `gripperControl` | 夹爪位控模式、电机 Kp/Kd、位置范围和机械零点 | [双夹爪标定](docs/GRIPPER_CALIBRATION.md) |
 | `teleop/VR_controller/config/gripper_pd.yaml` | VR 位姿映射与缩放 | [VR 遥操作检查](docs/VR_TELEOP_CHECK.md) |
 | `ros2_ws/src/ctl_msgs_hw/config/zeropos.yaml` | 伺服启动和 VR A 键关节回零目标；`TARGET=joint/both` 保存 | [机械臂零位标定](docs/ARM_ZERO_CALIBRATION.md) |
-| `ros2_ws/src/ctl_msgs_hw/config/vr_preset_pose.yaml` | VR 右 B 键双臂预设关节姿态；`TARGET=preset` 保存 | [机械臂标定](docs/ARM_ZERO_CALIBRATION.md) |
 | `ros2_ws/src/ctl_msgs_hw/config/desc_zeropos.yaml` | 遥操作初始末端位姿；`TARGET=cartesian/both` 从关节反馈正运动学计算并保存 | [机械臂零位标定](docs/ARM_ZERO_CALIBRATION.md) |
 
 当前 `recording.yaml` 的 `right_wrist` 是占位值时，采集器会拒绝启动；请先完成相机模块。配置发生变化后，应使用新的原始数据目录，避免混合不兼容 episode。

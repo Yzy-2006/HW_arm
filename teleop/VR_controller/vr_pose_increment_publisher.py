@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Dual-arm VR teleoperation for towel_task.
 Left/right squeeze toggle the matching left/right gripper.
-Left B toggles recording, left A discards, right A returns arms home, right B selects a preset.
+Left B toggles recording, left A discards, right A returns arms home, right B toggles VR sensitivity.
 Gripper encoder endpoints and motion time: config/grippers.yaml (calibration required).
 Motion mapping: config/gripper_pd.yaml.
 /towel/gripper_state: [measured_left, measured_right, commanded_left, commanded_right],
@@ -142,6 +142,14 @@ GRIPPER_PD_DEFAULTS = {
     # hidden scale factor in the ROS2/C++ subscriber.
     "position_scale": 1.0,
     "orientation_scale": 1.0,
+    "fast_position_scale": 1.8,
+    "fast_orientation_scale": 2.0,
+    "fast_position_speed_mps": 1.2,
+    "fast_orientation_speed_radps": 6.0,
+    "fine_position_scale": 0.45,
+    "fine_orientation_scale": 0.60,
+    "fine_position_speed_mps": 0.30,
+    "fine_orientation_speed_radps": 1.5,
     # Per-axis calibration in robot coordinates [x=front, y=left, z=up].
     "position_axis_scale": [1.0, 1.0, 1.0],
     "position_axis_sign": [1.0, 1.0, 1.0],
@@ -444,11 +452,11 @@ class VRPoseIncrementPublisher(Node):
         # 由下游 robot_control_hw 按 controllerConfig.yaml 的 vrJointReturn
         # 配置，以平滑关节空间轨迹回归参考目标角度。
         self.zero_return_pub = self.create_publisher(Bool, "/vr/zero_return_cmd", 10)
-        self.preset_pose_pub = self.create_publisher(Bool, "/vr/preset_pose_cmd", 10)
 
         # A 键上一次状态（用于检测「按下」上升沿）
         self.prev_a_button = False
         self.prev_b_button = False
+        self.precision_mode = False
         # ---------- 遥操作坐标映射配置 ----------
         gripper_cfg = load_gripper_config()
         # 手臂位姿增量的基准坐标系：room（房间/世界坐标系）或 head（头部坐标系）
@@ -460,6 +468,14 @@ class VRPoseIncrementPublisher(Node):
             self.reference_frame = "head"
         self.position_scale = float(gripper_cfg["position_scale"])
         self.orientation_scale = float(gripper_cfg["orientation_scale"])
+        self.fast_position_scale = float(gripper_cfg["fast_position_scale"])
+        self.fast_orientation_scale = float(gripper_cfg["fast_orientation_scale"])
+        self.fast_position_speed_mps = float(gripper_cfg["fast_position_speed_mps"])
+        self.fast_orientation_speed_radps = float(gripper_cfg["fast_orientation_speed_radps"])
+        self.fine_position_scale = float(gripper_cfg["fine_position_scale"])
+        self.fine_orientation_scale = float(gripper_cfg["fine_orientation_scale"])
+        self.fine_position_speed_mps = float(gripper_cfg["fine_position_speed_mps"])
+        self.fine_orientation_speed_radps = float(gripper_cfg["fine_orientation_speed_radps"])
         self.position_axis_scale = np.asarray(gripper_cfg["position_axis_scale"], dtype=float)
         self.position_axis_sign = np.asarray(gripper_cfg["position_axis_sign"], dtype=float)
         if self.position_axis_scale.shape != (3,) or self.position_axis_sign.shape != (3,):
@@ -523,14 +539,14 @@ class VRPoseIncrementPublisher(Node):
         self.get_logger().info(
             f"手臂位姿增量基准坐标系：{self.reference_frame} "
             f"（room=房间/世界坐标系，head=头部坐标系），"
-            f"位置缩放={self.position_scale:.2f}，姿态缩放={self.orientation_scale:.2f}"
+            f"VR 模式=快速，右 B 切换精细；默认位置缩放={self.position_scale:.2f}，姿态缩放={self.orientation_scale:.2f}"
         )
         if abs(self.translation_yaw_offset_rad) > 1e-6:
             self.get_logger().info(
                 f"水平面平移标定角：{float(gripper_cfg['translation_yaw_offset_deg']):.1f} deg（绕 z 旋转）"
             )
         self.get_logger().info(
-            "VR 初始化完成：左右 squeeze 控制对应夹爪；左 B 录制、左 A 丢弃、右 A 回零、右 B 预设姿态"
+            "VR 初始化完成：左右 squeeze 控制对应夹爪；左 B 录制、左 A 丢弃、右 A 回零、右 B 切换灵敏度"
         )
 
     def report_controller_debug(self, snapshot):
@@ -595,10 +611,19 @@ class VRPoseIncrementPublisher(Node):
             self.zero_return_pub.publish(Bool(data=True))
         self.prev_a_button = a_button
         b_button = bool(getattr(state, "right_bButton", False))
-        # A has priority if both buttons are pressed together.
         if b_button and not self.prev_b_button and not a_button:
-            self.get_logger().info("检测到右 B 键按下，发布预设关节姿态指令")
-            self.preset_pose_pub.publish(Bool(data=True))
+            self.precision_mode = not self.precision_mode
+            self._left_pos_residual.fill(0.0)
+            self._right_pos_residual.fill(0.0)
+            self._left_rot_residual.fill(0.0)
+            self._right_rot_residual.fill(0.0)
+            self._left_pos_filter.fill(0.0)
+            self._right_pos_filter.fill(0.0)
+            self._left_rot_filter.fill(0.0)
+            self._right_rot_filter.fill(0.0)
+            self.get_logger().info(
+                f"检测到右 B 键按下，切换 VR {'精细微调' if self.precision_mode else '快速移动'}模式"
+            )
         self.prev_b_button = b_button
 
         # ---- 基准坐标系选择 ----
@@ -658,31 +683,35 @@ class VRPoseIncrementPublisher(Node):
 
         left_enabled = left_trigger and not stale_sample
         right_enabled = right_trigger and not stale_sample
+        position_speed = self.fine_position_speed_mps if self.precision_mode else self.fast_position_speed_mps
+        orientation_speed = self.fine_orientation_speed_radps if self.precision_mode else self.fast_orientation_speed_radps
+        position_scale = self.fine_position_scale if self.precision_mode else self.fast_position_scale
+        orientation_scale = self.fine_orientation_scale if self.precision_mode else self.fast_orientation_scale
         left_pos_delta = _limit_increment(
             left_pos_delta, left_enabled, self.max_position_delta_m,
-            self.max_position_speed_mps, sample_dt,
+            position_speed, sample_dt,
         )
         right_pos_delta = _limit_increment(
             right_pos_delta, right_enabled, self.max_position_delta_m,
-            self.max_position_speed_mps, sample_dt,
+            position_speed, sample_dt,
         )
         left_euler_delta = _limit_increment(
             left_euler_delta, left_enabled, self.max_orientation_delta_rad,
-            self.max_orientation_speed_radps, sample_dt,
+            orientation_speed, sample_dt,
         )
         right_euler_delta = _limit_increment(
             right_euler_delta, right_enabled, self.max_orientation_delta_rad,
-            self.max_orientation_speed_radps, sample_dt,
+            orientation_speed, sample_dt,
         )
 
         # Apply explicit robot-frame axis calibration before filtering.  This
         # keeps x=front, y=left, z=up visible and makes a reversed controller
         # axis a one-line YAML change rather than a code edit.
         axis_gain = self.position_axis_scale * self.position_axis_sign
-        left_pos_delta *= self.position_scale * axis_gain
-        right_pos_delta *= self.position_scale * axis_gain
-        left_euler_delta *= self.orientation_scale
-        right_euler_delta *= self.orientation_scale
+        left_pos_delta *= position_scale * axis_gain
+        right_pos_delta *= position_scale * axis_gain
+        left_euler_delta *= orientation_scale
+        right_euler_delta *= orientation_scale
 
         # 水平面偏航标定：把手的「前/左」对齐到机器人的「前/左」。
         if abs(self.translation_yaw_offset_rad) > 1e-6:

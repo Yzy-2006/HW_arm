@@ -92,6 +92,7 @@ class xr_telepercation_ctl{
         std::vector<double> last_l_arm_zyx;
         std::vector<double> last_r_arm_zyx;
         bool last_arm_zyx_valid = false;
+        bool lock_tool_twist = true;
 
         // VR 最终末端目标限位：位置单位 m，姿态为 RPY [rad]。
         // position_enabled/orientation_enabled 可独立关闭各自限幅。
@@ -153,6 +154,7 @@ class xr_telepercation_ctl{
         void load_preset_pose();
         //是否正在执行关节空间回零轨迹
         bool returning = false;
+        bool preset_holding = false;
         // Synchronize once from feedback when Cartesian teleoperation resumes
         // after A-key joint return, then go back to planner-state tracking.
         bool use_feedback_once_after_return = false;
@@ -187,6 +189,9 @@ class xr_telepercation_ctl{
         //A 键触发关节空间回零（由回零触发回调调用，仅置位请求标志）
         void trigger_joint_return();
         void trigger_preset_pose();
+        bool accepts_vr_input() const {
+            return !returnRequested && !returning && !preset_holding;
+        }
 
         // 接收一帧 [yaw, pitch, roll] 姿态增量（弧度），按局部坐标复合。
         void apply_left_orientation_delta(const std::vector<double>& delta_zyx);

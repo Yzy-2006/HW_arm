@@ -3,10 +3,34 @@
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <yaml-cpp/yaml.h>
+#include <Eigen/Geometry>
 
 namespace {
 
 constexpr std::size_t kCartesianAxes = 3;
+
+std::vector<double> tool_swing_increment(
+    const std::vector<double>& delta, const std::vector<double>& accumulated,
+    const std::vector<double>& base_rpy, bool lock_twist){
+    const auto dq = eulerToQuaternionZYX(delta);
+    if(!lock_twist){
+        return dq;
+    }
+    const auto base = eulerToQuaternionZYX({base_rpy[2], base_rpy[1], base_rpy[0]});
+    const auto current = multiplyQuaternions(accumulated, base);
+    const Eigen::Quaterniond orientation(current[0], current[1], current[2], current[3]);
+    const Eigen::Quaterniond increment(dq[0], dq[1], dq[2], dq[3]);
+    // Both URDF tool tips extend along local -Z.  Decompose the world-frame
+    // increment as swing * twist about that current tool axis, then keep swing.
+    const Eigen::Vector3d axis = orientation.normalized() * Eigen::Vector3d::UnitZ();
+    const Eigen::Vector3d projection = axis * increment.vec().dot(axis);
+    Eigen::Quaterniond twist(increment.w(), projection.x(), projection.y(), projection.z());
+    if(twist.norm() < 1e-12){
+        return dq;  // A 180-degree perpendicular swing has no defined twist.
+    }
+    const Eigen::Quaterniond swing = (increment * twist.normalized().conjugate()).normalized();
+    return {swing.w(), swing.x(), swing.y(), swing.z()};
+}
 
 bool read_limit_vector(const YAML::Node& arm_config, const char* key, std::vector<double>& value){
     const YAML::Node node = arm_config[key];
@@ -243,6 +267,12 @@ void xr_telepercation_ctl::load_teleoperation_limits(){
         const std::string path = ament_index_cpp::get_package_share_directory("ctl_msgs_hw") +
             "/config/controllerConfig.yaml";
         const YAML::Node root = YAML::LoadFile(path);
+        const YAML::Node orientation_control = root["vrOrientationControl"];
+        if(orientation_control && orientation_control["lock_tool_twist"] &&
+           !read_boolean(orientation_control, "lock_tool_twist", lock_tool_twist)){
+            std::cerr << "[遥操作] lock_tool_twist 配置无效，保持工具轴自转锁定" << std::endl;
+            lock_tool_twist = true;
+        }
         const YAML::Node limits = root["vrTeleoperationLimit"];
         if(!limits){
             std::cerr << "[遥操作] 未配置 vrTeleoperationLimit，使用内置安全限位" << std::endl;
@@ -627,6 +657,7 @@ void xr_telepercation_ctl::trigger_preset_pose(){
 }
 
 void xr_telepercation_ctl::apply_left_orientation_delta(const std::vector<double>& delta_zyx){
+    if(!accepts_vr_input()){ return; }
     if(delta_zyx.size() != 3 || l_arm_quat_accum.size() != 4){
         return;
     }
@@ -637,11 +668,13 @@ void xr_telepercation_ctl::apply_left_orientation_delta(const std::vector<double
     // Post-multiplication would interpret them in the changing tool-local
     // frame and swap the perceived left/right rotation axes.
     l_arm_quat_accum = multiplyQuaternions(
-        eulerToQuaternionZYX(delta_zyx), l_arm_quat_accum
+        tool_swing_increment(delta_zyx, l_arm_quat_accum, st_gesture_l, lock_tool_twist),
+        l_arm_quat_accum
     );
 }
 
 void xr_telepercation_ctl::apply_right_orientation_delta(const std::vector<double>& delta_zyx){
+    if(!accepts_vr_input()){ return; }
     if(delta_zyx.size() != 3 || r_arm_quat_accum.size() != 4){
         return;
     }
@@ -649,7 +682,8 @@ void xr_telepercation_ctl::apply_right_orientation_delta(const std::vector<doubl
         return;
     }
     r_arm_quat_accum = multiplyQuaternions(
-        eulerToQuaternionZYX(delta_zyx), r_arm_quat_accum
+        tool_swing_increment(delta_zyx, r_arm_quat_accum, st_gesture_r, lock_tool_twist),
+        r_arm_quat_accum
     );
 }
 
@@ -723,6 +757,8 @@ dataSendWrap xr_telepercation_ctl::trans_and_outp(){
     //触发：构建关节空间回零指令，清零增量
     if(returnRequested){
         returnRequested = false;
+        preset_holding = false;
+        use_feedback_once_after_return = false;
         // An explicit A/B target supersedes the startup zero-pose hold.
         zero_outputTimes = total_zeroTimes;
         std::cout << "[遥操作] 以 " << joint_return_trajectory_time_sec
@@ -745,10 +781,24 @@ dataSendWrap xr_telepercation_ctl::trans_and_outp(){
         return mdataSend;
     }
 
+    if(preset_holding){
+        std::fill(l_arm_end_delta.begin(), l_arm_end_delta.end(), 0.0);
+        std::fill(r_arm_end_delta.begin(), r_arm_end_delta.end(), 0.0);
+        return mdataSend;
+    }
+
     // 在整段点到点轨迹完成前，持续输出同一关节回零指令。此前下一周期就
     // 切回笛卡尔模式，导致规划轨迹被中断，表现为回零突跳。
     if(returning){
         if(joint_return_remaining_cycles-- > 0){
+            return mdataSend;
+        }
+        if(use_preset_target){
+            returning = false;
+            preset_holding = true;
+            std::fill(l_arm_end_delta.begin(), l_arm_end_delta.end(), 0.0);
+            std::fill(r_arm_end_delta.begin(), r_arm_end_delta.end(), 0.0);
+            std::cout << "[遥操作] 预设轨迹时段结束：保持预设关节目标，暂停 VR 位姿控制；右 A 回零后恢复" << std::endl;
             return mdataSend;
         }
         // 完成：用末端反馈的当前笛卡尔位姿重新锚定遥操作基准，再恢复笛卡尔遥操作。

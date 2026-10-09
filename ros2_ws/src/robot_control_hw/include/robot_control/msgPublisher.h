@@ -215,7 +215,6 @@ class RobotCtlNode : public rclcpp::Node{
         rclcpp::Subscription<geometry_msgs::msg::Vector3>::SharedPtr rArm_end_delta;
         //A 键回零触发订阅
         rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr zeroReturnCmd_sub;
-        rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr presetPoseCmd_sub;
         //末端笛卡尔位姿反馈订阅（回零完成后重新锚定笛卡尔遥操作基准）
         rclcpp::Subscription<ctl_msgs_hw::msg::EndDescPub>::SharedPtr endDescPub_sub;
 
@@ -229,7 +228,6 @@ class RobotCtlNode : public rclcpp::Node{
         void lArm_xrTele_endDelta_callback(const geometry_msgs::msg::Vector3::SharedPtr msg);
         void rArm_xrTele_endDelta_callback(const geometry_msgs::msg::Vector3::SharedPtr msg);
         void zeroReturnCmd_callback(const std_msgs::msg::Bool::SharedPtr msg);
-        void presetPoseCmd_callback(const std_msgs::msg::Bool::SharedPtr msg);
         void endDescPub_callback(const ctl_msgs_hw::msg::EndDescPub::SharedPtr msg);
 
         //---------------------------------

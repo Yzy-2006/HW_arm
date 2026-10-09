@@ -1,6 +1,11 @@
 #控制器配置文件
 # 本文件统一管理控制器的所有硬件相关参数
 
+# VR rotation only: remove spin around the current tool-local Z axis on both arms.
+# Keep tool tilt and translation. A/B joint-pose commands are unaffected.
+vrOrientationControl:
+  lock_tool_twist: true
+
 #============================================
 # VR 遥操作最终末端目标限位
 # position_enabled=false 时，不限制 VR 的末端 x/y/z 目标；orientation_enabled=false 时，
@@ -207,17 +212,17 @@ gripperControl:
   temp_recover_hys: 5.0
   l_gripper_ctl:
     mode: position
-    kp: 5.0
-    kd: 0.8
-    pos_min_deg: 0.0
-    pos_max_deg: 90.2582178060505
+    kp: 10.0
+    kd: 2.2
+    pos_min_deg: -10.0
+    pos_max_deg: 100.32378762208262
     zero_pos_deg: 0.0
   r_gripper_ctl:
     mode: position
-    kp: 8.0
-    kd: 2.0
-    pos_min_deg: -24.359569146526997
-    pos_max_deg: 6.961438085103716
+    kp: 10.0
+    kd: 2.2
+    pos_min_deg: -34.70927483203165
+    pos_max_deg: 16.961438085103716
     zero_pos_deg: 0.0
 
 gripperTolerance:

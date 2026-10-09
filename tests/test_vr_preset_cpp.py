@@ -29,8 +29,8 @@ def preset_executable(tmp_path_factory):
     return executable
 
 
-@pytest.mark.parametrize("case", ["valid", "missing_file", "missing_joint", "nan", "malformed"])
-def test_preset_selection_validation_and_return_to_teleop(preset_executable, tmp_path, case):
+@pytest.mark.parametrize("case", ["valid", "valid_no_feedback", "missing_file", "missing_joint", "nan", "malformed"])
+def test_preset_selection_validation_and_hold(preset_executable, tmp_path, case):
     config = tmp_path / "config"
     config.mkdir()
     (config / "controllerConfig.yaml").write_text((CONFIG / "controllerConfig.yaml").read_text())
@@ -48,3 +48,18 @@ def test_preset_selection_validation_and_return_to_teleop(preset_executable, tmp
         )
     subprocess.run([str(preset_executable), str(tmp_path), case],
                    check=True, capture_output=True, text=True)
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_tool_axis_lock_preserves_swing_and_translation(preset_executable, tmp_path, enabled):
+    config = tmp_path / "config"
+    config.mkdir()
+    control = yaml.safe_load((CONFIG / "controllerConfig.yaml").read_text())
+    control["vrOrientationControl"] = {"lock_tool_twist": enabled}
+    control["vrTeleoperationLimit"]["position_enabled"] = False
+    control["vrTeleoperationLimit"]["orientation_enabled"] = False
+    (config / "controllerConfig.yaml").write_text(yaml.safe_dump(control))
+    (config / "vr_preset_pose.yaml").write_text((CONFIG / "vr_preset_pose.yaml").read_text())
+    subprocess.run([
+        str(preset_executable), str(tmp_path), "lock_enabled" if enabled else "lock_disabled",
+    ], check=True, capture_output=True, text=True)

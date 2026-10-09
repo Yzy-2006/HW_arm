@@ -5,8 +5,7 @@
 笛卡尔零位，VR A 键也回到同一关节零位。只在有现场人员、可立即触及急停、且确认机器人机械
 状态安全时执行。
 
-右手 B 键的预设姿态也使用本流程采样，保存时选择 `TARGET=preset`。
-它只更新独立的 `vr_preset_pose.yaml`，不修改启动零位、右 A 回零或遥操作初始末端位姿。
+右手 B 键现在只切换 VR 的快速/精细响应模式，不再触发预设姿态；本流程不再用于右 B 模式设置。
 
 > **危险：** `make calibrate-arm-zero SIDE=both` 会让双臂 14 个关节进入**零电流**，
 > 不执行自动回零，也不会保持位置。双臂可能因重力下垂或突然转动；必须由两人分别
@@ -59,7 +58,6 @@ cd /home/yanziyu/projects/HW_arm/towel_task
 | `TARGET=both`（默认） | `zeropos.yaml` 和 `desc_zeropos.yaml` | 统一初始回零与遥操作零位 |
 | `TARGET=joint` | 仅 `zeropos.yaml` | 修改伺服启动回零和 VR A 键关节回零 |
 | `TARGET=cartesian` | 仅 `desc_zeropos.yaml` | 修改 `make robot` 的遥操作初始末端位姿 |
-| `TARGET=preset` | 仅 `vr_preset_pose.yaml` | 修改 VR 右 B 键的双臂预设关节姿态 |
 
 例如 `make save-arm-zero SIDE=right TARGET=cartesian` 只修改右臂的末端零位。
 只更新一个文件会允许两种零位不同；需要保持一致时使用 `TARGET=both`。
@@ -94,8 +92,7 @@ cd /home/yanziyu/projects/HW_arm/towel_task
 
 3. **手动摆臂。** 双臂模式下两臂均为零电流，两人持续托住各自机械臂；单臂模式下只
    能摆动被选中的零电流侧，另一侧保持不动。缓慢摆到希望普通
-   `make servo` 启动后回到的初始姿态；标定右 B 时则摆到希望按 B 后到达的姿态。
-   确认关节与线缆没有干涉，然后把双臂完全保持静止。
+   `make servo` 启动后回到的初始姿态。确认关节与线缆没有干涉，然后把双臂完全保持静止。
 
 4. **终端 3：采样并保存。** 标定双臂时，双臂均保持静止后运行：
 
@@ -113,8 +110,6 @@ cd /home/yanziyu/projects/HW_arm/towel_task
    # 只修改遥操作初始末端位姿
    make save-arm-zero SIDE=both TARGET=cartesian
 
-   # 只修改右 B 键预设姿态
-   make save-arm-zero SIDE=both TARGET=preset
    ```
 
    要分别标定时，可用下面对应的一组命令。启动命令在终端 1 运行，保存命令在
@@ -130,7 +125,7 @@ cd /home/yanziyu/projects/HW_arm/towel_task
    make save-arm-zero SIDE=right TARGET=both
    ```
 
-   单臂保存也可将 `TARGET` 改成 `joint`、`cartesian` 或 `preset`。保存的 `SIDE` 必须是
+   单臂保存也可将 `TARGET` 改成 `joint` 或 `cartesian`。保存的 `SIDE` 必须是
    当前标定模式下的零电流侧；以 `SIDE=both` 启动时，可以只保存左侧或右侧。
 
    命令会采集至少 1 秒、至少 20 个连续反馈。任何被保存关节在窗口内变化超过 0.2 rad、
@@ -152,20 +147,15 @@ cd /home/yanziyu/projects/HW_arm/towel_task
    回滚已替换文件。两文件不是文件系统级原子事务，断电或强制杀进程后需核对二者或
    恢复同一时间戳的备份。运行中的标定节点不会读取新值或自动移动。
 
-   `TARGET=preset` 直接保存关节反馈，不需要正运动学。它只写入
-   `ros2_ws/src/ctl_msgs_hw/config/vr_preset_pose.yaml`，并生成同名带时间戳的 `.backup`；
-   单侧保存会保留另一侧的原有预设。
 
 ## 保存后验证
 
 1. 先在终端 1 按 `Ctrl+C` 停止被动标定模式，再确认双臂均已被安全支撑或处在可靠位置。
 2. 运行 `make build`，使安装空间中的标定配置与源码配置同步，并重新为
    新的 `servo_node` 配置 EtherCAT 能力。
-   如果本次仅保存 `TARGET=preset`，可改用
-   `bash scripts/build.sh --packages-select ctl_msgs_hw`，只同步配置包。
 3. 保持急停可用并清空双臂周围，运行普通 `make servo`。普通模式会恢复原有的
    自动回零行为；`TARGET=joint/both` 时确认向刚保存的姿态运动，
-   `TARGET=cartesian/preset` 时仍使用原来的关节回零目标。出现方向、幅度或碰撞风险
+   `TARGET=cartesian` 时仍使用原来的关节回零目标。出现方向、幅度或碰撞风险
    异常时立即急停，不要继续遥操。
 4. 通过后保持终端 1 的普通 `make servo` 运行，再在其他独立终端依次启动：
 
@@ -180,12 +170,10 @@ cd /home/yanziyu/projects/HW_arm/towel_task
    每一步等待前一个节点初始化完成。`TARGET=both` 时，
    `robot` 的末端目标应与初始回零位置一致；实际精度取决于模型和关节反馈。
    A 键使用 `zeropos.yaml`，不再自动记录或读取 `refTargetAngle.yaml` 作为回零目标。
-   B 键使用 `vr_preset_pose.yaml`，该文件在 `make robot` 启动时加载。
 5. 头显连接页面并进入 **Virtual Reality** 后，回到终端 4 按 **Enter**。
    出现“开始发布位姿增量（扣动扳机生效）”后，按住对应手柄的扳机、小幅移动手柄。
    `make vr-debug` 只显示诊断数据，不能替代 `make vr`。
    连接地址和检查方法见 [VR 遥操作检查](VR_TELEOP_CHECK.md)。
-   验证预设时，松开扳机，按一下右 B：双臂应平滑到达保存的姿态，完成后恢复遥操。
 
 ## 恢复上一次零位
 
@@ -201,8 +189,6 @@ make build
 若该次选择 `TARGET=both`，也应恢复相同时间戳的
 `desc_zeropos.yaml.<时间戳>.backup` 到 `desc_zeropos.yaml`，再执行 `make build`。
 
-恢复右 B 预设时，使用对应的 `vr_preset_pose.yaml.<时间戳>.backup` 覆盖
-`vr_preset_pose.yaml`，同步配置包并重启 `make robot`。
 
 不要用通配符猜测备份文件；先核对时间戳和内容。恢复后仍按“保存后验证”的安全条件
 进行一次普通 `make servo` 检查。

@@ -32,6 +32,12 @@ def make_stream(monkeypatch):
             position_axis_scale=np.ones(3), position_axis_sign=np.ones(3),
             position_filter_alpha=1.0, orientation_filter_alpha=1.0,
             translation_yaw_offset_rad=0.0, prev_a_button=False, prev_b_button=False,
+            precision_mode=False,
+            fast_position_scale=1.0, fast_orientation_scale=1.0,
+            fast_position_speed_mps=0.75, fast_orientation_speed_radps=4.0,
+            fine_position_scale=0.45, fine_orientation_scale=0.60,
+            fine_position_speed_mps=0.30, fine_orientation_speed_radps=1.5,
+            get_logger=lambda: SimpleNamespace(info=lambda text: None),
             _to_vec3=module.VRPoseIncrementPublisher._to_vec3,
         )
         output = {}
@@ -179,31 +185,25 @@ def test_tracking_jump_is_rejected_before_speed_limit(make_stream):
     np.testing.assert_allclose(stream.output["left_pos"][-1], [0.004, 0, 0], atol=1e-12)
 
 
-def test_right_b_is_edge_triggered_and_independent_of_left_b(make_stream):
+def test_right_b_toggles_precision_mode_on_press_edges(make_stream):
     stream = make_stream()
-    commands = []
-    stream.node.get_logger = lambda: SimpleNamespace(info=lambda text: None)
-    stream.node.preset_pose_pub = SimpleNamespace(publish=lambda msg: commands.append(msg.data))
-    stream.data.tele_state.left_bButton = True
-    stream.step()
-    assert commands == []
     stream.data.tele_state.right_bButton = True
-    for _ in range(5):
-        stream.step()
-    assert commands == [True]
+    stream.step()
+    assert stream.node.precision_mode is True
+    assert stream.node._left_pos_residual.tolist() == [0, 0, 0]
+    stream.step()
+    assert stream.node.precision_mode is True
     stream.data.tele_state.right_bButton = False
     stream.step()
     stream.data.tele_state.right_bButton = True
     stream.step()
-    assert commands == [True, True]
+    assert stream.node.precision_mode is False
 
 
-def test_right_a_has_priority_over_simultaneous_b(make_stream):
+def test_right_a_and_b_simultaneous_only_trigger_a(make_stream):
     stream = make_stream()
     commands = []
-    stream.node.get_logger = lambda: SimpleNamespace(info=lambda text: None)
     stream.node.zero_return_pub = SimpleNamespace(publish=lambda msg: commands.append("zero"))
-    stream.node.preset_pose_pub = SimpleNamespace(publish=lambda msg: commands.append("preset"))
     stream.data.tele_state.right_aButton = True
     stream.data.tele_state.right_bButton = True
     stream.step()

@@ -1,29 +1,29 @@
 feedback_timeout_s: 0.2
 left:
   calibrated: true
-  open_deg: 52.64245359382267
-  closed_deg: 90.2
+  open_deg: 67.3084543457275
+  closed_deg: 90.76091972896344
   motion_time_s: 0.6
   captures:
     open:
-      time_utc: '2026-09-26T09:46:29.893761+00:00'
-      samples: 800
-      spread_deg: 0.021856605344034108
+      time_utc: '2026-10-08T13:51:11.286828+00:00'
+      samples: 818
+      spread_deg: 0.0
     closed:
-      time_utc: '2026-09-26T09:46:40.417306+00:00'
-      samples: 787
+      time_utc: '2026-10-09T12:08:48.531407+00:00'
+      samples: 807
       spread_deg: 0.0
 right:
   calibrated: true
-  open_deg: 6.961438085103716
-  closed_deg: -24.359569146526997
+  open_deg: 5.278424832099214
+  closed_deg: -24.70927483203165
   motion_time_s: 0.6
   captures:
     open:
-      time_utc: '2026-09-20T10:11:34.489579+00:00'
-      samples: 814
+      time_utc: '2026-10-08T13:51:22.582784+00:00'
+      samples: 800
       spread_deg: 0.0
     closed:
-      time_utc: '2026-09-20T10:11:45.619632+00:00'
-      samples: 788
-      spread_deg: 0.021856605344041213
+      time_utc: '2026-10-08T13:51:53.343337+00:00'
+      samples: 782
+      spread_deg: 0.0
