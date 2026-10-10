@@ -16,14 +16,14 @@ reference_frame: head
 position_scale: 1.0
 orientation_scale: 2.0
 # Right B toggles between these two VR response profiles.
-fast_position_scale: 1.2
+fast_position_scale: 1.0
 fast_orientation_scale: 1.5
 fast_position_speed_mps: 1.2
 fast_orientation_speed_radps: 6.0
-fine_position_scale: 0.6
-fine_orientation_scale: 0.60
-fine_position_speed_mps: 0.30
-fine_orientation_speed_radps: 1.5
+fine_position_scale: 0.4
+fine_orientation_scale: 0.6
+fine_position_speed_mps: 1.2
+fine_orientation_speed_radps: 6.0
 # Robot-frame per-axis calibration: [x=front, y=left, z=up].
 # Set a sign to -1 only if that physical axis is reversed on this setup.
 position_axis_scale: [1.0, 1.0, 1.0]

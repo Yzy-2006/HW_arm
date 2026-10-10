@@ -8,23 +8,23 @@
 # ============================================================
 
 left_arm:
-  left_shoulder_pitch_joint: -0.3126192093
-  left_shoulder_roll_joint:  -0.1497287750
-  left_shoulder_yaw_joint:   -0.0623712540
-  left_elbow_joint:          -2.2173261642
-  left_wrist_roll_joint:     0.0852594376
-  left_wrist_pitch_joint:    -1.6580839157
-  left_wrist_yaw_joint:      0.4003582001
+  left_shoulder_pitch_joint: -0.6036853790
+  left_shoulder_roll_joint:  0.0452051163
+  left_shoulder_yaw_joint:   0.0112533569
+  left_elbow_joint:          -1.4791717529
+  left_wrist_roll_joint:     0.4633016586
+  left_wrist_pitch_joint:    -1.4261465073
+  left_wrist_yaw_joint:      -0.0516901016
 
 right_arm:
-  right_shoulder_pitch_joint: 0.5472269058
-  right_shoulder_roll_joint:  0.1066226959
-  right_shoulder_yaw_joint:   -0.1558322906
+  right_shoulder_pitch_joint: 0.4049358368
+  right_shoulder_roll_joint:  -0.0185012817
+  right_shoulder_yaw_joint:   -0.1802473068
   #right_elbow_joint:          2.0
   #right_elbow_joint:          1.57
-  right_elbow_joint:          1.7713813782
-  right_wrist_roll_joint:     -0.1813917160
+  right_elbow_joint:          1.8068590164
+  right_wrist_roll_joint:     -0.2370872498
   #right_wrist_pitch_joint:    1.8
   #right_wrist_pitch_joint:    0.0
-  right_wrist_pitch_joint:    1.6817350388
-  right_wrist_yaw_joint:      0.2546348572
+  right_wrist_pitch_joint:    1.4436941147
+  right_wrist_yaw_joint:      0.3717479706
