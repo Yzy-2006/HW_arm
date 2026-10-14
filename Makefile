@@ -12,6 +12,7 @@ WATCH_ARGS ?=
 RATE ?= 3
 TARGET ?= both
 DATASET_ROOT ?= $(ROOT)/data/raw/fold_towel
+EXPORT_CONFIG ?= $(ROOT)/config/export_lerobot.yaml
 SERVO_NODE := $(ROOT)/ros2_ws/install/servo_control_hw/lib/servo_control_hw/servo_node
 
 # Every robot-side recipe gets the same Python/ROS/OpenRobots environment.
@@ -47,8 +48,8 @@ help:
 	@echo "  make scan-arm-can                         Passively scan CAN0-CAN2 for motor replies"
 	@echo "  make save-arm-zero SIDE=left|right|both [TARGET=joint|cartesian|both|preset]  Save zero poses or right-B preset (default: both zero files)"
 	@echo "  make validate-data          Validate completed raw episodes"
-	@echo "  make export-data OUTPUT=/absolute/output  Export with the training environment"
-	@echo "  Defaults: VENV=$(VENV), OPENROBOTS_PREFIX=$(OPENROBOTS_PREFIX), DATASET_ROOT=$(DATASET_ROOT)"
+	@echo "  make export-data OUTPUT=/absolute/output [EXPORT_CONFIG=...]  Export with the training environment"
+	@echo "  Defaults: VENV=$(VENV), OPENROBOTS_PREFIX=$(OPENROBOTS_PREFIX), DATASET_ROOT=$(DATASET_ROOT), EXPORT_CONFIG=$(EXPORT_CONFIG)"
 
 env:
 	@$(ROBOT_ENV)
@@ -163,11 +164,11 @@ calibrate:
 	@python3 "$(ROOT)/scripts/calibrate_grippers.py" --side "$(SIDE)" --endpoint "$(ENDPOINT)"
 
 validate-data:
-	@python3 "$(ROOT)/collection/export_lerobot.py" --root "$(DATASET_ROOT)" --validate-only
+	@python3 "$(ROOT)/collection/export_lerobot.py" --root "$(DATASET_ROOT)" --config "$(EXPORT_CONFIG)" --validate-only
 
 export-data:
 	@if [[ -z "$(OUTPUT)" ]]; then echo "Usage: make export-data OUTPUT=/absolute/path (run in towel-pi05 environment)"; exit 2; fi
-	@python3 "$(ROOT)/collection/export_lerobot.py" --root "$(DATASET_ROOT)" --output "$(OUTPUT)" --repo-id local/fold_towel
+	@python3 "$(ROOT)/collection/export_lerobot.py" --root "$(DATASET_ROOT)" --output "$(OUTPUT)" --repo-id local/fold_towel --config "$(EXPORT_CONFIG)"
 
 clean-build:
 	@echo "Build artifacts are not deleted automatically. Remove only the specific ros2_ws/build, install and log directories when intentional."

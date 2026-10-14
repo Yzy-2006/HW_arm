@@ -39,8 +39,21 @@ ROS 各话题和三台 USB 相机没有共享硬件触发。本采集器进行�
 **不是严格硬件同步**。没有 header 的 FK/夹爪消息只能记录到达时间。
 采样目标 30 Hz，但重复相机帧不会作为新帧写入；间隙超限会中止片段并保留原始证据。
 
+录制过程中每 2 秒输出一次 `Capture diagnostics`，保存或中止时额外输出一次。
+`callback_ms(avg/max)` 是采样回调起始时间的平均/最大间隔；
+`frame_gap_ms(current/max)` 是采样时距上一帧已保存采样时间的当前/最大间隔；
+`write_ms(last/avg/max)` 是整帧保存耗时（含三路 PNG 编码写入与 JSONL 追加/flush），
+`png_write_ms` 是最近一次保存中各路 PNG 的耗时。这些耗时不代表磁盘 fsync 持久化时间。
+相机诊断中的 `frame` 是采样检查时的帧号，`previous_saved` 是此前已保存的相机帧号，
+`step` 是二者之差，`age_ms` 是采样检查时该相机帧到达采集进程后经过的时间，
+不含随后写盘的耗时；中止日志改为使用中止检查时的相机信息。
+`duplicate_skips` 记录因任一路相机帧号未更新而跳过的采样次数。
+FPS、平均值、最大值和跳过次数从当前 episode 开始累计；中止时尽可能读取相机线程的最新帧号。
+例如，写盘耗时接近 100 ms 提示编码/写盘阻塞；`step=0` 和不断增加的
+`age_ms` 提示相机更新延迟。诊断不改变采集阈值或原始帧字段。
+
 导出时按真实采样时间建立固定 FPS 网格，并使用此前最近样本保持，不将缺帧时间压缩。
-因此导出视频允许重复图像；`auxiliary.capture_time_s` 保留所选原始帧的时间。
+因此导出视频允许重复图像；启用 `auxiliary.capture_time_s` 时可保留所选原始帧的时间。
 完整的原始消息和相机时钟信息仍保存在 JSONL 中，便于以后重新对齐/导出。
 
 ## LeRobot 默认表示
@@ -49,7 +62,7 @@ ROS 各话题和三台 USB 相机没有共享硬件触发。本采集器进行�
 - `action`：16 维，左 7 关节目标角 + 左夹爪目标状态 + 右 7 关节目标角 + 右夹爪目标状态。
 - `observation.images.head/left_wrist/right_wrist`：三路 RGB 图像；由 PNG 转成 LeRobot 视频流。
 - `task`：每段的自然语言任务描述。
-- 额外保留关节速度、实测 TCP、名义 TCP 目标、原始采样时间；没有原始夹爪角度/力矩数组。
+- 关节速度、实测 TCP、名义 TCP 目标、原始采样时间可通过导出 YAML 选择；没有原始夹爪角度/力矩数组。
 
 关节量单位 rad；第 7、15 维夹爪量为二值 0/1，不是连续开度。
 反馈状态按标定后的行程比例判断，使用 0.4/0.6 阈值滞回；初次反馈使用 0.5 阈值。
@@ -77,5 +90,19 @@ ROS 各话题和三台 USB 相机没有共享硬件触发。本采集器进行�
 make validate-data
 make export-data OUTPUT=/home/yanziyu/projects/HW_arm/towel_task/data/final
 ```
+
+导出字段由 [`config/export_lerobot.yaml`](../config/export_lerobot.yaml) 控制。默认配置
+只导出 π0.5 训练需要的 `observation.state`、`action`、图像和 `task`；在 `fields` 中打开
+辅助字段或 `raw.q`、`raw.joint_target`、原始时间字段即可额外保留对应逐帧数值，在 `images` 中可以关闭某一路相机。`raw_sidecars` 可将
+字典型的 `stream_timestamps`、`camera_timestamps` 写入导出目录的 `meta/*.jsonl`，它们
+不会被强行转换成固定形状的 LeRobot feature。命令行可以替换配置：
+
+```bash
+make export-data OUTPUT=/absolute/path/to/lerobot_data \
+  EXPORT_CONFIG=/absolute/path/to/export.yaml
+```
+
+导出目录中的 `meta/towel_schema.json` 会记录实际选中的字段和配置文件路径。原始目录
+不会被删除；未选择的内容仍可从原始 episode 重新导出。
 
 如果修改了 `config/recording.yaml` 的 `dataset_root`，两个命令均增加 `DATASET_ROOT=/absolute/path/to/raw_data`。导出需要在安装 LeRobot 的训练环境执行；训练侧的后续步骤见[π0.5 训练说明](../training/README_PI05.md)。

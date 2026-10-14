@@ -1,0 +1,61 @@
+# LeRobot 导出字段选择。
+# 未列出的 fields 默认关闭；images 未列出的相机默认开启。
+# 修改后通过 make export-data EXPORT_CONFIG=/absolute/path/to/this.yaml 使用。
+
+fields:
+  # 当前默认训练表示
+  # 观测状态：双臂关节反馈角度 + 双夹爪反馈开合状态，共 16 维。
+  observation.state: true
+  # 动作标签：双臂关节目标角度 + 双夹爪目标开合状态，共 16 维。
+  action: true
+  # 双臂关节反馈速度，14 维，单位 rad/s；训练默认不使用。
+  observation.joint_velocity: false
+  # 双臂实测末端位姿，12 维，位置单位 m、姿态单位 rad；训练默认不使用。
+  observation.tcp: false
+  # 双臂名义末端目标位姿，12 维，位置单位 m、姿态单位 rad；训练默认不使用。
+  auxiliary.tcp_target: false
+  # 导出帧对应的原始采样时间，单位 s；训练默认不使用。
+  auxiliary.capture_time_s: false
+
+  # 可选的原始逐帧数值字段
+  # 原始双臂关节反馈角度 q，14 维，单位 rad。
+  raw.q: false
+  # 原始双臂关节反馈速度 dq，14 维，单位 rad/s。
+  raw.dq: false
+  # 原始双臂关节目标角度，14 维，单位 rad。
+  raw.joint_target: false
+  # 原始夹爪状态：[左反馈、右反馈、左目标、右目标]，0=open，1=closed。
+  raw.gripper_state: false
+  # 原始帧在 episode 内的连续编号。
+  raw.frame_index: false
+  # 原始采样单调时钟，单位 s。
+  raw.timestamp_s: false
+  # 采集进程单调时钟值，单位 s；用于检查采集间隔。
+  raw.monotonic_s: false
+  # ROS 时钟时间，单位 s；可能受 ROS 时钟源影响。
+  raw.ros_time_s: false
+
+images:
+  # 头部/全局相机图像，输出为 observation.images.head 视频。
+  head: true
+  # 左腕相机图像，输出为 observation.images.left_wrist 视频。
+  left_wrist: true
+  # 右腕相机图像，输出为 observation.images.right_wrist 视频。
+  right_wrist: true
+
+metadata:
+  # 是否在每个 LeRobot frame 中保留任务文本 task。
+  task: true
+  # 是否在 towel_schema.json 中记录原始 episode 的绝对路径；训练默认不需要。
+  raw_episodes: false
+  # 是否在 towel_schema.json 中保存采集时的 YAML 配置快照；训练默认不需要。
+  source_calibration: false
+  # 将原始 episode.json 逐段写入 meta/raw_episode_metadata.jsonl；训练默认不需要。
+  episode_metadata: false
+
+raw_sidecars:
+  # 将原始 JSON 字段逐原始帧写入 meta/*.jsonl；不会伪装成固定形状的 LeRobot feature。
+  # 保留每个原始帧的各 ROS 数据流时间戳。
+  stream_timestamps: false
+  # 保留每个原始帧的相机帧号、设备时间戳和到达时间。
+  camera_timestamps: false

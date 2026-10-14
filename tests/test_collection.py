@@ -134,6 +134,56 @@ def test_export_frame_layout_through_dataset_api(tmp_path, monkeypatch):
     assert (tmp_path/'out/meta/towel_schema.json').is_file()
 
 
+def test_export_yaml_selects_features_and_cameras(tmp_path, monkeypatch):
+    import types
+
+    write_episode(tmp_path / 'raw')
+    config = tmp_path / 'export.yaml'
+    config.write_text("""
+fields:
+  observation.state: true
+  raw.q: true
+images:
+  head: true
+  left_wrist: false
+  right_wrist: false
+metadata:
+  task: false
+  raw_episodes: false
+  source_calibration: false
+""")
+    captured = []
+
+    class Dataset:
+        @classmethod
+        def create(cls, **kwargs):
+            cls.schema = kwargs['features']
+            (kwargs['root'] / 'meta').mkdir(parents=True)
+            return cls()
+
+        def add_frame(self, frame):
+            captured.append(frame)
+
+        def save_episode(self):
+            pass
+
+        def finalize(self):
+            pass
+
+    package = types.ModuleType('lerobot.datasets.lerobot_dataset')
+    package.LeRobotDataset = Dataset
+    monkeypatch.setitem(sys.modules, 'lerobot', types.ModuleType('lerobot'))
+    monkeypatch.setitem(sys.modules, 'lerobot.datasets', types.ModuleType('lerobot.datasets'))
+    monkeypatch.setitem(sys.modules, 'lerobot.datasets.lerobot_dataset', package)
+
+    export(tmp_path / 'raw', tmp_path / 'out', 'local/test', config_path=config)
+    assert set(Dataset.schema) == {'observation.state', 'raw.q', 'observation.images.head'}
+    assert set(captured[0]) == set(Dataset.schema)
+    schema = json.loads((tmp_path / 'out/meta/towel_schema.json').read_text())
+    assert schema['selected_images'] == ['head']
+    assert 'raw_episodes' not in schema
+
+
 def test_recorder_callbacks_and_episode_boundaries(tmp_path,monkeypatch):
     # Use the freshly generated real ROS message definitions, but a fake Node:
     # this exercises callback fields and service state without DDS or hardware.

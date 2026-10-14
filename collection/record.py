@@ -23,6 +23,66 @@ WINDOW_TITLES = {
 }
 
 
+class RecordingDiagnostics:
+    """Bounded timing counters; emit summaries rather than logging every frame."""
+
+    def __init__(self, now):
+        self.started_at = self.last_report = now
+        self.last_tick = None
+        self.tick_count = self.tick_total = self.tick_max = 0
+        self.frame_gap = self.frame_gap_max = 0.0
+        self.write_count = self.write_total = self.write_max = self.last_write = 0
+        self.camera_write_s = {}
+        self.camera_meta = {}
+        self.camera_observed_at = None
+        self.previous_ids = {}
+        self.duplicate_skips = 0
+
+    def tick(self, now, last_frame_time):
+        if self.last_tick is not None:
+            interval = now - self.last_tick
+            self.tick_count += 1
+            self.tick_total += interval
+            self.tick_max = max(self.tick_max, interval)
+        self.last_tick = now
+        self.frame_gap = now - last_frame_time
+        self.frame_gap_max = max(self.frame_gap_max, self.frame_gap)
+
+    def wrote(self, elapsed):
+        self.last_write = elapsed
+        self.write_count += 1
+        self.write_total += elapsed
+        self.write_max = max(self.write_max, elapsed)
+
+    def report(self, now, frames, *, force=False):
+        if not force and now - self.last_report < 2.0:
+            return None
+        self.last_report = now
+        camera_details = []
+        for name, meta in sorted(self.camera_meta.items()):
+            frame = meta['frame_number']
+            previous = self.previous_ids.get(name)
+            step = frame - previous if previous is not None else 'n/a'
+            received = meta.get('receive_monotonic_s')
+            observed_at = self.camera_observed_at if self.camera_observed_at is not None else now
+            age = f"{(observed_at - received) * 1000:.1f}" if received is not None else 'n/a'
+            camera_details.append(f"{name}(frame={frame}, previous_saved={previous}, "
+                                  f"step={step}, age_ms={age})")
+        per_camera = ', '.join(f"{name}={elapsed * 1000:.1f}"
+                               for name, elapsed in sorted(self.camera_write_s.items()))
+        duration = now - self.started_at
+        return (
+            f"Capture diagnostics: frames={frames}, fps={frames / duration if duration > 0 else 0:.1f}, "
+            f"callback_ms(avg/max)={self.tick_total / max(1, self.tick_count) * 1000:.1f}/"
+            f"{self.tick_max * 1000:.1f}, frame_gap_ms(current/max)={self.frame_gap * 1000:.1f}/"
+            f"{self.frame_gap_max * 1000:.1f}, "
+            f"write_ms(last/avg/max)={self.last_write * 1000:.1f}/"
+            f"{self.write_total / max(1, self.write_count) * 1000:.1f}/{self.write_max * 1000:.1f}, "
+            f"png_write_ms=[{per_camera}], duplicate_skips={self.duplicate_skips}, "
+            f"cameras=[{'; '.join(camera_details)}]"
+        )
+
+
 class OpenCVPreview:
     """Display the recorder's latest frames in one window per configured camera."""
 
@@ -117,6 +177,11 @@ class Cameras:
         except Exception as exc:
             if not self.stop.is_set():
                 self.error = str(exc)
+    def frame_metadata(self):
+        """Read camera progress even when freshness checks reject a snapshot."""
+        with self.lock:
+            return {name: dict(entry[1]) for name, entry in self.latest.items()}
+
     # 从所有相机中取出最新的数据，检查后返回
     def snapshot(self, now):
         with self.lock:
@@ -156,6 +221,7 @@ def make_node(config, cameras, *, show_opencv=False):
             self.cache, self.episode = StreamCache(), None
             self.start_time, self.last_frame_time = None, None
             self.camera_ids = {}
+            self.diagnostics = None
             self.status = self.create_publisher(Bool, "/towel/recording", 10)
             self.publish_rviz = bool(config.get("publish_rviz", False))
             self.opencv_preview = OpenCVPreview(config["cameras"]) if show_opencv else None
@@ -227,11 +293,13 @@ def make_node(config, cameras, *, show_opencv=False):
                     self.episode = EpisodeWriter(config["dataset_root"], {
                         "config": config, "calibration": calibration,
                         "start_wall_time_ns": time.time_ns(), "start_monotonic_s": now,
-                    }, lambda path, img: cv2.imwrite(path, img, [cv2.IMWRITE_PNG_COMPRESSION, 1]))
+                    }, self.write_image)
                     self.start_time, self.last_frame_time = now, now
                     self.camera_ids = {}
+                    self.diagnostics = RecordingDiagnostics(now)
                     response.message = "recording"
                 elif not request.data and self.episode is not None:
+                    self.log_diagnostics(force=True)
                     episode, self.episode = self.episode, None
                     path = episode.finish(config["min_episode_frames"])
                     response.message = f"Saved {path}" if path else "Too short; kept as .partial, excluded from export"
@@ -294,7 +362,26 @@ def make_node(config, cameras, *, show_opencv=False):
                     self._last_opencv_error = detail
                     self.get_logger().warning(f"OpenCV camera preview unavailable: {detail}")
 
+        def write_image(self, path, image):
+            start = time.monotonic()
+            try:
+                return cv2.imwrite(path, image, [cv2.IMWRITE_PNG_COMPRESSION, 1])
+            finally:
+                self.diagnostics.camera_write_s[Path(path).parent.name] = time.monotonic() - start
+
+        def log_diagnostics(self, *, force=False, failure=False):
+            if failure and hasattr(cameras, 'frame_metadata'):
+                self.diagnostics.camera_meta = cameras.frame_metadata()
+                self.diagnostics.camera_observed_at = time.monotonic()
+            detail = self.diagnostics.report(time.monotonic(), self.episode.frames, force=force)
+            if detail:
+                logger = self.get_logger()
+                (logger.warning if failure else logger.info)(detail)
+
         def sample(self):
+            if self.episode is not None:
+                self.diagnostics.tick(time.monotonic(), self.last_frame_time)
+                self.diagnostics.previous_ids = dict(self.camera_ids)
             if self.publish_rviz:
                 self.publish_preview()
             self.publish_opencv_preview()
@@ -302,17 +389,34 @@ def make_node(config, cameras, *, show_opencv=False):
                 return
             try:
                 now, sample, images, camera_meta = self.snapshot()
-                if now - self.last_frame_time > config["max_frame_gap_s"]:
-                    raise ValueError("Capture frame gap exceeds limit; episode is incomplete")
+                self.diagnostics.camera_meta = camera_meta
+                self.diagnostics.camera_observed_at = now
+                gap = now - self.last_frame_time
+                self.diagnostics.frame_gap = gap
+                self.diagnostics.frame_gap_max = max(self.diagnostics.frame_gap_max, gap)
+                if gap > config["max_frame_gap_s"]:
+                    raise ValueError(
+                        f"Capture frame gap exceeds limit; episode is incomplete "
+                        f"(gap={gap * 1000:.1f} ms, limit={config['max_frame_gap_s'] * 1000:.1f} ms)"
+                    )
                 ids = {name: meta["frame_number"] for name, meta in camera_meta.items()}
                 if any(self.camera_ids.get(name) == value for name, value in ids.items()):
+                    self.diagnostics.duplicate_skips += 1
+                    self.log_diagnostics()
                     return  # Never label the same camera exposure as a fresh image.
                 sample.update(timestamp_s=now-self.start_time, monotonic_s=now,
                               ros_time_s=self.get_clock().now().nanoseconds * 1e-9,
                               camera_timestamps=camera_meta)
-                self.episode.add(sample, images)
+                write_start = time.monotonic()
+                self.diagnostics.camera_write_s = {}
+                try:
+                    self.episode.add(sample, images)
+                finally:
+                    self.diagnostics.wrote(time.monotonic() - write_start)
                 self.last_frame_time, self.camera_ids = now, ids
+                self.log_diagnostics()
             except Exception as exc:
+                self.log_diagnostics(force=True, failure=True)
                 self.episode.abort(exc)
                 self.episode = None
                 self.publish_status()
