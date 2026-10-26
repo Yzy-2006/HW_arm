@@ -18,6 +18,10 @@ int32 torque_feedforward_ctl
 # 是否到达目标位置
 bool if_reach_end
 
+# Continuous joint stream (ctl_trans_mod=3): capture and hold the current joint
+# feedback once. Release only when a new command with hold_position=false arrives.
+bool hold_position
+
 #----- 关节限位控制 (左臂) -----
 bool l_arm_if_use_jntlim
 int32 l_arm_limjnt_num

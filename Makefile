@@ -13,6 +13,19 @@ RATE ?= 3
 TARGET ?= both
 DATASET_ROOT ?= $(ROOT)/data/raw/fold_towel
 EXPORT_CONFIG ?= $(ROOT)/config/export_lerobot.yaml
+PI05_CONFIG ?= $(ROOT)/config/pi05_deployment.yaml
+PI05_MODEL ?= $(HOME)/models/pi05-encos-fold-towel-93
+PI05_ENV ?= pi05-openpi
+PI05_CHECKPOINT ?= step-19999
+PI05_HOST ?= 127.0.0.1
+PI05_PORT ?= 8765
+PI05_ARGS ?=
+ACT_CHECKPOINT ?= $(ROOT)/outputs/act_fold_towel_b12/checkpoints/100000/pretrained_model
+ACT_ENV ?= lerobot
+ACT_HOST ?= 127.0.0.1
+ACT_PORT ?= 8765
+ACT_ARGS ?=
+PI05_SLOW_FACTOR ?=
 SERVO_NODE := $(ROOT)/ros2_ws/install/servo_control_hw/lib/servo_control_hw/servo_node
 
 # Every robot-side recipe gets the same Python/ROS/OpenRobots environment.
@@ -27,7 +40,7 @@ export TOWEL_OPENROBOTS_PREFIX="$(OPENROBOTS_PREFIX)"
 source "$(ROOT)/scripts/env.sh"
 endef
 
-.PHONY: help env check check-control check-record check-visualize build test launch teleop experiment teleop-watch preview camera-list servo arms robot vr vr-debug record record-opencv record-rviz watch watch-arm calibrate calibrate-arm-zero scan-arm-can save-arm-zero validate-data export-data clean-build
+.PHONY: help env check check-control check-record check-visualize build test launch teleop experiment teleop-watch preview camera-list servo arms robot vr vr-debug record record-opencv record-rviz watch watch-arm calibrate calibrate-arm-zero scan-arm-can save-arm-zero validate-data export-data pi05 act bridge motion replay clean-build
 
 help:
 	@echo "Towel task commands"
@@ -49,6 +62,12 @@ help:
 	@echo "  make save-arm-zero SIDE=left|right|both [TARGET=joint|cartesian|both|preset]  Save zero poses or right-B preset (default: both zero files)"
 	@echo "  make validate-data          Validate completed raw episodes"
 	@echo "  make export-data OUTPUT=/absolute/output [EXPORT_CONFIG=...]  Export with the training environment"
+	@echo "  make pi05                         Start the OpenPI PI05 worker"
+	@echo "  make act                          Start the LeRobot ACT worker"
+	@echo "  make bridge                       Start the policy bridge in dry-run mode"
+	@echo "  make motion                       Start the policy bridge with motion enabled"
+	@echo "  make motion PI05_SLOW_FACTOR=0.1  Start motion at 10% joint step size"
+	@echo "  make replay ARGS=\"--episode 0\"  Replay recorded actions (dry-run by default)"
 	@echo "  Defaults: VENV=$(VENV), OPENROBOTS_PREFIX=$(OPENROBOTS_PREFIX), DATASET_ROOT=$(DATASET_ROOT), EXPORT_CONFIG=$(EXPORT_CONFIG)"
 
 env:
@@ -169,6 +188,34 @@ validate-data:
 export-data:
 	@if [[ -z "$(OUTPUT)" ]]; then echo "Usage: make export-data OUTPUT=/absolute/path (run in towel-pi05 environment)"; exit 2; fi
 	@python3 "$(ROOT)/collection/export_lerobot.py" --root "$(DATASET_ROOT)" --output "$(OUTPUT)" --repo-id local/fold_towel --config "$(EXPORT_CONFIG)"
+
+pi05:
+	set -e
+	@if ! command -v conda >/dev/null 2>&1; then echo "conda command not found; initialize Conda before running make pi05" >&2; exit 2; fi
+	@if [[ ! -d "$(PI05_MODEL)/$(PI05_CHECKPOINT)/params" ]]; then echo "OpenPI checkpoint not found: $(PI05_MODEL)/$(PI05_CHECKPOINT)/params" >&2; exit 2; fi
+	cd "$(ROOT)"
+	conda run --no-capture-output -n "$(PI05_ENV)" python deployment/pi05_worker.py --model "$(PI05_MODEL)" --checkpoint "$(PI05_CHECKPOINT)" --host "$(PI05_HOST)" --port "$(PI05_PORT)" $(PI05_ARGS)
+
+bridge:
+	@$(ROBOT_ENV)
+	@python3 "$(ROOT)/deployment/pi05_bridge.py" --config "$(PI05_CONFIG)" $(ARGS)
+
+motion:
+	@if [[ -n "$(PI05_SLOW_FACTOR)" && ( "$(PI05_SLOW_FACTOR)" == "0" || "$(PI05_SLOW_FACTOR)" == -* ) ]]; then echo "PI05_SLOW_FACTOR must be greater than 0" >&2; exit 2; fi
+	@$(ROBOT_ENV)
+	@python3 "$(ROOT)/deployment/pi05_bridge.py" --config "$(PI05_CONFIG)" --motion $(if $(PI05_SLOW_FACTOR),--slow-factor $(PI05_SLOW_FACTOR),) $(ARGS)
+
+replay:
+	@$(ROBOT_ENV)
+	@python3 "$(ROOT)/deployment/replay_dataset.py" $(ARGS)
+
+act:
+	set -e
+	@if ! command -v conda >/dev/null 2>&1; then echo "conda command not found; initialize Conda before running make act" >&2; exit 2; fi
+	@if [[ ! -f "$(ACT_CHECKPOINT)/config.json" ]]; then echo "ACT checkpoint not found: $(ACT_CHECKPOINT)" >&2; exit 2; fi
+	cd "$(ROOT)"
+	conda run --no-capture-output -n "$(ACT_ENV)" python -c 'import torch; print("ACT environment:", __import__("sys").executable, "torch", torch.__version__, "cuda=", torch.cuda.is_available())'
+	conda run --no-capture-output -n "$(ACT_ENV)" python deployment/pi05_worker.py --model "$(ACT_CHECKPOINT)" --host "$(ACT_HOST)" --port "$(ACT_PORT)" $(ACT_ARGS)
 
 clean-build:
 	@echo "Build artifacts are not deleted automatically. Remove only the specific ros2_ws/build, install and log directories when intentional."

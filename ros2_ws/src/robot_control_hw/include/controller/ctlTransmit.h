@@ -16,6 +16,7 @@
 #include "messageType/chassis_msgType.h"
 
 #include "debugPublish/debugPublish.h"
+#include "controller/jointStreamGuard.h"
 
 /*
         by 霜云喵
@@ -34,7 +35,12 @@ public:
     // 初始化函数 — 传入ROS2节点指针以创建发布器和订阅器
     void init(rclcpp::Node* node);
 
-    DotOutpWrap bridgeMsg_getAndPub();
+    DotOutpWrap bridgeMsg_getAndPub(const std::vector<double>& left_feedback,
+                                  const std::vector<double>& right_feedback);
+
+    // Once a bridge message arrives, robot_control stays on the bridge stream
+    // until this process exits, so an idle bridge cannot compete with VR.
+    bool active() const { return bridge_active_; }
 
 private:
     DotOutpWrap bridge_data;
@@ -53,7 +59,10 @@ private:
     // ---------------------------------------------------
     //过程控制变量
     bool ifReceiveSuccess;
+    bool bridge_active_;
     int zero_count;
+    JointStreamGuard joint_stream_;
+    bool joint_stream_mode_ = false;
 
 };
 

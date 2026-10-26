@@ -243,7 +243,7 @@ void RobotCtlNode::endDescPub_callback(const ctl_msgs_hw::msg::EndDescPub::Share
 //桥接输出代码
 void RobotCtlNode::bridge_transmitOutp(){
     DotOutpWrap temp_dotOutp;
-    temp_dotOutp = bridge_transmit.bridgeMsg_getAndPub();
+    temp_dotOutp = bridge_transmit.bridgeMsg_getAndPub(lArm_pos_fdback, rArm_pos_fdback);
 
     //数据传递函数赋值
     this->armTrajMsg = temp_dotOutp.armTrajMsg;

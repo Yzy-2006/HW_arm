@@ -17,11 +17,11 @@ position_scale: 1.0
 orientation_scale: 2.0
 # Right B toggles between these two VR response profiles.
 fast_position_scale: 1.0
-fast_orientation_scale: 1.5
+fast_orientation_scale: 0.8
 fast_position_speed_mps: 1.2
 fast_orientation_speed_radps: 6.0
-fine_position_scale: 0.4
-fine_orientation_scale: 0.6
+fine_position_scale: 0.6
+fine_orientation_scale: 1.0
 fine_position_speed_mps: 1.2
 fine_orientation_speed_radps: 6.0
 # Robot-frame per-axis calibration: [x=front, y=left, z=up].

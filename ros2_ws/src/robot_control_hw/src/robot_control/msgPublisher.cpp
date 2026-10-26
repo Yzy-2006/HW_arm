@@ -640,7 +640,14 @@ void RobotCtlNode::run()
             // 时所有 Pico 增量都堆积在缓存中，随后一次性跳变，表现为不跟手
             // 以及姿态/位置耦合。runinMod=1 使用 upperMonitor_time 的短窗
             // 连续插补，因此每周期更新才是正确的控制方式。
-            xr_teleComu_outp();
+            if (bridge_transmit.active()) {
+                // PI05 publishes BridgeCtlMsg through the existing controller
+                // adapter. Convert it into the normal upper-layer message.
+                bridge_transmitOutp();
+                TrajOutp();
+            } else {
+                xr_teleComu_outp();
+            }
             msg_publish();
             ifFirstRun = false;
 

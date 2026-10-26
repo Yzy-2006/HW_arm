@@ -54,8 +54,8 @@ right_arm_Kd_low:
 # ============================================================
 
 left_arm_Kp_mid:
-  left_shoulder_pitch_joint_kp: 160
-  left_shoulder_roll_joint_kp:  140
+  left_shoulder_pitch_joint_kp: 280
+  left_shoulder_roll_joint_kp:  220
   left_shoulder_yaw_joint_kp:   100
   left_elbow_joint_kp:          100
   left_wrist_roll_joint_kp:     100
@@ -63,7 +63,7 @@ left_arm_Kp_mid:
   left_wrist_yaw_joint_kp:      80
 
 left_arm_Kd_mid:
-  left_shoulder_pitch_joint_kd: 50
+  left_shoulder_pitch_joint_kd: 60
   left_shoulder_roll_joint_kd:  40
   left_shoulder_yaw_joint_kd:   30
   left_elbow_joint_kd:          30
@@ -72,8 +72,8 @@ left_arm_Kd_mid:
   left_wrist_yaw_joint_kd:      30
 
 right_arm_Kp_mid:
-  right_shoulder_pitch_joint_kp: 160
-  right_shoulder_roll_joint_kp:  140
+  right_shoulder_pitch_joint_kp: 280
+  right_shoulder_roll_joint_kp:  220
   right_shoulder_yaw_joint_kp:   100
   right_elbow_joint_kp:          100
   right_wrist_roll_joint_kp:     100
@@ -81,7 +81,7 @@ right_arm_Kp_mid:
   right_wrist_yaw_joint_kp:      80
 
 right_arm_Kd_mid:
-  right_shoulder_pitch_joint_kd: 50
+  right_shoulder_pitch_joint_kd: 60
   right_shoulder_roll_joint_kd:  40
   right_shoulder_yaw_joint_kd:   30
   right_elbow_joint_kd:          30
@@ -95,7 +95,7 @@ right_arm_Kd_mid:
 # ============================================================
 
 left_arm_Kp_high:
-  left_shoulder_pitch_joint_kp: 300
+  left_shoulder_pitch_joint_kp: 400
   left_shoulder_roll_joint_kp:  300
   left_shoulder_yaw_joint_kp:   300
   left_elbow_joint_kp:          400
@@ -113,7 +113,7 @@ left_arm_Kd_high:
   left_wrist_yaw_joint_kd:      154
 
 right_arm_Kp_high:
-  right_shoulder_pitch_joint_kp: 300
+  right_shoulder_pitch_joint_kp: 400
   right_shoulder_roll_joint_kp:  300
   right_shoulder_yaw_joint_kp:   400
   right_elbow_joint_kp:          400

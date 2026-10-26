@@ -41,7 +41,7 @@ vrJointReturn:
 gravComp:
 
   # ---------- 开关量 ----------
-  ifUseGravComp: 0      #是否使用重力补偿 0 -- 否； 1 -- 是
+  ifUseGravComp: 1      #是否使用重力补偿 0 -- 否； 1 -- 是
   ifUseInpFtr: 1        #是否使用输入滤波器
   ifUseOutpFtr: 1       #是否使用输出滤波器
   ifUseFricComp: 1      #是否使用stribeck摩擦补偿

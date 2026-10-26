@@ -1,5 +1,15 @@
 #include "controller/ctlTransmit.h"
 #include "robot_control/config.h"
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+
+namespace {
+double monotonic_seconds() {
+    return std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+}
 
 //===============================================================================================
 
@@ -11,7 +21,7 @@ void CtlTransmit::init(rclcpp::Node* node)
     // 创建桥接消息订阅器 — 从其他节点接收 BridgeCtlMsg
     bridge_msg_sub_ = node_ptr_->create_subscription<ctl_msgs_hw::msg::BridgeCtlMsg>(
         "/dexbotCtl/bridge_ctl_msg",
-        10,
+        rclcpp::QoS(rclcpp::KeepLast(1)),
         std::bind(&CtlTransmit::bridge_msg_callback, this, std::placeholders::_1)
     );
 
@@ -99,6 +109,7 @@ void CtlTransmit::init(rclcpp::Node* node)
     bridge_data.r_ifJntStab = rArm_ifJntStab;
 
     ifReceiveSuccess = false;
+    bridge_active_ = false;
     zero_count = 0;
 
     RCLCPP_INFO(node_ptr_->get_logger(), "CtlTransmit bridge initialized.");
@@ -112,12 +123,20 @@ void CtlTransmit::tryReceiveBridgeMsg()
 }
 
 //每次调用：先尝试接受一次消息，再下发一次 bridge_data（不论是否收到新消息）
-DotOutpWrap CtlTransmit::bridgeMsg_getAndPub()
+DotOutpWrap CtlTransmit::bridgeMsg_getAndPub(const std::vector<double>& left_feedback,
+                                          const std::vector<double>& right_feedback)
 {
     if (!node_ptr_) return bridge_data;
 
     //尝试接受一次消息
     tryReceiveBridgeMsg();
+
+    if (joint_stream_mode_) {
+        const auto command = joint_stream_.sample(left_feedback, right_feedback, monotonic_seconds());
+        bridge_data.armTrajMsg.ctlDesMsg.lArm_desMsg = command.left;
+        bridge_data.armTrajMsg.ctlDesMsg.rArm_desMsg = command.right;
+        bridge_data.armTrajMsg.ctlDesMsg.ifInitUseRet = command.reanchor;
+    }
 
     global_debugPub->debug_msg_publish_1(bridge_data.armTrajMsg.ctlDesMsg.lArm_desMsg, bridge_data.armTrajMsg.ctlDesMsg.rArm_desMsg);
 
@@ -148,11 +167,27 @@ void CtlTransmit::bridge_msg_callback(const ctl_msgs_hw::msg::BridgeCtlMsg::Shar
 {
     if (!msg) return;
 
+    if (msg->ctl_trans_mod == 3) {
+        const auto valid = [](const std::vector<double>& values, int size) {
+            return values.size() == static_cast<size_t>(size) &&
+                std::all_of(values.begin(), values.end(), [](double v) { return std::isfinite(v); });
+        };
+        if (!valid(msg->l_arm_des_msg, LARMDOF) || !valid(msg->r_arm_des_msg, RARMDOF)) {
+            RCLCPP_WARN(node_ptr_->get_logger(), "Ignoring invalid absolute joint targets");
+            return;
+        }
+        if (!joint_stream_mode_) joint_stream_ = JointStreamGuard{};
+        joint_stream_.receive(msg->l_arm_des_msg, msg->r_arm_des_msg,
+                              msg->hold_position, msg->if_init_use_ret != 0, monotonic_seconds());
+    }
+    joint_stream_mode_ = msg->ctl_trans_mod == 3;
+
     RCLCPP_INFO(node_ptr_->get_logger(),
         "BridgeCtlMsg received: ctl_trans_mod=%d", msg->ctl_trans_mod);
 
     //将接收到的双臂控制信息装入bridge_data（此处无底盘控制信息）
     ifReceiveSuccess = true;
+    bridge_active_ = true;
 
     //运动控制模式
     bridge_data.armTrajMsg.ctlTransMod = msg->ctl_trans_mod;
