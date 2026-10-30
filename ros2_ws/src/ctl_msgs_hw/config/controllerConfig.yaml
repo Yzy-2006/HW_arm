@@ -214,15 +214,17 @@ gripperControl:
     mode: position
     kp: 10.0
     kd: 2.2
-    pos_min_deg: -10.0
-    pos_max_deg: 100.32378762208262
+    # Expanded 50 degrees outward from the previous [-10.0, 100.3238] range.
+    pos_min_deg: -60.0
+    pos_max_deg: 150.32378762208262
     zero_pos_deg: 0.0
   r_gripper_ctl:
     mode: position
     kp: 10.0
     kd: 2.2
-    pos_min_deg: -34.70927483203165
-    pos_max_deg: 16.961438085103716
+    # Expanded 50 degrees outward from the previous [-34.7093, 16.9614] range.
+    pos_min_deg: -84.70927483203165
+    pos_max_deg: 66.96143808510372
     zero_pos_deg: 0.0
 
 gripperTolerance:

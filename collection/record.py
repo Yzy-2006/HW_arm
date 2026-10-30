@@ -37,6 +37,7 @@ class RecordingDiagnostics:
         self.camera_observed_at = None
         self.previous_ids = {}
         self.duplicate_skips = 0
+        self.motion_skips = 0
 
     def tick(self, now, last_frame_time):
         if self.last_tick is not None:
@@ -78,7 +79,8 @@ class RecordingDiagnostics:
             f"{self.frame_gap_max * 1000:.1f}, "
             f"write_ms(last/avg/max)={self.last_write * 1000:.1f}/"
             f"{self.write_total / max(1, self.write_count) * 1000:.1f}/{self.write_max * 1000:.1f}, "
-            f"png_write_ms=[{per_camera}], duplicate_skips={self.duplicate_skips}, "
+            f"jpeg_write_ms=[{per_camera}], duplicate_skips={self.duplicate_skips}, "
+            f"motion_skips={self.motion_skips}, "
             f"cameras=[{'; '.join(camera_details)}]"
         )
 
@@ -220,6 +222,9 @@ def make_node(config, cameras, *, show_opencv=False):
             super().__init__("towel_recorder")
             self.cache, self.episode = StreamCache(), None
             self.start_time, self.last_frame_time = None, None
+            self.last_saved_q = None
+            self.last_saved_gripper_state = None
+            self.motion_skip_pending = False
             self.camera_ids = {}
             self.diagnostics = None
             self.status = self.create_publisher(Bool, "/towel/recording", 10)
@@ -295,6 +300,9 @@ def make_node(config, cameras, *, show_opencv=False):
                         "start_wall_time_ns": time.time_ns(), "start_monotonic_s": now,
                     }, self.write_image)
                     self.start_time, self.last_frame_time = now, now
+                    self.last_saved_q = None
+                    self.last_saved_gripper_state = None
+                    self.motion_skip_pending = False
                     self.camera_ids = {}
                     self.diagnostics = RecordingDiagnostics(now)
                     response.message = "recording"
@@ -365,7 +373,7 @@ def make_node(config, cameras, *, show_opencv=False):
         def write_image(self, path, image):
             start = time.monotonic()
             try:
-                return cv2.imwrite(path, image, [cv2.IMWRITE_PNG_COMPRESSION, 1])
+                return cv2.imwrite(path, image, [cv2.IMWRITE_JPEG_QUALITY, 90])
             finally:
                 self.diagnostics.camera_write_s[Path(path).parent.name] = time.monotonic() - start
 
@@ -394,7 +402,7 @@ def make_node(config, cameras, *, show_opencv=False):
                 gap = now - self.last_frame_time
                 self.diagnostics.frame_gap = gap
                 self.diagnostics.frame_gap_max = max(self.diagnostics.frame_gap_max, gap)
-                if gap > config["max_frame_gap_s"]:
+                if not self.motion_skip_pending and gap > config["max_frame_gap_s"]:
                     raise ValueError(
                         f"Capture frame gap exceeds limit; episode is incomplete "
                         f"(gap={gap * 1000:.1f} ms, limit={config['max_frame_gap_s'] * 1000:.1f} ms)"
@@ -404,6 +412,23 @@ def make_node(config, cameras, *, show_opencv=False):
                     self.diagnostics.duplicate_skips += 1
                     self.log_diagnostics()
                     return  # Never label the same camera exposure as a fresh image.
+                min_joint_delta = float(config.get("min_joint_delta_rad", 0.0))
+                if min_joint_delta < 0:
+                    raise ValueError("min_joint_delta_rad must be nonnegative")
+                joint_delta = (
+                    max(abs(current - previous) for current, previous in zip(sample["q"], self.last_saved_q))
+                    if self.last_saved_q is not None else float("inf")
+                )
+                gripper_changed = (
+                    self.last_saved_gripper_state is not None
+                    and sample["gripper_state"] != self.last_saved_gripper_state
+                )
+                if (self.last_saved_q is not None and min_joint_delta > 0
+                        and joint_delta < min_joint_delta and not gripper_changed):
+                    self.diagnostics.motion_skips += 1
+                    self.motion_skip_pending = True
+                    self.log_diagnostics()
+                    return  # Keep sampling until the next meaningful motion.
                 sample.update(timestamp_s=now-self.start_time, monotonic_s=now,
                               ros_time_s=self.get_clock().now().nanoseconds * 1e-9,
                               camera_timestamps=camera_meta)
@@ -414,6 +439,9 @@ def make_node(config, cameras, *, show_opencv=False):
                 finally:
                     self.diagnostics.wrote(time.monotonic() - write_start)
                 self.last_frame_time, self.camera_ids = now, ids
+                self.last_saved_q = list(sample["q"])
+                self.last_saved_gripper_state = list(sample["gripper_state"])
+                self.motion_skip_pending = False
                 self.log_diagnostics()
             except Exception as exc:
                 self.log_diagnostics(force=True, failure=True)

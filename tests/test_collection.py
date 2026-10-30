@@ -86,7 +86,7 @@ def test_abort_short_and_discard_never_become_exportable(tmp_path):
 
 def test_corrupt_image_and_gap_are_rejected(tmp_path):
     path=write_episode(tmp_path)
-    image=path/'images/head/000000.png'
+    image=path/'images/head/000000.jpg'
     original=image.read_bytes()
     image.write_bytes(b'broken')
     with pytest.raises(ValueError,match='corrupt image'): load_episode(path)

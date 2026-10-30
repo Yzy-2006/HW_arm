@@ -36,7 +36,7 @@ make motion PI05_SLOW_FACTOR=0.1
 - `lerobot`：本地 LeRobot `config.json` checkpoint，例如 ACT。
 
 启动 worker 的终端不要执行 `.venv-robot/bin/activate` 或 `scripts/env.sh`。所有 Makefile
-目标会在命令内部准备自己的环境；worker 使用 `conda run`，机器人目标使用 `.venv-robot`
+目标会在命令内部准备自己的环境；worker 启动器自动激活指定的 Conda 环境，机器人目标使用 `.venv-robot`
 和 `scripts/env.sh`。
 
 ## 前置检查
@@ -78,6 +78,11 @@ make pi05
 ```text
 PI05 worker listening on 127.0.0.1:8765
 ```
+
+PI05 每次推理输出 **50 步动作**，推理积分步数默认为 **10 步**；两者含义不同。
+参数写在 `config/pi05_deployment.yaml` 的 `worker.action_horizon` 和 `worker.num_steps`，
+`make pi05` 会自动读取。`action_horizon` 用于校验模型原生输出，当前模型需保持 50。
+完整参数表和执行时序见 [PI05 动作与时序](PI05_DEPLOYMENT.md#动作与时序)。
 
 ## 部署 ACT
 
@@ -203,6 +208,31 @@ make replay ARGS="--dataset /home/yanziyu/datasets/fold-towel-93 --episode 0 --s
 bridge 会使用 URDF 关节限位、每周期步长限制和已标定的夹爪 open/closed 端点。
 当前部署默认使用 `initialPD.yaml` 的 `mid` 中刚度配置（`rigidity_mode: 2`），与 VR
 遥操作默认等级一致；如需修改刚度，应同时修改 `pd_level` 和 `rigidity_mode`。
+
+## 停止 worker 与释放显存
+
+先停止 `make motion` / `make bridge`，再在 `make pi05` / `make act` 终端按
+`Ctrl+C`。停止 bridge 仅断开推理连接，worker 会继续保留模型，便于重连。
+
+worker 启动日志会显示 PID 和 Python 路径。启动器转发 `SIGINT` / `SIGTERM`；
+若 worker 5 秒后仍未退出，发送 `SIGTERM`，再等 5 秒后强制终止。等待
+`Worker process reaped` 日志后再启动下一个模型。端口会在加载模型前预留，避免
+重复启动在占用显存后才发现端口冲突。
+
+JAX 的显存池在 worker 存活期间可能保持高占用，进程退出后才会释放 CUDA
+上下文。`torch.cuda.empty_cache()` 不会释放 JAX worker 的显存。
+
+如果旧版启动方式留下后台进程，先查看：
+
+```bash
+nvidia-smi
+pgrep -af '[p]ython.*deployment/pi05_worker.py'
+ps -p <PID> -o pid,ppid,stat,args
+```
+
+确认 PID 是要停止的 worker 后，执行 `kill -TERM <PID>`，再用 `nvidia-smi` 检查。
+如果仍存活且确认不需要该进程，执行 `kill -KILL <PID>`。不要批量终止所有 Python
+进程，以免影响机器人控制节点。
 
 ## 常见日志
 

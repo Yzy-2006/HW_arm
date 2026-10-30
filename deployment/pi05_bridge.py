@@ -331,10 +331,11 @@ def create_bridge_node(args):
     token = args.token if args.token is not None else str(worker_cfg.get("token", ""))
     task = str(config.get("task", camera_cfg.get("task", "fold a towel with both arms")))
     rate_hz = float(bridge_cfg.get("rate_hz", camera_cfg.get("fps", 30)))
+    action_rate_hz = float(bridge_cfg.get("action_rate_hz", camera_cfg.get("fps", 30)))
     state_timeout_s = float(bridge_cfg.get("state_timeout_s", 0.25))
     replan_interval_s = float(bridge_cfg.get("replan_interval_s", 0.25))
     max_action_age_s = float(bridge_cfg.get("max_action_age_s", 1.0))
-    for name, value in (("rate_hz", rate_hz), ("state_timeout_s", state_timeout_s),
+    for name, value in (("rate_hz", rate_hz), ("action_rate_hz", action_rate_hz), ("state_timeout_s", state_timeout_s),
                         ("replan_interval_s", replan_interval_s), ("max_action_age_s", max_action_age_s)):
         if not np.isfinite(value) or value <= 0:
             raise ValueError(f"{name} must be finite and positive")
@@ -424,6 +425,7 @@ def create_bridge_node(args):
                 f"PI05 bridge started in {'MOTION' if self.motion else 'DRY-RUN'} "
                 f"mode; worker={worker_host}:{worker_port} task={task!r} "
                 f"pd_level={pd_level} rigidity_mode={rigidity_mode} "
+                f"rate_hz={rate_hz:g} action_rate_hz={action_rate_hz:g} "
                 f"slow_factor={slow_factor:g} max_step_rad={max_step.max():g}"
             )
 
@@ -533,7 +535,7 @@ def create_bridge_node(args):
                         # LeRobot select_action supplies one queued target per
                         # request; it has no future horizon to latency-align.
                         observed_at = now if len(actions) == 1 else self.last_request_at
-                        self.chunk = ActionChunk(actions, observed_at, rate_hz, max_action_age_s)
+                        self.chunk = ActionChunk(actions, observed_at, action_rate_hz, max_action_age_s)
                         if self.chunk.at(now) is None:
                             raise ValueError("Inference result is already expired")
                 if self.pending is None and (

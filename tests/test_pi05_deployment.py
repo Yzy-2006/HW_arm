@@ -6,6 +6,7 @@ from threading import Event
 
 import numpy as np
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "deployment"))
@@ -14,7 +15,55 @@ from pi05_bridge import GripperState, limit_action, load_joint_limits, load_pd  
 from pi05_common import recv_packet, send_packet  # noqa: E402
 from pi05_worker import _is_openpi_checkpoint  # noqa: E402
 from pi05_bridge import ActionChunk, create_bridge_node  # noqa: E402
-from pi05_worker import PolicyRunner  # noqa: E402
+from pi05_worker import PolicyRunner, parse_args  # noqa: E402
+
+
+def test_worker_reads_yaml_inference_settings_and_cli_overrides(tmp_path):
+    config = tmp_path / "deployment.yaml"
+    config.write_text(yaml.safe_dump({"worker": {"num_steps": 7, "action_horizon": 50}}))
+    args = parse_args(["--config", str(config), "--model", "/unused"])
+    assert args.num_steps == 7
+    assert args.action_horizon == 50
+    args = parse_args(["--config", str(config), "--model", "/unused", "--num-steps", "3"])
+    assert args.num_steps == 3
+    assert parse_args(["--model", "/unused"]).num_steps == 10
+
+
+@pytest.mark.parametrize("settings", [
+    {"num_steps": 0}, {"num_steps": 1.5}, {"num_steps": True},
+    {"action_horizon": -1}, {"action_horizon": 1001},
+])
+def test_worker_rejects_invalid_yaml_inference_settings(tmp_path, settings):
+    config = tmp_path / "deployment.yaml"
+    config.write_text(yaml.safe_dump({"worker": settings}))
+    with pytest.raises(SystemExit) as error:
+        parse_args(["--config", str(config), "--model", "/unused"])
+    assert error.value.code == 2
+
+
+def test_yaml_integration_steps_reach_openpi_loader_and_horizon_is_checked(tmp_path, monkeypatch):
+    import pi05_worker
+
+    (tmp_path / "inference.py").touch()
+    (tmp_path / "step-49999/params").mkdir(parents=True)
+    calls = []
+
+    def load_policy(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(_model=SimpleNamespace(action_horizon=50))
+
+    monkeypatch.setitem(sys.modules, "jax", SimpleNamespace(devices=lambda: [SimpleNamespace(platform="gpu")]))
+    monkeypatch.setattr(pi05_worker, "_load_openpi_inference_module",
+                        lambda path: SimpleNamespace(load_policy=load_policy))
+    config = tmp_path / "deployment.yaml"
+    config.write_text(yaml.safe_dump({"worker": {"num_steps": 7, "action_horizon": 50}}))
+    args = parse_args(["--config", str(config), "--model", str(tmp_path), "--checkpoint", "step-49999"])
+    runner = PolicyRunner(args.model, args.device, args.allow_cpu, {}, args.checkpoint,
+                          args.num_steps, args.action_horizon)
+    assert runner.action_horizon == 50
+    assert calls == [{"checkpoint": str(tmp_path / "step-49999"), "num_steps": 7}]
+    with pytest.raises(ValueError, match="model produces 50 steps"):
+        PolicyRunner(str(tmp_path), "cuda", False, {}, "step-49999", 7, 25)
 
 
 def test_pi05_protocol_round_trip():
@@ -95,6 +144,10 @@ def test_openpi_keeps_the_entire_absolute_action_horizon():
     payload = {"state": np.ones(16), "task": "fold", "images": {
         "head": "", "left_wrist": "", "right_wrist": ""}}
     np.testing.assert_array_equal(runner.infer(payload), actions)
+    runner.action_horizon = 25
+    with pytest.raises(ValueError, match="action_horizon=25"):
+        runner.infer(payload)
+    runner.action_horizon = 50
     actions[-1, 0] = np.nan
     with pytest.raises(ValueError, match="non-finite"):
         runner.infer(payload)
@@ -114,7 +167,7 @@ class FakePool:
 
 
 @pytest.fixture
-def bridge(monkeypatch):
+def bridge(monkeypatch, tmp_path, request):
     import pi05_bridge as module
 
     clock = [10.0]
@@ -137,7 +190,7 @@ def bridge(monkeypatch):
             self.subscriptions.append(kwargs)
 
         def create_timer(self, period, callback):
-            return SimpleNamespace(cancel=lambda: None)
+            return SimpleNamespace(period=period, cancel=lambda: None)
 
         def get_clock(self):
             return SimpleNamespace(now=lambda: SimpleNamespace(to_msg=lambda: clock[0]))
@@ -168,7 +221,13 @@ def bridge(monkeypatch):
         monkeypatch.setitem(sys.modules, name, mod)
     monkeypatch.setattr(module, "ThreadPoolExecutor", FakePool)
     monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
-    args = SimpleNamespace(config=ROOT / "config/pi05_deployment.yaml", worker_host=None,
+    config = yaml.safe_load((ROOT / "config/pi05_deployment.yaml").read_text())
+    # Control tests use an explicit limit, independent of the operator's tuning.
+    config["bridge"]["max_joint_step_rad"] = 0.02
+    config["bridge"].update(getattr(request, "param", {}))
+    config_path = tmp_path / "deployment.yaml"
+    config_path.write_text(yaml.safe_dump(config))
+    args = SimpleNamespace(config=config_path, worker_host=None,
                            worker_port=None, token=None, slow_factor=None, motion=True)
     node = create_bridge_node(args)
 
@@ -184,6 +243,20 @@ def bridge(monkeypatch):
 
 def complete(node, value=1.0):
     node.pending.set_result({"actions": np.full((50, 16), value).tolist()})
+
+
+@pytest.mark.parametrize("bridge", [{"rate_hz": 60, "action_rate_hz": 15}], indirect=True)
+def test_action_timeline_rate_is_independent_of_control_timer(bridge):
+    node, clock, feedback = bridge
+    node.step()
+    actions = np.repeat(np.arange(50)[:, None], 16, axis=1)
+    node.pending.set_result({"actions": actions.tolist()})
+    clock[0] += 0.11
+    feedback()
+    node.step()
+    assert node.control_timer.period == pytest.approx(1 / 60)
+    assert node.chunk.rate_hz == 15
+    np.testing.assert_array_equal(node.chunk.at(clock[0]), np.ones(16))
 
 
 def test_continuous_mode_and_latest_feedback_limit(bridge):

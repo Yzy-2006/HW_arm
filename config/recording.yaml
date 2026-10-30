@@ -10,6 +10,10 @@ max_stream_skew_s: 0.10
 max_camera_age_s: 0.15
 max_camera_skew_s: 0.07
 max_frame_gap_s: 0.10
+# Drop samples whose largest absolute joint-position change from the last
+# saved sample is below this threshold. Units: radians; gripper changes are
+# always retained even when the arms are stationary.
+min_joint_delta_rad: 0.01
 # Optional: publish all three captured RGB streams to RViz. This does not publish
 # robot commands and does not change the frames written to disk.
 publish_rviz: false

@@ -194,7 +194,7 @@ pi05:
 	@if ! command -v conda >/dev/null 2>&1; then echo "conda command not found; initialize Conda before running make pi05" >&2; exit 2; fi
 	@if [[ ! -d "$(PI05_MODEL)/$(PI05_CHECKPOINT)/params" ]]; then echo "OpenPI checkpoint not found: $(PI05_MODEL)/$(PI05_CHECKPOINT)/params" >&2; exit 2; fi
 	cd "$(ROOT)"
-	conda run --no-capture-output -n "$(PI05_ENV)" python deployment/pi05_worker.py --model "$(PI05_MODEL)" --checkpoint "$(PI05_CHECKPOINT)" --host "$(PI05_HOST)" --port "$(PI05_PORT)" $(PI05_ARGS)
+	exec python3 scripts/run_policy_worker.py --env "$(PI05_ENV)" -- --config "$(PI05_CONFIG)" --model "$(PI05_MODEL)" --checkpoint "$(PI05_CHECKPOINT)" --host "$(PI05_HOST)" --port "$(PI05_PORT)" $(PI05_ARGS)
 
 bridge:
 	@$(ROBOT_ENV)
@@ -214,8 +214,7 @@ act:
 	@if ! command -v conda >/dev/null 2>&1; then echo "conda command not found; initialize Conda before running make act" >&2; exit 2; fi
 	@if [[ ! -f "$(ACT_CHECKPOINT)/config.json" ]]; then echo "ACT checkpoint not found: $(ACT_CHECKPOINT)" >&2; exit 2; fi
 	cd "$(ROOT)"
-	conda run --no-capture-output -n "$(ACT_ENV)" python -c 'import torch; print("ACT environment:", __import__("sys").executable, "torch", torch.__version__, "cuda=", torch.cuda.is_available())'
-	conda run --no-capture-output -n "$(ACT_ENV)" python deployment/pi05_worker.py --model "$(ACT_CHECKPOINT)" --host "$(ACT_HOST)" --port "$(ACT_PORT)" $(ACT_ARGS)
+	exec python3 scripts/run_policy_worker.py --env "$(ACT_ENV)" -- --model "$(ACT_CHECKPOINT)" --host "$(ACT_HOST)" --port "$(ACT_PORT)" $(ACT_ARGS)
 
 clean-build:
 	@echo "Build artifacts are not deleted automatically. Remove only the specific ros2_ws/build, install and log directories when intentional."

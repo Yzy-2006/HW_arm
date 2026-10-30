@@ -90,7 +90,7 @@ class EpisodeWriter:
             raise RuntimeError("Episode is closed")
         paths = {}
         for name, img in images.items():
-            relative = Path("images") / name / f"{self.frames:06d}.png"
+            relative = Path("images") / name / f"{self.frames:06d}.jpg"
             path = self.path / relative
             path.parent.mkdir(exist_ok=True, parents=True)
             if not self.image_write(str(path), img):

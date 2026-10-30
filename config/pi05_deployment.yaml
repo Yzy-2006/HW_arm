@@ -15,12 +15,20 @@ worker:
   port: 8765
   token: ""
   timeout_s: 5.0
+  # Flow-matching integration steps per inference, not output action count.
+  num_steps: 20
+  # Expected native action chunk length. The published inference.py fixes this
+  # at 50; changing this value alone cannot change the model architecture.
+  action_horizon: 50
 
 bridge:
   rate_hz: 30
+  # Time spacing of predicted actions is 1 / action_rate_hz seconds.
+  # Keep 30 to match the dataset; independent of the bridge control timer.
+  action_rate_hz: 30
   state_timeout_s: 0.25
   # Refresh the horizon asynchronously; control and feedback never wait for it.
-  replan_interval_s: 0.25
+  replan_interval_s: 1.5
   # Reject actions older than this observation age, even if inference succeeds.
   max_action_age_s: 1.0
   jpeg_quality: 80
@@ -30,7 +38,7 @@ bridge:
   # Maximum target offset from fresh joint feedback at each bridge tick.
   # This is deliberately small
   # for first tests; increase only after replay and dry-run checks pass.
-  max_joint_step_rad: 0.1
+  max_joint_step_rad: 0.3
   # Optional multiplier for slow-motion observation. Override temporarily with
   # `--slow-factor 0.1` instead of changing this file.
   slow_factor: 1.0

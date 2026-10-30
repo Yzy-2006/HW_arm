@@ -15,6 +15,8 @@ import importlib.util
 import io
 import json
 import logging
+import os
+import signal
 import socket
 import sys
 import time
@@ -27,6 +29,10 @@ from pi05_common import decode_bytes, recv_packet, send_packet
 
 
 LOG = logging.getLogger("pi05_worker")
+
+
+def _request_shutdown(_signum, _frame):
+    raise KeyboardInterrupt
 
 
 def _load_pi05_policy_class():
@@ -62,6 +68,7 @@ class PolicyRunner:
         camera_map: dict[str, str],
         checkpoint: str,
         num_steps: int,
+        action_horizon: int = 50,
     ):
         model_path = str(Path(model_path).expanduser())
         model_dir = Path(model_path)
@@ -69,6 +76,7 @@ class PolicyRunner:
             raise FileNotFoundError(f"Policy path does not exist: {model_path}")
         self.model_path = model_path
         self.camera_map = camera_map
+        self.action_horizon = action_horizon
         self.backend = "openpi" if _is_openpi_checkpoint(model_dir) else "lerobot"
 
         if self.backend == "openpi":
@@ -143,10 +151,17 @@ class PolicyRunner:
         LOG.info("Loading OpenPI/JAX PI05 policy from %s", checkpoint_path)
         module = _load_openpi_inference_module(model_dir)
         self.policy = module.load_policy(checkpoint=str(checkpoint_path), num_steps=num_steps)
+        native_horizon = getattr(getattr(self.policy, "_model", None), "action_horizon", None)
+        if native_horizon is not None and native_horizon != self.action_horizon:
+            raise ValueError(
+                f"Configured action_horizon={self.action_horizon}, but the model produces {native_horizon} steps. "
+                "Match worker.action_horizon to the model's inference.py; this setting does not resize the model."
+            )
         self.device = ", ".join(str(item) for item in devices)
         self.input_camera_keys = ["head", "left_wrist", "right_wrist"]
         LOG.info("OpenPI devices: %s", devices)
-        LOG.info("OpenPI action horizon: 50; worker returns absolute target chunks")
+        LOG.info("OpenPI action horizon: %d; num_steps=%d; worker returns absolute target chunks",
+                 self.action_horizon, num_steps)
 
     def _decode_image(self, encoded: str) -> np.ndarray:
         from PIL import Image
@@ -213,6 +228,9 @@ class PolicyRunner:
                 actions = actions[0]
             if actions.ndim != 2 or actions.shape[1] != 16 or actions.shape[0] < 1:
                 raise ValueError(f"Expected OpenPI actions with shape (horizon, 16), got {actions.shape}")
+            expected_horizon = getattr(self, "action_horizon", 50)
+            if len(actions) != expected_horizon:
+                raise ValueError(f"Expected action_horizon={expected_horizon}, got {len(actions)} steps")
             if not np.isfinite(actions).all():
                 raise ValueError("OpenPI action contains non-finite values")
             return actions.tolist()
@@ -285,8 +303,9 @@ def _handle_client(
                 send_packet(conn, {"ok": False, "request_id": request.get("request_id"), "error": str(exc)})
 
 
-def main() -> int:
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", help="Deployment YAML containing worker.num_steps and worker.action_horizon")
     parser.add_argument("--model", required=True, help="Local PI05 checkpoint directory")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
@@ -298,48 +317,77 @@ def main() -> int:
         default="step-19999",
         help="OpenPI checkpoint directory inside --model (ignored for LeRobot checkpoints)",
     )
-    parser.add_argument("--num-steps", type=int, default=10, help="OpenPI flow integration steps")
+    parser.add_argument("--num-steps", type=int, help="Override worker.num_steps (default: 10)")
+    parser.add_argument("--action-horizon", type=int, help="Override expected OpenPI action count (default: 50)")
     parser.add_argument(
         "--camera-map",
         default="{}",
         help="JSON mapping from policy camera suffix to bridge camera name",
     )
     parser.add_argument("--log-level", default="INFO")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    worker_cfg = {}
+    if args.config:
+        import yaml
+
+        try:
+            config = yaml.safe_load(Path(args.config).expanduser().read_text())
+        except (OSError, yaml.YAMLError) as exc:
+            parser.error(f"Cannot read deployment config: {exc}")
+        if not isinstance(config, dict) or not isinstance(config.get("worker", {}), dict):
+            parser.error("Deployment config and its worker section must be mappings")
+        worker_cfg = config.get("worker", {})
+    for name, default in (("num_steps", 10), ("action_horizon", 50)):
+        value = getattr(args, name)
+        if value is None:
+            value = worker_cfg.get(name, default)
+        if type(value) is not int or value <= 0 or (name == "action_horizon" and value > 1000):
+            parser.error(f"worker.{name} must be a positive integer" + (" <= 1000" if name == "action_horizon" else ""))
+        setattr(args, name, value)
+    return args
+
+
+def main() -> int:
+    args = parse_args()
     logging.basicConfig(level=getattr(logging, args.log_level.upper()), format="%(asctime)s %(levelname)s %(message)s")
+    signal.signal(signal.SIGINT, _request_shutdown)
+    signal.signal(signal.SIGTERM, _request_shutdown)
+    LOG.info("Policy worker pid=%d interpreter=%s", os.getpid(), sys.executable)
     try:
         camera_map = json.loads(args.camera_map)
         if not isinstance(camera_map, dict):
             raise ValueError("--camera-map must be a JSON object")
-        runner = PolicyRunner(
-            args.model,
-            args.device,
-            args.allow_cpu,
-            camera_map,
-            args.checkpoint,
-            args.num_steps,
-        )
-    except Exception:
-        LOG.exception("Could not load PI05 policy")
-        return 2
-
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind((args.host, args.port))
-    server.listen(1)
-    LOG.info("PI05 worker listening on %s:%d", args.host, args.port)
-    try:
-        while True:
-            conn, address = server.accept()
-            LOG.info("Bridge connected from %s", address)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
+            server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            # Reserve the port before allocating GPU memory for another model.
+            server.bind((args.host, args.port))
             try:
-                _handle_client(conn, runner, args.token)
-            except (ConnectionError, OSError, ValueError) as exc:
-                LOG.warning("Bridge disconnected: %s", exc)
+                runner = PolicyRunner(
+                    args.model,
+                    args.device,
+                    args.allow_cpu,
+                    camera_map,
+                    args.checkpoint,
+                    args.num_steps,
+                    args.action_horizon,
+                )
+            except Exception:
+                LOG.exception("Could not load policy")
+                return 2
+            server.listen(1)
+            LOG.info("PI05 worker listening on %s:%d", args.host, args.port)
+            while True:
+                conn, address = server.accept()
+                LOG.info("Bridge connected from %s", address)
+                try:
+                    _handle_client(conn, runner, args.token)
+                except (ConnectionError, OSError, ValueError) as exc:
+                    LOG.warning("Bridge disconnected: %s", exc)
     except KeyboardInterrupt:
-        LOG.info("Stopping PI05 worker")
-    finally:
-        server.close()
+        LOG.info("Stopping policy worker pid=%d; GPU memory is released when this process exits", os.getpid())
+    except (OSError, ValueError):
+        LOG.exception("Could not start policy worker")
+        return 2
     return 0
 
 
