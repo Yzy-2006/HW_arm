@@ -193,6 +193,9 @@ typedef struct{
     double errTol;                  //误差容差
     int ifPrintLevel;               //是否打印优化日志
     bool ifPrintOptiTime;           //是否打印计算时间
+    // Cartesian IK safety: limit the change of each joint target between IK updates.
+    bool joint_step_limit_enabled = true;
+    std::vector<double> max_joint_step_rad;
 }optimizerCtl;
 
 // ----------------------------------------

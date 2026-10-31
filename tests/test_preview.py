@@ -30,6 +30,14 @@ def test_make_preview_uses_opencv_without_starting_ros_launch():
     assert "ros2 launch" not in result.stdout
 
 
+def test_make_record_starts_the_recorder_with_opencv_windows():
+    result = make_dry_run("record")
+
+    assert result.returncode == 0
+    assert "collection/record.py" in result.stdout
+    assert "--show-opencv" in result.stdout
+
+
 def test_make_record_opencv_keeps_the_recorder_and_enables_windows():
     result = make_dry_run("record-opencv")
 

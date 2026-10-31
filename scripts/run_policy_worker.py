@@ -70,6 +70,7 @@ def run_supervised(command: list[str], shutdown_timeout: float = 5.0) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--env", required=True, help="Conda environment name")
+    parser.add_argument("--benchmark", action="store_true", help="Run the offline PI05 benchmark instead of the server")
     parser.add_argument("--shutdown-timeout", type=float, default=5.0)
     parser.add_argument("worker_args", nargs=argparse.REMAINDER)
     args = parser.parse_args()
@@ -91,7 +92,7 @@ def main() -> int:
         'set -e\nsource "$1/etc/profile.d/conda.sh"\nconda activate "$2"\n'
         'exec "$CONDA_PREFIX/bin/python" "$3" "${@:4}"',
         "policy-worker", conda_base, args.env,
-        str(ROOT / "deployment/pi05_worker.py"), *worker_args,
+        str(ROOT / "deployment" / ("benchmark_pi05.py" if args.benchmark else "pi05_worker.py")), *worker_args,
     ]
     return run_supervised(command, args.shutdown_timeout)
 

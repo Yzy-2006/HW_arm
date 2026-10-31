@@ -37,7 +37,7 @@ make check
 | 1 | `make servo` | EtherCAT 找到从站并进入 OPERATIONAL；不能出现 `slave count = 0`、`No socket connection` 或“调试模式”。机械臂只可向已确认安全的零位运动。 |
 | 2 | `make arms` | 双臂中层节点持续运行，没有初始化或运动学错误。 |
 | 3 | `make robot` | 上层节点持续运行；确认启动后的参考姿态和周围空间安全。 |
-| 4 | `make record` | 日志显示已就绪并提供 `/towel/record`、`/towel/discard`；此时尚未开始 episode。 |
+| 4 | `make record` | 日志显示已就绪并提供 `/towel/record`、`/towel/discard`，同时打开三个 OpenCV 窗口；此时尚未开始 episode。 |
 | 5 | `make vr` | 头显连接后进入 **Virtual Reality**，再回终端按 **Enter**；看到“开始发布位姿增量”后才可操作。 |
 
 开始 VR 前，双手保持不扣扳机。先做一次最小幅度的左右单臂动作，确认控制链仍然正确，
@@ -66,18 +66,11 @@ make check
 录制开始前双手都不要扣扳机；先确认两臂静止，再按左 B。夹爪状态为 `-1`、相机断流或
 采集器报错时，先停止或丢弃当前片段、修复问题，不要继续示教。
 
-## 3. 可选：带 OpenCV 窗口的正式采集
+## 3. 相机窗口与正式采集
 
-需要在正式采集时持续查看三路相机时，将标准流程的终端 4 命令替换为：
-
-```bash
-make record-opencv
-```
-
-它仍是唯一的采集器，会正常提供 `/towel/record` 和 `/towel/discard`，同时打开
-`Head camera`、`Left wrist camera`、`Right wrist camera` 三个 OpenCV 窗口；不需要额外
-RViz 或第六个终端。按 `q` 或 `Esc` 只关闭这三个窗口，采集器和正在进行的 episode 会继续
-运行。需要结束或保存录制时，仍使用左 B；不要通过关闭窗口中止录制。
+`make record` 是唯一的相机采集器，同时打开 `Head camera`、`Left wrist camera`、
+`Right wrist camera` 三个 OpenCV 窗口；不需要额外终端。按 `q` 或 `Esc` 只关闭窗口，采集器
+和正在进行的 episode 会继续运行。`make record-opencv` 只是兼容别名。
 
 `make preview` 也会占用三台相机，只用于开始前检查。它不能和 `make record` 或
 `make record-opencv` 同时运行。

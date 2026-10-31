@@ -1,8 +1,10 @@
 #include "robot_config/config.h"
 
 #include <Eigen/Dense>
+#include <algorithm>
 #include <fstream>
 #include <sstream>
+#include <cmath>
 #include <pinocchio/multibody/fwd.hpp>
 #include <pinocchio/multibody/joint/joint-free-flyer.hpp>
 
@@ -1526,6 +1528,8 @@ solverControlParam::solverControlParam()
     mOptiCtlData.errTol          = 1e-5;
     mOptiCtlData.ifPrintLevel    = 0;
     mOptiCtlData.ifPrintOptiTime = false;
+    mOptiCtlData.joint_step_limit_enabled = true;
+    mOptiCtlData.max_joint_step_rad.assign(14, 0.025);
 
     // optiPrintMsgCtl 默认值
     mPrintMsgData.dispJntInfo       = false;
@@ -1547,6 +1551,8 @@ solverControlParam::solverControlParam(const std::string& yaml_path)
     mOptiCtlData.errTol          = 1e-5;
     mOptiCtlData.ifPrintLevel    = 0;
     mOptiCtlData.ifPrintOptiTime = false;
+    mOptiCtlData.joint_step_limit_enabled = true;
+    mOptiCtlData.max_joint_step_rad.assign(14, 0.025);
 
     mPrintMsgData.dispJntInfo       = false;
     mPrintMsgData.use_visualization = false;
@@ -1601,6 +1607,33 @@ bool solverControlParam::loadFromYaml(const std::string& yaml_path){
                       << "配置节点，使用默认求解器参数" << std::endl;
         }
 
+        // ---- IK 关节目标跳变保护 ----
+        // A scalar applies to every joint; a 14-element sequence allows
+        // joints with different safe speeds to be tuned independently.
+        if(config["jointTargetSafety"]){
+            const auto& safety = config["jointTargetSafety"];
+            mOptiCtlData.joint_step_limit_enabled = safety["enabled"].as<bool>(true);
+            if(safety["max_delta_rad"]){
+                std::vector<double> limits;
+                const auto& node = safety["max_delta_rad"];
+                if(node.IsSequence()){
+                    limits.reserve(node.size());
+                    for(std::size_t i = 0; i < node.size(); ++i){
+                        limits.push_back(node[i].as<double>());
+                    }
+                }else{
+                    limits.assign(14, node.as<double>());
+                }
+                if(limits.size() == 14 && std::all_of(
+                       limits.begin(), limits.end(),
+                       [](double value){ return std::isfinite(value) && value > 0.0; })){
+                    mOptiCtlData.max_joint_step_rad = std::move(limits);
+                }else{
+                    std::cerr << "警告：jointTargetSafety.max_delta_rad 无效，使用默认 0.025 rad" << std::endl;
+                }
+            }
+        }
+
         loaded_ = true;
         std::cout << "===============求解器控制配置加载完毕==============="
                   << std::endl;
@@ -1650,6 +1683,18 @@ void solverControlParam::printConfig() const{
               << mOptiCtlData.template_times << std::endl;
     std::cout << "  误差容差 (errorTolerance):     "
               << mOptiCtlData.errTol << std::endl;
+    std::cout << "  关节目标跳变保护: "
+              << (mOptiCtlData.joint_step_limit_enabled ? "开启" : "关闭")
+              << ", 步长(rad): ";
+    if(mOptiCtlData.max_joint_step_rad.empty()){
+        std::cout << "无";
+    }else{
+        std::cout << mOptiCtlData.max_joint_step_rad.front();
+        if(mOptiCtlData.max_joint_step_rad.size() > 1){
+            std::cout << " ... (" << mOptiCtlData.max_joint_step_rad.size() << " joints)";
+        }
+    }
+    std::cout << std::endl;
 
     // ---- 打印控制参数 ----
     std::cout << "  --- 信息打印控制参数 ---" << std::endl;

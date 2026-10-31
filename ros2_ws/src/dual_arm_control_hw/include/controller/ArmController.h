@@ -549,6 +549,10 @@ class FrameTrackSol{
         //上一轮控制模式
         int controlMod_lastTemp = 0;
 
+        bool joint_step_limit_enabled = true;
+        std::vector<double> max_joint_step_rad;
+        bool joint_step_limit_reported = false;
+
         //----------
         //轨迹修正代码 -- 描述站立情况下torso相对于universe的位姿
         std::vector<double> torso_pos_l = {
@@ -557,6 +561,13 @@ class FrameTrackSol{
          std::vector<double> torso_pos_r = {
             0.0, 0.0, 0.0
         };
+
+        // Limit IK branch switches so a singular-pose solution cannot create
+        // an unsafe one-cycle joint target jump.
+        bool limitIKJointStep(
+            KDL::JntArray& solution,
+            const KDL::JntArray& seed,
+            std::size_t joint_offset);
 
         //成员函数 -- 求解单次逆解的成员函数
         void IK_Traj_solve(

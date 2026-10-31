@@ -47,6 +47,10 @@ make check-control
 四个终端都需保持运行；这套流程**不会启动采集器**，因此不会打开 RealSense 或创建 episode。
 不要同时启动第二份伺服、双臂、上层或 VR 进程，以免重复发布同名控制话题。
 在一个终端按 `Ctrl+C` 只会停止该终端的程序，不会停止其他三个节点，也不能替代物理急停。
+
+需要相机画面时，在另一个终端启动 `make record`；它会由唯一的采集器同时打开
+`Head camera`、`Left wrist camera`、`Right wrist camera` 三个 OpenCV 窗口。终端 5 仍运行
+原来的 `make vr`。不要再启动第二个预览或采集器；`make record-opencv` 只是兼容别名。
 如果只做级别 A 的 XR 连接检查，可使用 `make vr`；这同样自动初始化环境，但不启动下游控制节点，不能据此证明机器人会按预期运动。
 若网页已进入 VR、但扳机和按键都没有 ROS 响应，使用下面的纯诊断命令：
 

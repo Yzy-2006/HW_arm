@@ -20,6 +20,7 @@ PI05_CHECKPOINT ?= step-19999
 PI05_HOST ?= 127.0.0.1
 PI05_PORT ?= 8765
 PI05_ARGS ?=
+BENCH_ARGS ?=
 ACT_CHECKPOINT ?= $(ROOT)/outputs/act_fold_towel_b12/checkpoints/100000/pretrained_model
 ACT_ENV ?= lerobot
 ACT_HOST ?= 127.0.0.1
@@ -40,20 +41,21 @@ export TOWEL_OPENROBOTS_PREFIX="$(OPENROBOTS_PREFIX)"
 source "$(ROOT)/scripts/env.sh"
 endef
 
-.PHONY: help env check check-control check-record check-visualize build test launch teleop experiment teleop-watch preview camera-list servo arms robot vr vr-debug record record-opencv record-rviz watch watch-arm calibrate calibrate-arm-zero scan-arm-can save-arm-zero validate-data export-data pi05 act bridge motion replay clean-build
+.PHONY: help env check check-control check-record check-visualize build test launch teleop experiment teleop-watch preview camera-list servo arms robot vr vr-opencv vr-debug record record-opencv record-rviz watch watch-arm calibrate calibrate-arm-zero scan-arm-can save-arm-zero validate-data export-data pi05 pi05-bench act bridge motion replay clean-build
 
 help:
 	@echo "Towel task commands"
 	@echo "  make check                  Read-only dependency check"
 	@echo "  make build                  Build the ROS workspace"
 	@echo "  make vr-debug               Diagnose XR controller events without publishing control commands"
+	@echo "  make vr-opencv              Compatibility alias for make vr; cameras come from make record"
 	@echo "  make watch                  Observe /towel/gripper_state (override WATCH_TOPIC=... )"
 	@echo "  make watch-arm SIDE=both RATE=3  Print one or both arms' joint angles at a controlled rate"
 	@echo "  make servo                  Start only the servo node"
 	@echo "  make camera-list            List connected RealSense serial numbers"
 	@echo "  make preview                Show three OpenCV camera windows without recording"
-	@echo "  make record                 Start only the passive recorder"
-	@echo "  make record-opencv          Recorder plus three OpenCV camera windows"
+	@echo "  make record                 Recorder plus three OpenCV camera windows"
+	@echo "  make record-opencv          Compatibility alias for make record"
 	@echo "  make record-rviz            Recorder plus camera topics for RViz"
 	@echo "  make launch ARGS=\"visualize:=true\"  Start optional RViz/TF visualization"
 	@echo "  make calibrate SIDE=left ENDPOINT=open   Capture one gripper endpoint"
@@ -63,6 +65,7 @@ help:
 	@echo "  make validate-data          Validate completed raw episodes"
 	@echo "  make export-data OUTPUT=/absolute/output [EXPORT_CONFIG=...]  Export with the training environment"
 	@echo "  make pi05                         Start the OpenPI PI05 worker"
+	@echo "  make pi05-bench                   Benchmark PI05 inference without robot hardware"
 	@echo "  make act                          Start the LeRobot ACT worker"
 	@echo "  make bridge                       Start the policy bridge in dry-run mode"
 	@echo "  make motion                       Start the policy bridge with motion enabled"
@@ -159,11 +162,10 @@ camera-list:
 
 record:
 	@$(ROBOT_ENV)
-	@python3 "$(ROOT)/collection/record.py"
+	@python3 "$(ROOT)/collection/record.py" --show-opencv
 
 record-opencv:
-	@$(ROBOT_ENV)
-	@python3 "$(ROOT)/collection/record.py" --show-opencv
+	@$(MAKE) --no-print-directory record
 
 record-rviz:
 	@$(ROBOT_ENV)
@@ -172,6 +174,10 @@ record-rviz:
 vr:
 	@$(ROBOT_ENV)
 	@python3 "$(ROOT)/teleop/VR_controller/vr_pose_increment_publisher.py"
+
+vr-opencv:
+	@echo "相机窗口由 make record 启动；vr-opencv 现在只兼容转发到 make vr" >&2
+	@$(MAKE) --no-print-directory vr
 
 vr-debug:
 	@$(ROBOT_ENV)
@@ -195,6 +201,11 @@ pi05:
 	@if [[ ! -d "$(PI05_MODEL)/$(PI05_CHECKPOINT)/params" ]]; then echo "OpenPI checkpoint not found: $(PI05_MODEL)/$(PI05_CHECKPOINT)/params" >&2; exit 2; fi
 	cd "$(ROOT)"
 	exec python3 scripts/run_policy_worker.py --env "$(PI05_ENV)" -- --config "$(PI05_CONFIG)" --model "$(PI05_MODEL)" --checkpoint "$(PI05_CHECKPOINT)" --host "$(PI05_HOST)" --port "$(PI05_PORT)" $(PI05_ARGS)
+
+pi05-bench:
+	set -e
+	cd "$(ROOT)"
+	exec python3 scripts/run_policy_worker.py --env "$(PI05_ENV)" --benchmark -- --config "$(PI05_CONFIG)" --model "$(PI05_MODEL)" --checkpoint "$(PI05_CHECKPOINT)" $(BENCH_ARGS)
 
 bridge:
 	@$(ROBOT_ENV)

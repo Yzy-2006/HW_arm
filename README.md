@@ -52,7 +52,7 @@ cd /home/yanziyu/projects/HW_arm/towel_task
 | 终端 1 | `make servo` | 启动底层伺服，机械臂执行初始回零 |
 | 终端 2 | `make arms` | 启动双臂运动学与轨迹控制 |
 | 终端 3 | `make robot` | 启动上层控制，输出遥操作初始位姿 |
-| 终端 4 | `make record` | 启动唯一的相机采集器；未按左 B 不会创建 episode |
+| 终端 4 | `make record` | 启动唯一的相机采集器和三个 OpenCV 窗口；未按左 B 不会创建 episode |
 | 终端 5 | `make vr` | 启动 VR 输入，接收手柄操作 |
 
 头显连接页面并进入 **Virtual Reality** 后，回到终端 5 按 **Enter**。
@@ -71,13 +71,17 @@ cd /home/yanziyu/projects/HW_arm/towel_task
 
 ```bash
 make preview                         # 三个 OpenCV 窗口检查相机，不启动 ROS 或录制
-make record-opencv                   # 正式采集 + 三个 OpenCV 实时窗口；替代 make record
+make record-opencv                   # make record 的兼容别名
 make record-rviz                     # 可选：向 ROS 发布 RViz 图像话题
 make launch ARGS="visualize:=true"   # 可选：单独启动 RViz、状态桥接和独立 TF
 make watch                           # 观察 /towel/gripper_state；可通过 WATCH_TOPIC=... 改话题
 make calibrate-arm-zero SIDE=left    # 被选中左/右臂零电流；SIDE 可为 left、right、both
 make save-arm-zero SIDE=left TARGET=both  # 同步所选侧关节与末端零位；也可选 joint / cartesian
 ```
+
+`make record` 会在唯一的相机采集器中打开三个 OpenCV 窗口；`make vr` 仍只负责 VR 遥操作。
+不要同时启动 `make preview`、`make record` 或 `make record-opencv`，因为多个 RealSense
+管线会争用相机。
 
 上述命令均为前台进程；在一个终端按 `Ctrl+C` 不会停止其他终端的节点。开始正式采集前，必须先完成相机配置、夹爪标定和空载 VR 检查；完整步骤见[真机数据采集流程](docs/DATA_COLLECTION_WORKFLOW.md)。
 

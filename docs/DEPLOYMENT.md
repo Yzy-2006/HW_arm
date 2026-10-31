@@ -12,11 +12,14 @@ RealSense + ROS2 feedback -> bridge -> TCP -> pi05 或 act worker
 | 命令 | 作用 | 环境 |
 | --- | --- | --- |
 | `make pi05` | 启动 OpenPI/JAX PI05 worker | `pi05-openpi` |
+| `make pi05-bench` | 离线测试 PI05 推理速度，不发送动作 | `pi05-openpi` |
 | `make act` | 启动 LeRobot/PyTorch ACT worker | `lerobot` |
 | `make bridge` | 启动通用 policy bridge，dry-run，不发机器人动作 | `.venv-robot` |
 | `make motion` | 启动通用 policy bridge 并允许真实动作 | `.venv-robot` |
 
 两个 worker 使用同一个默认端口 `127.0.0.1:8765`，同一时间只启动其中一个。
+
+Thor 环境检查、离线测速和持续负载方法见 [Thor PI05 测速指南](PI05_THOR_BENCHMARK.md)。
 
 常用变量：
 

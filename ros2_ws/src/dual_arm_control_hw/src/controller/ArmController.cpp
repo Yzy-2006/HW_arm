@@ -962,6 +962,45 @@ KDL::Frame vector_to_Frame(std::vector<double> vecInp){
 
 //-----------------------------------------
 
+bool FrameTrackSol::limitIKJointStep(
+    KDL::JntArray& solution,
+    const KDL::JntArray& seed,
+    std::size_t joint_offset)
+{
+    if(!joint_step_limit_enabled || solution.rows() != seed.rows()){
+        return false;
+    }
+
+    bool limited = false;
+    for(unsigned int i = 0; i < solution.rows(); ++i){
+        const std::size_t global_index = joint_offset + i;
+        const double max_step = global_index < max_joint_step_rad.size()
+            ? max_joint_step_rad[global_index] : 0.025;
+        const double seed_value = seed(i);
+        const double solution_value = solution(i);
+        if(!std::isfinite(max_step) || max_step <= 0.0 || !std::isfinite(seed_value)){
+            continue;
+        }
+        if(!std::isfinite(solution_value)){
+            solution(i) = seed_value;
+            limited = true;
+            continue;
+        }
+        const double delta = solution_value - seed_value;
+        if(std::abs(delta) > max_step){
+            solution(i) = seed_value + std::copysign(max_step, delta);
+            limited = true;
+        }
+    }
+
+    if(limited && !joint_step_limit_reported){
+        std::cerr << "[IK安全] 检测到关节目标跳变，已启用逐关节步长限幅；"
+                  << "后续周期将继续追踪目标" << std::endl;
+        joint_step_limit_reported = true;
+    }
+    return limited;
+}
+
 //核心成员函数 -- 逆解求解方法
 void FrameTrackSol::IK_Traj_solve(
     KDL::Frame lArm_desPos, KDL::Frame rArm_desPos,
@@ -985,6 +1024,14 @@ void FrameTrackSol::IK_Traj_solve(
         lArmPosRet, rArmPosRet,
         ifUseRet
     );
+
+    // The optimizer can switch IK branches near a singularity. Clamp the
+    // candidate before creating a joint trajectory so the branch switch is
+    // approached over multiple control cycles instead of one burst.
+    if(all_posRes.size() >= 2){
+        limitIKJointStep(all_posRes[0], posInp_l, 0);
+        limitIKJointStep(all_posRes[1], posInp_r, LARMDOF);
+    }
 
     // ---------- 针对连续轨迹进行插值计算 ----------
 
@@ -1035,6 +1082,14 @@ bool FrameTrackSol::init_solver(
     optiPrintMsgCtl mPrintMsgPkg,           //程序打印控制参数
     optimizerCtl m_opti_ctl_msg         //优化器参数
 ){
+    joint_step_limit_enabled = m_opti_ctl_msg.joint_step_limit_enabled;
+    max_joint_step_rad = m_opti_ctl_msg.max_joint_step_rad;
+    joint_step_limit_reported = false;
+    if(max_joint_step_rad.size() < static_cast<std::size_t>(JntAngConf_l.size() + JntAngConf_r.size())){
+        max_joint_step_rad.assign(
+            static_cast<std::size_t>(JntAngConf_l.size() + JntAngConf_r.size()), 0.025);
+    }
+
     //初始化求解器配置
     PathChoose mChoose_l, mChoose_r;
     mChoose_l.urdf_choose = 0;      mChoose_r.urdf_choose = 0;

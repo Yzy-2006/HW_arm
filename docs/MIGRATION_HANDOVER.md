@@ -227,7 +227,7 @@ make preview
 | 4 | `make record` | 三路相机与数据采集；仅遥操可不启动 |
 | 5 | `make vr` | VR 输入；进入头显 VR 页面后，在本终端按 Enter |
 
-需要边录制边看图时，用 `make record-opencv` 替代 `make record`，不要两个一起启动。
+`make record` 已经同时打开三路 OpenCV 画面；`make record-opencv` 只是兼容别名，不要两个一起启动。
 
 | 操作 | 当前行为 |
 |---|---|

@@ -50,11 +50,19 @@ def metadata():
             'width':4,'height':3,'fps':30,'max_frame_gap_s':.1}}
 
 
-def write_episode(tmp_path):
-    writer = EpisodeWriter(tmp_path, metadata(), cv2.imwrite)
+def write_episode(tmp_path, *, filtered=False):
+    meta = metadata()
+    if filtered:
+        meta['config']['min_joint_delta_rad'] = .01
+    writer = EpisodeWriter(tmp_path, meta, cv2.imwrite)
     images = {key:np.zeros((3,4,3),np.uint8) for key in metadata()['config']['cameras']}
-    for t in [0,.033,.080,.100]:
-        writer.add(dict(sample(),timestamp_s=t),images)
+    stamps = [0, .033, 5.080, 8.100] if filtered else [0,.033,.080,.100]
+    for index, t in enumerate(stamps):
+        data = sample()
+        data['joint_target'][0] += index
+        # A gripper-only change must survive export even with identical q.
+        data['gripper_state'][2] = index % 2
+        writer.add(dict(data,timestamp_s=t),images)
     return writer.finish(3)
 
 
@@ -104,9 +112,10 @@ def test_write_failure_does_not_increment_count(tmp_path):
     writer.abort('disk failure')
 
 
-def test_export_frame_layout_through_dataset_api(tmp_path, monkeypatch):
+@pytest.mark.parametrize('filtered', [False, True])
+def test_export_frame_layout_through_dataset_api(tmp_path, monkeypatch, filtered):
     import types
-    path=write_episode(tmp_path/'raw')
+    path=write_episode(tmp_path/'raw', filtered=filtered)
     captured=[]
     class Dataset:
         @classmethod
@@ -131,7 +140,40 @@ def test_export_frame_layout_through_dataset_api(tmp_path, monkeypatch):
     assert captured[0]['action'][0]==20
     assert captured[0]['observation.state'][0]==0
     assert captured[0]['action'][15]==0
-    assert (tmp_path/'out/meta/towel_schema.json').is_file()
+    source_indices = [0, 1, 2, 3] if filtered else [0, 1, 1, 3]
+    assert [frame['action'][0] for frame in captured] == [20 + i for i in source_indices]
+    assert [frame['action'][7] for frame in captured] == [i % 2 for i in source_indices]
+    schema = json.loads((tmp_path/'out/meta/towel_schema.json').read_text())
+    assert ('capture gaps removed' in schema['resampling']) == filtered
+
+
+def test_filtered_episode_compacts_time_without_changing_raw_samples(tmp_path):
+    path = write_episode(tmp_path, filtered=True)
+    original = (path / 'frames.jsonl').read_bytes()
+    _, rows = load_episode(path)
+    sampled = list(resample(rows, 30, compact=True))
+    assert [t for t, _ in sampled] == pytest.approx([0, 1/30, 2/30, 3/30])
+    assert [row['timestamp_s'] for _, row in sampled] == [0, .033, 5.080, 8.100]
+    assert [row['frame_index'] for _, row in sampled] == [0, 1, 2, 3]
+    assert list(resample(rows[:1], 30, compact=True)) == [(0, rows[0])]
+    assert (path / 'frames.jsonl').read_bytes() == original
+
+
+@pytest.mark.parametrize('stamp', [0, -.1, float('nan'), float('inf')])
+def test_filtered_episode_still_rejects_invalid_timestamps(tmp_path, stamp):
+    path = write_episode(tmp_path, filtered=True)
+    rows = [json.loads(line) for line in (path / 'frames.jsonl').read_text().splitlines()]
+    rows[1]['timestamp_s'] = stamp
+    (path / 'frames.jsonl').write_text('\n'.join(json.dumps(row) for row in rows))
+    with pytest.raises(ValueError, match='timestamps'):
+        load_episode(path)
+
+
+def test_export_rejects_mixed_motion_filter_modes(tmp_path):
+    write_episode(tmp_path)
+    write_episode(tmp_path, filtered=True)
+    with pytest.raises(ValueError, match='motion-filter mode'):
+        export(tmp_path, tmp_path / 'out', 'local/test', validate_only=True)
 
 
 def test_export_yaml_selects_features_and_cameras(tmp_path, monkeypatch):

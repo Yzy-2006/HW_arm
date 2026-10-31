@@ -136,6 +136,13 @@ def load_export_config(path=None):
     }
 
 
+def motion_filter_enabled(config):
+    threshold = float(config.get("min_joint_delta_rad", 0.0))
+    if not math.isfinite(threshold) or threshold < 0:
+        raise ValueError("min_joint_delta_rad must be finite and nonnegative")
+    return threshold > 0
+
+
 def load_episode(path):
     meta = json.loads((path / "episode.json").read_text())
     if meta["status"] != "complete" or meta["schema_version"] != SCHEMA_VERSION:
@@ -144,6 +151,7 @@ def load_episode(path):
     if len(rows) != meta["frames"] or not rows:
         raise ValueError(f"Frame count mismatch or empty episode: {path}")
     config = meta["config"]
+    filtered = motion_filter_enabled(config)
     previous = None
     for index, row in enumerate(rows):
         if row["frame_index"] != index:
@@ -153,7 +161,7 @@ def load_episode(path):
         binary_states(row["gripper_state"])
         stamp = float(row["timestamp_s"])
         if not math.isfinite(stamp) or (previous is not None and (
-                stamp <= previous or stamp-previous > config["max_frame_gap_s"])):
+                stamp <= previous or (not filtered and stamp-previous > config["max_frame_gap_s"]))):
             raise ValueError("Invalid capture timestamps or excessive gap")
         previous = stamp
         if set(row["images"]) != set(config["cameras"]):
@@ -165,8 +173,12 @@ def load_episode(path):
     return meta, rows
 
 
-def resample(rows, fps):
-    """Previous-sample hold on a real time grid, without compressing dropped time."""
+def resample(rows, fps, *, compact=False):
+    """Compact filtered samples, otherwise hold samples on the capture-time grid."""
+    if compact:
+        for index, row in enumerate(rows):
+            yield index / fps, row
+        return
     stamps = [row["timestamp_s"] for row in rows]
     count = int(math.floor((stamps[-1] - stamps[0]) * fps + 1e-8)) + 1
     for index in range(count):
@@ -224,9 +236,9 @@ def export(root, output, repo_id, validate_only=False, config_path=None):
         cfg = meta["config"]
         _selected_images(cfg, export_config)
         signature = ({key: cfg[key] for key in ("fps", "width", "height", "cameras")},
-                     meta.get("calibration", {}))
+                     meta.get("calibration", {}), motion_filter_enabled(cfg))
         if reference is not None and signature != reference:
-            raise ValueError("Camera or robot calibration changed; export as separate datasets")
+            raise ValueError("Camera, robot calibration or motion-filter mode changed; export as separate datasets")
         reference = signature
     if validate_only:
         print(f"Validated {len(episodes)} complete episodes")
@@ -261,7 +273,7 @@ def export(root, output, repo_id, validate_only=False, config_path=None):
             for source_index, row in enumerate(rows):
                 _write_sidecar(sidecar_files, "stream_timestamps", episode_index, source_index, row)
                 _write_sidecar(sidecar_files, "camera_timestamps", episode_index, source_index, row)
-            for _, row in resample(rows, cfg["fps"]):
+            for _, row in resample(rows, cfg["fps"], compact=motion_filter_enabled(meta["config"])):
                 frame = {}
                 for name, spec in FIELD_SPECS.items():
                     if export_config["fields"].get(name):
@@ -280,7 +292,8 @@ def export(root, output, repo_id, validate_only=False, config_path=None):
             "schema_version": SCHEMA_VERSION,
             "gripper_encoding": "0=open, 1=closed; observed state vs commanded action",
             "joint_action_source": "/dexbotCtl/ctl_data_pub (post-IK position target)",
-            "resampling": "previous sample hold on fixed FPS grid",
+            "resampling": ("saved frames in order on fixed FPS grid; capture gaps removed"
+                           if motion_filter_enabled(cfg) else "previous sample hold on fixed FPS grid"),
             "export_config": export_config,
             "selected_features": list(selected_features),
             "selected_images": selected_images,
