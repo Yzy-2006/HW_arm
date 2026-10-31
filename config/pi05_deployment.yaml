@@ -26,9 +26,12 @@ bridge:
   # Time spacing of predicted actions is 1 / action_rate_hz seconds.
   # Keep 30 to match the dataset; independent of the bridge control timer.
   action_rate_hz: 30
+  interpolation:
+    enabled: true
+    publish_rate_hz: 300
   state_timeout_s: 0.25
   # Refresh the horizon asynchronously; control and feedback never wait for it.
-  replan_interval_s: 1.5
+  replan_interval_s: 0.5
   # Reject actions older than this observation age, even if inference succeeds.
   max_action_age_s: 1.0
   jpeg_quality: 80

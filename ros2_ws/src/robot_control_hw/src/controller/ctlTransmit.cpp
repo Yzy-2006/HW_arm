@@ -182,7 +182,7 @@ void CtlTransmit::bridge_msg_callback(const ctl_msgs_hw::msg::BridgeCtlMsg::Shar
     }
     joint_stream_mode_ = msg->ctl_trans_mod == 3;
 
-    RCLCPP_INFO(node_ptr_->get_logger(),
+    RCLCPP_INFO_THROTTLE(node_ptr_->get_logger(), *node_ptr_->get_clock(), 1000,
         "BridgeCtlMsg received: ctl_trans_mod=%d", msg->ctl_trans_mod);
 
     //将接收到的双臂控制信息装入bridge_data（此处无底盘控制信息）

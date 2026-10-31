@@ -21,6 +21,7 @@ import numpy as np
 import yaml
 
 from pi05_bridge import _as_vector, limit_action, load_joint_limits, load_pd
+from minimum_snap import JOINT_INDICES, MinimumSnapTrajectory, interpolation_settings, validate_controller_rate
 
 
 LOG = logging.getLogger("replay_dataset")
@@ -352,6 +353,9 @@ def create_replay_node(args, actions: np.ndarray, fps: float, recorder: ReplayRe
         float(controller_grippers.get("r_gripper_ctl", {}).get("zero_pos_deg", 0.0)),
     ], dtype=np.float64)
     period = 1.0 / (fps * args.speed)
+    interpolate, publish_rate_hz = interpolation_settings(bridge_cfg, fps * args.speed)
+    if interpolate:
+        validate_controller_rate(controller_cfg, publish_rate_hz)
     state_timeout = float(bridge_cfg.get("state_timeout_s", 0.25))
 
     class ReplayNode(Node):
@@ -367,16 +371,22 @@ def create_replay_node(args, actions: np.ndarray, fps: float, recorder: ReplayRe
             self.last_command = None
             self.reanchor = True
             self.done = False
+            self.trajectory = None
+            self.trajectory_started_at = None
+            self.trajectory_start_index = 0
+            self.last_log_at = -float("inf")
+            self.initial_grippers = None
             self.command_pub = self.create_publisher(BridgeCtlMsg, "/dexbotCtl/bridge_ctl_msg", 1)
             self.gripper_pub = self.create_publisher(GripperCtl, "/gripper/ctl", 10)
             self.create_subscription(MidNodeCtlMsgRet, "/dexbotCtl/midMonitor_msg_send", self._joint_callback,
                                      qos_profile_sensor_data)
             self.create_subscription(Float64MultiArray, "/gripper/fdb", self._gripper_callback,
                                      qos_profile_sensor_data)
-            self.timer = self.create_timer(period, self.step)
+            self.timer = self.create_timer(1.0 / publish_rate_hz, self.step)
             self.get_logger().warning(
                 f"dataset replay {'MOTION' if self.motion else 'DRY-RUN'}: "
-                f"frames={len(actions)} rate={fps * args.speed:g}Hz slow_factor={slow_factor:g}"
+                f"frames={len(actions)} rate={fps * args.speed:g}Hz slow_factor={slow_factor:g} "
+                f"minimum_snap={interpolate} publish_rate_hz={publish_rate_hz:g}"
             )
 
         def _joint_callback(self, msg):
@@ -408,19 +418,56 @@ def create_replay_node(args, actions: np.ndarray, fps: float, recorder: ReplayRe
                 self.done = True
                 self.get_logger().info("Replay completed; holding position")
                 return
-            raw = self.actions[self.index]
+            now = time.monotonic()
             if self.motion:
-                now = time.monotonic()
                 if (self.joints is None or now - self.joint_received_at > state_timeout
                         or now - self.gripper_feedback_at > state_timeout):
-                    self.get_logger().warning(
-                        "Waiting for fresh joint and gripper feedback; replay frame is paused"
-                    )
+                    self._publish_hold()
+                    self.reanchor = True
+                    self.trajectory = None
+                    if now - self.last_log_at >= 1.0:
+                        self.last_log_at = now
+                        self.get_logger().warning(
+                            "Waiting for fresh joint and gripper feedback; replay frame is paused"
+                        )
                     return
                 state = np.r_[self.joints[:7], 0.0, self.joints[7:], 0.0]
-                action = limit_action(raw, state, lower, upper, max_step)
             else:
-                action = raw.copy()
+                state = self.actions[self.index].copy()
+            finished = False
+            if interpolate:
+                if self.trajectory is None:
+                    remaining = self.actions[self.index:]
+                    self.trajectory = MinimumSnapTrajectory(
+                        np.arange(len(remaining) + 1) * period,
+                        np.vstack([state[JOINT_INDICES], remaining[:, JOINT_INDICES]]),
+                    )
+                    self.trajectory_start_index = self.index
+                    self.trajectory_started_at = time.monotonic()
+                    self.initial_grippers = gripper.update(self.gripper_feedback) if self.motion else state[[7, 15]]
+                elapsed = max(0.0, time.monotonic() - self.trajectory_started_at)
+                finished = elapsed >= self.trajectory.duration - 1e-9
+                if finished:
+                    elapsed = self.trajectory.duration
+                # The initial interval joins feedback to frame zero. Grippers
+                # stay discrete and advance only when their source frame is due.
+                offset = max(0, int(np.floor(elapsed / period + 1e-9)) - 1)
+                self.index = min(self.trajectory_start_index + offset, len(self.actions) - 1)
+                raw = self.actions[self.index]
+                target = raw.copy()
+                target[JOINT_INDICES] = self.trajectory.at(elapsed)
+                if elapsed < period:
+                    target[[7, 15]] = self.initial_grippers
+            else:
+                raw = self.actions[self.index]
+                target = raw.copy()
+            if self.motion and (time.monotonic() - self.joint_received_at > state_timeout
+                                or time.monotonic() - self.gripper_feedback_at > state_timeout):
+                self._publish_hold()
+                self.reanchor = True
+                self.trajectory = None
+                return
+            action = limit_action(target, state, lower, upper, max_step) if self.motion else target
             self.last_command = action
             if self.motion:
                 stamp = self.get_clock().now().to_msg()
@@ -429,7 +476,7 @@ def create_replay_node(args, actions: np.ndarray, fps: float, recorder: ReplayRe
                     hold=False, reanchor=self.reanchor, rigidity_mode=rigidity_mode,
                 ))
                 self.gripper_pub.publish(_make_gripper_message(GripperCtl, action, gripper, zero_deg,
-                                                                fps * args.speed))
+                                                                publish_rate_hz))
                 self.reanchor = False
             if recorder is not None:
                 recorder.record(
@@ -439,12 +486,16 @@ def create_replay_node(args, actions: np.ndarray, fps: float, recorder: ReplayRe
                     self.joints,
                     gripper_feedback=self.gripper_feedback,
                 )
-            if self.index == 0 or self.index % max(1, round(fps)) == 0:
+            if now - self.last_log_at >= 1.0:
+                self.last_log_at = now
                 self.get_logger().info(
                     f"replay frame {self.index + 1}/{len(self.actions)} "
                     f"action={np.array2string(action, precision=3, suppress_small=True)}"
                 )
-            self.index += 1
+            if not interpolate:
+                self.index += 1
+            elif finished:
+                self.index = len(self.actions)
 
     return ReplayNode()
 

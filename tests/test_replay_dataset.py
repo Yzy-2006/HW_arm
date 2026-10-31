@@ -4,12 +4,13 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "deployment"))
 
 from replay_dataset import (  # noqa: E402
-    ReplayRecorder, _make_bridge_message, _resolve_slow_factor, load_episode_actions,
+    ReplayRecorder, _make_bridge_message, _resolve_slow_factor, load_episode_actions, create_replay_node,
 )
 
 
@@ -101,3 +102,110 @@ def test_replay_recorder_writes_command_and_feedback_csv(tmp_path):
     assert "feedback_right_joint_7" in text
     assert "feedback_left_gripper_deg" in text
     assert "0.1" in text
+
+
+@pytest.fixture
+def replay(monkeypatch, tmp_path):
+    import replay_dataset as module
+
+    clock = [10.0]
+
+    class Message:
+        def __init__(self):
+            self.header = types.SimpleNamespace(stamp=None)
+
+    class Node:
+        def __init__(self, name):
+            pass
+
+        def create_publisher(self, *args):
+            messages = []
+            return types.SimpleNamespace(messages=messages, publish=messages.append)
+
+        def create_subscription(self, *args):
+            pass
+
+        def create_timer(self, period, callback):
+            return types.SimpleNamespace(period=period, cancel=lambda: None)
+
+        def get_clock(self):
+            return types.SimpleNamespace(now=lambda: types.SimpleNamespace(to_msg=lambda: clock[0]))
+
+        def get_logger(self):
+            return types.SimpleNamespace(warning=lambda msg: None, info=lambda msg: None)
+
+    for name, value in {
+        "rclpy": types.ModuleType("rclpy"),
+        "rclpy.node": types.SimpleNamespace(Node=Node),
+        "rclpy.qos": types.SimpleNamespace(qos_profile_sensor_data=object()),
+        "ctl_msgs_hw.msg": types.SimpleNamespace(BridgeCtlMsg=Message, GripperCtl=Message, MidNodeCtlMsgRet=Message),
+        "std_msgs.msg": types.SimpleNamespace(Float64MultiArray=Message),
+    }.items():
+        monkeypatch.setitem(sys.modules, name, value)
+    monkeypatch.setattr(module, "time", types.SimpleNamespace(monotonic=lambda: clock[0]))
+    config = yaml.safe_load((ROOT / "config/pi05_deployment.yaml").read_text())
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(config))
+    args = types.SimpleNamespace(config=path, slow_factor=None, speed=1.0, motion=True, start_frame=0)
+    actions = np.zeros((4, 16))
+    actions[:, 0] = np.arange(1, 5) * 0.002
+    actions[1:, [7, 15]] = 1
+    node = create_replay_node(args, actions, 30)
+
+    def feedback():
+        node._joint_callback(types.SimpleNamespace(l_arm_pos_fdback=[0.0] * 7, r_arm_pos_fdback=[0.0] * 7))
+        node._gripper_callback(types.SimpleNamespace(data=[0.0] * 8))
+
+    feedback()
+    return node, clock, feedback, actions
+
+
+def test_replay_interpolates_at_300hz_and_visits_all_30hz_knots(replay):
+    node, clock, feedback, actions = replay
+    assert node.timer.period == pytest.approx(1 / 300)
+    for tick in range(41):
+        clock[0] = 10 + tick / 300
+        feedback()
+        node.step()
+        command = node.command_pub.messages[-1]
+        if tick and tick % 10 == 0:
+            assert command.l_arm_des_msg[0] == pytest.approx(actions[tick // 10 - 1, 0])
+        assert not command.hold_position
+        assert command.if_init_use_ret == int(tick == 0)
+    assert len(node.command_pub.messages) == 41
+    node.step()
+    assert node.done
+    assert node.command_pub.messages[-1].hold_position
+
+
+def test_replay_feedback_gap_holds_and_restarts_from_feedback(replay):
+    node, clock, feedback, actions = replay
+    node.step()
+    clock[0] += 0.07
+    feedback()
+    node.step()
+    index = node.index
+    clock[0] += 0.3
+    node.step()
+    assert node.command_pub.messages[-1].hold_position
+    assert node.index == index
+    assert node.trajectory is None
+    feedback()
+    node.step()
+    command = node.command_pub.messages[-1]
+    assert command.if_init_use_ret == 1
+    assert not command.hold_position
+    assert command.l_arm_des_msg[0] == pytest.approx(0)
+    assert node.index == index
+
+
+def test_replay_dry_run_does_not_publish(replay):
+    node, clock, feedback, actions = replay
+    node.motion = False
+    node.step()
+    clock[0] += 1
+    node.step()
+    node.step()
+    assert node.done
+    assert not node.command_pub.messages
+    assert not node.gripper_pub.messages

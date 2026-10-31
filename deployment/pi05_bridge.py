@@ -25,6 +25,7 @@ import numpy as np
 import yaml
 
 from pi05_common import encode_bytes, recv_packet, send_packet
+from minimum_snap import ChunkInterpolator, interpolation_settings, validate_controller_rate
 
 
 LOG = logging.getLogger("pi05_bridge")
@@ -332,6 +333,9 @@ def create_bridge_node(args):
     task = str(config.get("task", camera_cfg.get("task", "fold a towel with both arms")))
     rate_hz = float(bridge_cfg.get("rate_hz", camera_cfg.get("fps", 30)))
     action_rate_hz = float(bridge_cfg.get("action_rate_hz", camera_cfg.get("fps", 30)))
+    interpolate, publish_rate_hz = interpolation_settings(bridge_cfg, rate_hz)
+    if interpolate:
+        validate_controller_rate(controller_cfg, publish_rate_hz)
     state_timeout_s = float(bridge_cfg.get("state_timeout_s", 0.25))
     replan_interval_s = float(bridge_cfg.get("replan_interval_s", 0.25))
     max_action_age_s = float(bridge_cfg.get("max_action_age_s", 1.0))
@@ -399,6 +403,9 @@ def create_bridge_node(args):
             self.inference_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pi05-inference")
             self.pending = None
             self.chunk = None
+            self.interpolator = None
+            self.interpolation_clipped = False
+            self.last_observation_check = -float("inf")
             self.generation = 0
             self.last_request_at = -float("inf")
             self.last_infer_generation = -1
@@ -421,11 +428,13 @@ def create_bridge_node(args):
             self.create_subscription(Float64MultiArray, "/gripper/fdb", self._gripper_callback,
                                      qos_profile_sensor_data, callback_group=self.feedback_group)
             self.control_timer = self.create_timer(1.0 / rate_hz, self.step)
+            self.publish_timer = self.create_timer(1.0 / publish_rate_hz, self.publish_step) if interpolate else None
             self.get_logger().warning(
                 f"PI05 bridge started in {'MOTION' if self.motion else 'DRY-RUN'} "
                 f"mode; worker={worker_host}:{worker_port} task={task!r} "
                 f"pd_level={pd_level} rigidity_mode={rigidity_mode} "
                 f"rate_hz={rate_hz:g} action_rate_hz={action_rate_hz:g} "
+                f"minimum_snap={interpolate} publish_rate_hz={publish_rate_hz:g} "
                 f"slow_factor={slow_factor:g} max_step_rad={max_step.max():g}"
             )
 
@@ -491,7 +500,7 @@ def create_bridge_node(args):
                 return
 
             gripper_msg = GripperCtl()
-            gripper_msg.ctl_time = 1.0 / rate_hz
+            gripper_msg.ctl_time = 1.0 / publish_rate_hz
             target_deg = gripper.target_degrees(np.asarray([action[7], action[15]], dtype=np.float64))
             gripper_msg.l_arm_gripper_pos = float(target_deg[0] - zero_deg[0])
             gripper_msg.r_arm_gripper_pos = float(target_deg[1] - zero_deg[1])
@@ -509,7 +518,33 @@ def create_bridge_node(args):
 
         def _invalidate(self):
             self.chunk = None
+            self.interpolator = None
+            self.interpolation_clipped = False
             self.generation += 1
+
+        def publish_step(self):
+            try:
+                now = time.monotonic()
+                current = self._snapshot_state()
+                if current is None or now - self.last_observation_check > state_timeout_s:
+                    raise ValueError("Feedback or observation check expired before interpolation publication")
+                raw = None if self.chunk is None else self.chunk.at(now)
+                if raw is None or self.interpolator is None:
+                    self.interpolator = None
+                    self._hold()
+                    return
+                target = self.interpolator.at(now, raw)
+                action = limit_action(target, current, lower, upper, max_step)
+                self.interpolation_clipped = not np.allclose(
+                    action[JOINT_ACTION_INDICES], target[JOINT_ACTION_INDICES], atol=1e-9, rtol=0,
+                )
+                self.last_command = action
+                if self.motion:
+                    self._publish_command(action)
+            except Exception as exc:
+                self._invalidate()
+                self._warn(f"PI05 interpolation failed: {exc}")
+                self._hold()
 
         def _infer(self, state, images, request_id, reset):
             encoded = _encode_images(images, jpeg_quality)
@@ -522,6 +557,7 @@ def create_bridge_node(args):
                     raise ValueError("Waiting for fresh joint and gripper feedback")
                 now = time.monotonic()
                 images, _ = self.cameras.snapshot(now)
+                self.last_observation_check = now
                 if self.pending is not None and self.pending.done():
                     pending, self.pending = self.pending, None
                     response = pending.result()
@@ -538,6 +574,11 @@ def create_bridge_node(args):
                         self.chunk = ActionChunk(actions, observed_at, action_rate_hz, max_action_age_s)
                         if self.chunk.at(now) is None:
                             raise ValueError("Inference result is already expired")
+                        if interpolate:
+                            anchor = state if self.interpolator is None or self.last_command is None else self.last_command
+                            previous = None if self.interpolation_clipped else self.interpolator
+                            self.interpolator = ChunkInterpolator(self.chunk, now, anchor, previous)
+                            self.interpolation_clipped = False
                 if self.pending is None and (
                     self.chunk is None or len(self.chunk.actions) == 1
                     or now - self.last_request_at >= replan_interval_s
@@ -550,6 +591,7 @@ def create_bridge_node(args):
                     self.request_id += 1
                 target = None if self.chunk is None else self.chunk.at(now)
                 if target is None:
+                    self.interpolator = None
                     self._hold()
                     self._warn("Waiting for a current action chunk; holding position")
                     return
@@ -557,8 +599,9 @@ def create_bridge_node(args):
                 if current is None:
                     raise ValueError("Feedback expired before command publication")
                 action = limit_action(target, current, lower, upper, max_step)
-                self.last_command = action
-                if self.motion:
+                if not interpolate:
+                    self.last_command = action
+                if self.motion and not interpolate:
                     self._publish_command(action)
                 now = time.monotonic()
                 if now - self.last_log >= 1.0:
@@ -583,6 +626,8 @@ def create_bridge_node(args):
 
         def close(self):
             self.control_timer.cancel()
+            if self.publish_timer is not None:
+                self.publish_timer.cancel()
             try:
                 # Ctrl+C can cause ROS to invalidate publishers before node.close
                 # runs. In that case the controller watchdog handles the stop.

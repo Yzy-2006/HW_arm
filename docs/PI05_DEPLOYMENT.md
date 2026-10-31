@@ -111,10 +111,11 @@ make pi05 PI05_ARGS='--camera-map {"cam_high":"head","cam_left":"left_wrist","ca
 | 每次推理输出的动作步数 `action_horizon` | **50 步** | YAML 的 `worker.action_horizon`；用于校验模型原生 chunk 长度，必须与模型 `inference.py` 一致，单改 YAML 不会改变模型结构 |
 | 每步动作维度 | 16 | 左臂 7 关节 + 左夹爪 + 右臂 7 关节 + 右夹爪 |
 | 每次推理的积分步数 `num_steps` | **10 步** | YAML 的 `worker.num_steps`；Flow Matching 采样计算步数，可用 `--num-steps` 临时覆盖 |
-| bridge 控制频率 `rate_hz` | 30 Hz | YAML 的 `bridge.rate_hz`；控制定时器频率 |
+| bridge 观测和规划频率 `rate_hz` | 30 Hz | YAML 的 `bridge.rate_hz`；检查观测、处理推理结果 |
+| 插值后指令发布频率 | 300 Hz | `bridge.interpolation.publish_rate_hz`；minimum snap 关节插值 |
 | 动作序列时间频率 `action_rate_hz` | 30 Hz | YAML 的 `bridge.action_rate_hz`；用于 chunk 动作的时间索引，默认匹配数据集的 30 FPS |
 | 相邻预测动作的时间间隔 | 约 33.3 ms | `1 / action_rate_hz`；50 步对应约 1.67 秒的预测范围，不是每 33.3 ms 运行一次模型 |
-| 重规划间隔 `replan_interval_s` | 0.25 秒 | 有效 chunk 存在时，推理请求的最小发起间隔；上一次请求完成后才能发起下一次 |
+| 重规划间隔 `replan_interval_s` | 0.5 秒 | 有效 chunk 存在时，推理请求的最小发起间隔；上一次请求完成后才能发起下一次 |
 | 动作最大有效年龄 `max_action_age_s` | 1.0 秒 | 从该次观测请求的时刻计算；超时后保持位置 |
 | 每段 chunk 实际执行步数 | 不固定 | 当前没有独立的 `n_action_steps` 参数；取决于推理耗时、重规划间隔和观测有效性 |
 
@@ -139,7 +140,10 @@ worker:
 bridge:
   rate_hz: 30
   action_rate_hz: 30
-  replan_interval_s: 0.25
+  interpolation:
+    enabled: true
+    publish_rate_hz: 300
+  replan_interval_s: 0.5
   max_action_age_s: 1.0
   max_joint_step_rad: 0.02
   pd_level: mid
@@ -151,6 +155,12 @@ bridge:
 ```text
 [left_joint_1..7, left_gripper, right_joint_1..7, right_gripper]
 ```
+
+默认使用 [minimum snap 插值](MINIMUM_SNAP.md)：保持原始 30 Hz 动作时间轴，
+将 14 个关节目标插值到 300 Hz；夹爪仍按原始帧的二值状态切换。
+新 chunk 从当前规划状态衔接，保持位置、速度、加速度和 jerk 连续。
+首次启动、超时恢复或安全裁剪后的重规划从反馈/最后实际指令重新锚定。
+插值不延长动作有效期，也不会补发推理期间已过期的动作点。
 
 14 个关节动作是绝对弧度目标。bridge 在发布前使用最新关节反馈执行 URDF 限位和每周期
 步长限制；夹爪动作经过二值化后映射到 `grippers.yaml` 的开闭端点。

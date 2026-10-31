@@ -224,6 +224,8 @@ def bridge(monkeypatch, tmp_path, request):
     config = yaml.safe_load((ROOT / "config/pi05_deployment.yaml").read_text())
     # Control tests use an explicit limit, independent of the operator's tuning.
     config["bridge"]["max_joint_step_rad"] = 0.02
+    config["bridge"]["interpolation"] = {"enabled": False}
+    config["bridge"]["replan_interval_s"] = 0.25
     config["bridge"].update(getattr(request, "param", {}))
     config_path = tmp_path / "deployment.yaml"
     config_path.write_text(yaml.safe_dump(config))
@@ -413,3 +415,60 @@ def test_close_cleans_up_after_ros_publication_is_unavailable(bridge):
     node.inference_pool.shutdown = lambda **kwargs: cleaned.append("inference")
     node.close()
     assert cleaned == ["inference", "client", "cameras"]
+
+
+@pytest.mark.parametrize("bridge", [{"interpolation": {"enabled": True, "publish_rate_hz": 300}}], indirect=True)
+def test_interpolated_bridge_publishes_between_source_ticks_and_holds(bridge):
+    node, clock, feedback = bridge
+    node.step()
+    complete(node, value=0.01)
+    clock[0] += 0.1
+    feedback()
+    node.step()
+    assert node.control_timer.period == pytest.approx(1 / 30)
+    assert node.publish_timer.period == pytest.approx(1 / 300)
+    assert not node.command_pub.messages
+    node.publish_step()
+    first = node.command_pub.messages[-1]
+    assert first.l_arm_des_msg[0] == pytest.approx(0)
+    assert first.if_init_use_ret == 1
+    for _ in range(9):
+        clock[0] += 1 / 300
+        feedback()
+        node.publish_step()
+    assert len(node.command_pub.messages) == 10
+    assert node.command_pub.messages[-1].l_arm_des_msg[0] > 0
+    assert node.gripper_pub.messages[-1].ctl_time == pytest.approx(1 / 300)
+    clock[0] += 0.3
+    feedback()
+    node.publish_step()  # A stalled observation loop must also stop the output.
+    assert node.command_pub.messages[-1].hold_position
+    assert node.interpolator is None
+    assert node.chunk is None
+
+
+@pytest.mark.parametrize("bridge", [{"interpolation": {"enabled": True}}], indirect=True)
+def test_interpolated_bridge_replans_continuously_and_dry_run_never_publishes(bridge):
+    node, clock, feedback = bridge
+    node.motion = False
+    node.step()
+    complete(node, value=0.001)
+    clock[0] += 0.1
+    feedback()
+    node.step()
+    node.publish_step()
+    clock[0] += 0.2
+    feedback()
+    node.step()
+    old = node.interpolator
+    complete(node, value=-0.001)
+    clock[0] += 0.01
+    node.step()
+    for derivative in range(4):
+        np.testing.assert_allclose(
+            node.interpolator.trajectory.at(0, derivative),
+            old.trajectory.at(clock[0] - old.started_at, derivative), atol=1e-6,
+        )
+    node.publish_step()
+    assert not node.command_pub.messages
+    assert not node.gripper_pub.messages

@@ -1703,7 +1703,7 @@ void ArmCtlNode::upperMonitor_msg_callback(const ctl_msgs_hw::msg::MidNodeCtlMsg
 {
     //----------综合模式控制信息解包----------
 
-    std::cout << "upper monitor data get success" << std::endl;
+    RCLCPP_DEBUG(this->get_logger(), "upper monitor data get success");
 
     if(ifInitTrigger){
         ifTrigger = true;
