@@ -1,11 +1,14 @@
 # 环境划分
 
-这个项目需要两套彼此独立的运行环境。
+这个项目使用三套彼此独立的运行环境。
 
 | 环境 | 用途 | Python | 不应放入的依赖 |
 |---|---|---|---|
 | `robot-system` | 电机、双臂控制、VR、标定、采集 | 系统 Python 3.12，与 ROS 2 Jazzy 一致 | PyTorch、CUDA、LeRobot π0.5 |
 | `towel-pi05` | 原始数据导出、数据检查、π0.5 微调 | Conda Python 3.12 | ROS 2、rclpy、EtherCAT/CAN 驱动 |
+| `towel-newton` | Newton 机器人与布料仿真 | Conda Python 3.12 | ROS 2、rclpy、EtherCAT/CAN 驱动 |
+
+Newton 的逐步安装和验证见 [Newton 仿真环境](NEWTON_SETUP.md)。
 
 ## 机器人端：系统 Python，不创建 Conda Python 环境
 
@@ -97,8 +100,8 @@ python -m pip install --upgrade pip
 nvidia-smi
 ```
 
-当前机器的 `nvidia-smi` 无法与驱动通信，不能在这里决定 PyTorch 的 CUDA 轮子。
-驱动恢复后，按 PyTorch 官网与 `nvidia-smi` 显示的驱动版本选择兼容的 wheel index，再安装。
+请在可访问 GPU 的主机终端运行 `nvidia-smi`；受限沙箱可能隐藏显卡设备，不能据此认定驱动故障。
+按 PyTorch 官网与 `nvidia-smi` 显示的驱动版本选择兼容的 wheel index，再安装。
 例如确认驱动满足 CUDA 12.8 的要求时：
 
 ```bash

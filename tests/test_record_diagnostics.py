@@ -1,4 +1,5 @@
 import sys
+import json
 import types
 from pathlib import Path
 
@@ -83,7 +84,8 @@ def test_abort_diagnostics_distinguish_slow_write_and_repeated_camera(tmp_path, 
     monkeypatch.setattr(record.cv2, 'imwrite', write_image)
     config = dict(dataset_root=str(tmp_path), cameras={name: name for name in
                   ('head', 'left_wrist', 'right_wrist')}, fps=30, min_episode_frames=1,
-                  max_stream_age_s=.2, max_stream_skew_s=.1, max_frame_gap_s=.1)
+                  max_stream_age_s=.2, max_stream_skew_s=.1, max_frame_gap_s=.1,
+                  episode_metadata={"source": "policy_intervention", "control_source": "vr"})
 
     class Camera:
         frame = 1
@@ -101,6 +103,9 @@ def test_abort_diagnostics_distinguish_slow_write_and_repeated_camera(tmp_path, 
     for name, size in REQUIRED.items():
         node.cache.update(name, [0] * size, clock[0])
     assert node.record(ns(data=True), ns()).success
+    metadata = json.loads((node.episode.path / "episode.json").read_text())
+    assert metadata["source"] == "policy_intervention"
+    assert metadata["control_source"] == "vr"
     node.sample()
     assert node.episode.frames == 1
     if slow_write:

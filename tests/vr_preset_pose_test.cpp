@@ -84,6 +84,36 @@ void check_tool_lock(bool enabled){
 int main(int argc, char** argv){
     assert(argc == 3);
     test_share = argv[1];
+    if(std::string(argv[2]) == "handoff"){
+        xr_telepercation_ctl ctl;
+        ctl.init();
+        assert(!ctl.reanchor_from_feedback());
+        const std::vector<double> left{0.2, 0.1, -0.3, 0.1, -0.2, 0.3};
+        const std::vector<double> right{0.2, -0.1, -0.3, -0.1, 0.2, -0.3};
+        ctl.update_desc_ret(left, right);
+        ctl.l_arm_end_delta[0] = 50.0;
+        ctl.trigger_joint_return();
+        assert(ctl.reanchor_from_feedback());
+        auto first = ctl.trans_and_outp();
+        assert(first.ctl_transMod == 4 && first.ifUseRet == 1);
+        assert(ctl.accepts_vr_input());
+        assert(ctl.l_arm_end_delta == std::vector<double>(3, 0.0));
+        for(int i = 0; i < 6; ++i){
+            assert(std::abs(first.ctlDesMsg.desPos_l_Descartes[i] - left[i]) < 1e-9);
+            assert(std::abs(first.ctlDesMsg.desPos_r_Descartes[i] - right[i]) < 1e-9);
+        }
+        auto next = ctl.trans_and_outp();
+        assert(next.ifUseRet == 0);
+        for(int i = 0; i < 6; ++i){
+            assert(std::abs(next.ctlDesMsg.desPos_l_Descartes[i] - left[i]) < 1e-9);
+            assert(std::abs(next.ctlDesMsg.desPos_r_Descartes[i] - right[i]) < 1e-9);
+        }
+        auto invalid = left;
+        invalid[0] = std::numeric_limits<double>::quiet_NaN();
+        ctl.update_desc_ret(invalid, right);
+        assert(!ctl.reanchor_from_feedback());
+        return 0;
+    }
     if(std::string(argv[2]) == "lock_enabled" || std::string(argv[2]) == "lock_disabled"){
         check_tool_lock(std::string(argv[2]) == "lock_enabled");
         return 0;

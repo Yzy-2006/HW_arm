@@ -3,6 +3,12 @@
 快速启动命令统一写在 [机器人部署指南](DEPLOYMENT.md)。本文只保留 PI05/OpenPI 格式、
 worker 协议和动作时序的细节。
 
+部署时暂停模型、切换 VR 并补采恢复数据，见 [VR 接管与补采](POLICY_INTERVENTION.md)。
+
+控制链现已加入锁存故障保护，重力、惯性、科氏和摩擦补偿默认全部关闭。
+运动需要底层安全心跳；故障状态禁止模型和 VR 恢复运动。构建范围、阈值和限制见
+[控制安全说明](CONTROL_SAFETY.md)。这些修改尚未经过实机验证。
+
 ## Checkpoint 格式
 
 Hugging Face 上的 `pi05-encos-fold-towel-93` 是 OpenPI/JAX/Orbax 格式，不是 LeRobot

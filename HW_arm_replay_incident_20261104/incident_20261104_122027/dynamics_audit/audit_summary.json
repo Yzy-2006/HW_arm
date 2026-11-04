@@ -1,0 +1,85 @@
+{
+  "native_probe": {
+    "bounded_input_amplitude": 0.01,
+    "maximum_absolute_output": 8.59690105536365,
+    "maximum_absolute_gain": 2070.815941979771,
+    "first_negative_variance_iteration": 14739,
+    "older_version_maximum_absolute_output": 0.012570016292977925
+  },
+  "open_loop": {
+    "current_300": {
+      "rate_hz": 300,
+      "warmup_s": 65.2,
+      "older_filter_method": false,
+      "corrected_lowpass_in_experiment_only": false,
+      "max_raw_velocity": 25.203001499176025,
+      "max_dyn_velocity": 1.9940893430795055,
+      "max_raw_acceleration": 605.3841489007481,
+      "max_filtered_acceleration": 21641.857164130077,
+      "max_gravity": 0.51653483930932,
+      "max_inertia": 29.31447562100927,
+      "max_total_feedforward": 29.072087899619994,
+      "first_total_over_90_replay_s": null
+    },
+    "same_code_50": {
+      "rate_hz": 50,
+      "warmup_s": 65.2,
+      "older_filter_method": false,
+      "corrected_lowpass_in_experiment_only": false,
+      "max_raw_velocity": 4.200500249862671,
+      "max_dyn_velocity": 0.46798669924121683,
+      "max_raw_acceleration": 17.22543430773052,
+      "max_filtered_acceleration": 17.22548442072941,
+      "max_gravity": 0.5159489731521469,
+      "max_inertia": 0.029801224699468075,
+      "max_total_feedforward": 0.5168334874521043,
+      "first_total_over_90_replay_s": null
+    },
+    "older_filter_300": {
+      "rate_hz": 300,
+      "warmup_s": 65.2,
+      "older_filter_method": true,
+      "corrected_lowpass_in_experiment_only": false,
+      "max_raw_velocity": 25.203001499176025,
+      "max_dyn_velocity": 1.9940893430795055,
+      "max_raw_acceleration": 605.3841489007481,
+      "max_filtered_acceleration": 46.75253823085123,
+      "max_gravity": 0.51653483930932,
+      "max_inertia": 0.21319236838071787,
+      "max_total_feedforward": 0.5291851281331514,
+      "first_total_over_90_replay_s": null
+    },
+    "correct_lowpass_only_300": {
+      "rate_hz": 300,
+      "warmup_s": 65.2,
+      "older_filter_method": false,
+      "corrected_lowpass_in_experiment_only": true,
+      "max_raw_velocity": 25.203001499176025,
+      "max_dyn_velocity": 3.8825154027268534,
+      "max_raw_acceleration": 885.5649348387176,
+      "max_filtered_acceleration": 23934.091190283376,
+      "max_gravity": 0.5166048332326412,
+      "max_inertia": 165.54660529288967,
+      "max_total_feedforward": 165.72695287231255,
+      "first_total_over_90_replay_s": 4.016666666666667
+    }
+  },
+  "model": {
+    "nq": 21,
+    "nv": 20
+  },
+  "source_hashes": {
+    "ros2_ws/src/dual_arm_control_hw/src/controller/JntController.cpp": "c5ef4c940e947ede4476a2445949f8bd864037cfbbe0ee4d0352d2f1ec005bf0",
+    "ros2_ws/src/dual_arm_control_hw/include/controller/JntController.h": "c56886e616da1f30958fd967f419a491d67eeb333ae40b082b14923c795be9d7",
+    "ros2_ws/src/dual_arm_control_hw/src/controller/ArmController.cpp": "656ce6e453720f0ea9946af0f6313d80994e4a49bdbf2e1587b07f9fa05093ba",
+    "ros2_ws/src/dual_arm_control_hw/src/controller/ArmInterface.cpp": "9bc4796fd1b6110f367cf39b712cd299a05b3a809c8daac9d5b44a9ccd2eaed0",
+    "ros2_ws/install/dual_arm_hw/share/dual_arm_hw/urdf/dual_arm.urdf": "d4eee5a552b085ac252a6b7d6ad347edc9fbe8bbca45f1bebdb9be36667f8ef4"
+  },
+  "independent_checks": {
+    "O2_O3_identical": true,
+    "all_300_targets_arm_mass_positive_definite": true,
+    "minimum_arm_mass_eigenvalue": 3.225556639448465e-05,
+    "first_covariance_asymmetry": 999999.9998996004,
+    "filter_source_matches_historical_backup": true
+  }
+}

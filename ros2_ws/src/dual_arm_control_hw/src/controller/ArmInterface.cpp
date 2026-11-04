@@ -40,26 +40,26 @@ void DualArmGravWrap::init_GravComp(
 
     for(int i = 0; i < LARMDOF; i++){
         // 左臂：位置输入滤波器
-        posInp_lowpassFilter_lArm[i].init(ftr.lArm_posInpFtr[i].sampRate, ftr.lArm_posInpFtr[i].cutoffRate);
+        posInp_lowpassFilter_lArm[i].init(1.0 / TEMPTIME, ftr.lArm_posInpFtr[i].cutoffRate);
         // 左臂：速度输入滤波器
-        velInp_lowpassFilter_lArm[i].init(ftr.lArm_velInpFtr[i].sampRate, ftr.lArm_velInpFtr[i].cutoffRate);
+        velInp_lowpassFilter_lArm[i].init(1.0 / TEMPTIME, ftr.lArm_velInpFtr[i].cutoffRate);
         // 左臂：力矩输入滤波器
-        TorInp_lowpassFilter_lArm[i].init(ftr.lArm_torInpFtr[i].sampRate, ftr.lArm_torInpFtr[i].cutoffRate);
+        TorInp_lowpassFilter_lArm[i].init(1.0 / TEMPTIME, ftr.lArm_torInpFtr[i].cutoffRate);
         // 左臂：力矩输出滤波器（重力/惯性/前馈共用 torOutpFtr）
-        grav_TorOutp_lowpassFilter_lArm[i].init(ftr.lArm_torOutpFtr[i].sampRate, ftr.lArm_torOutpFtr[i].cutoffRate);
-        Inte_TorOutp_lowpassFilter_lArm[i].init(ftr.lArm_torOutpFtr[i].sampRate, ftr.lArm_torOutpFtr[i].cutoffRate);
-        feedforward_TorComp_lowpassFilter_lArm[i].init(ftr.lArm_torOutpFtr[i].sampRate, ftr.lArm_torOutpFtr[i].cutoffRate);
+        grav_TorOutp_lowpassFilter_lArm[i].init(1.0 / TEMPTIME, ftr.lArm_torOutpFtr[i].cutoffRate);
+        Inte_TorOutp_lowpassFilter_lArm[i].init(1.0 / TEMPTIME, ftr.lArm_torOutpFtr[i].cutoffRate);
+        feedforward_TorComp_lowpassFilter_lArm[i].init(1.0 / TEMPTIME, ftr.lArm_torOutpFtr[i].cutoffRate);
 
         // 右臂：位置输入滤波器
-        posInp_lowpassFilter_rArm[i].init(ftr.rArm_posInpFtr[i].sampRate, ftr.rArm_posInpFtr[i].cutoffRate);
+        posInp_lowpassFilter_rArm[i].init(1.0 / TEMPTIME, ftr.rArm_posInpFtr[i].cutoffRate);
         // 右臂：速度输入滤波器
-        velInp_lowpassFilter_rArm[i].init(ftr.rArm_velInpFtr[i].sampRate, ftr.rArm_velInpFtr[i].cutoffRate);
+        velInp_lowpassFilter_rArm[i].init(1.0 / TEMPTIME, ftr.rArm_velInpFtr[i].cutoffRate);
         // 右臂：力矩输入滤波器
-        TorInp_lowpassFilter_rArm[i].init(ftr.rArm_torInpFtr[i].sampRate, ftr.rArm_torInpFtr[i].cutoffRate);
+        TorInp_lowpassFilter_rArm[i].init(1.0 / TEMPTIME, ftr.rArm_torInpFtr[i].cutoffRate);
         // 右臂：力矩输出滤波器
-        grav_TorOutp_lowpassFilter_rArm[i].init(ftr.rArm_torOutpFtr[i].sampRate, ftr.rArm_torOutpFtr[i].cutoffRate);
-        Inte_TorOutp_lowpassFilter_rArm[i].init(ftr.rArm_torOutpFtr[i].sampRate, ftr.rArm_torOutpFtr[i].cutoffRate);
-        feedforward_TorComp_lowpassFilter_rArm[i].init(ftr.rArm_torOutpFtr[i].sampRate, ftr.rArm_torOutpFtr[i].cutoffRate);
+        grav_TorOutp_lowpassFilter_rArm[i].init(1.0 / TEMPTIME, ftr.rArm_torOutpFtr[i].cutoffRate);
+        Inte_TorOutp_lowpassFilter_rArm[i].init(1.0 / TEMPTIME, ftr.rArm_torOutpFtr[i].cutoffRate);
+        feedforward_TorComp_lowpassFilter_rArm[i].init(1.0 / TEMPTIME, ftr.rArm_torOutpFtr[i].cutoffRate);
     }
 }
 
@@ -67,7 +67,8 @@ TorCompWrap DualArmGravWrap::GravCompOutp(
     //输入量
     std::vector<double> waist_pos, std::vector<double> waist_vel,       //基座位置、速度
     std::vector<double> lArm_pos, std::vector<double> lArm_vel,
-    std::vector<double> rArm_pos, std::vector<double> rArm_vel
+    std::vector<double> rArm_pos, std::vector<double> rArm_vel,
+    const std::vector<double>& acceleration
 ){  
     std::vector<double> torComp_grav;           //重力补偿输出
     std::vector<double> torComp_InteriaComb;    //惯性补偿输出
@@ -80,7 +81,7 @@ TorCompWrap DualArmGravWrap::GravCompOutp(
         waist_pos, waist_vel
     );
 
-    if(ifUseInpFtr == 1){
+    if(ifUseInpFtr == 1 && acceleration.empty()){
         //对输入进行滤波处理
         std::vector<double> lArm_posRetFtred;
         std::vector<double> lArm_velRetFtred;
@@ -117,7 +118,7 @@ TorCompWrap DualArmGravWrap::GravCompOutp(
         //惯性综合补偿赋值
         torComp_InteriaComb = mForceComp_floatBase.InteriaMulComp(
             lArm_pos, lArm_vel,
-            rArm_pos, rArm_vel
+            rArm_pos, rArm_vel, acceleration
         ); 
         
 
@@ -632,10 +633,10 @@ bool ArmCtlOptInterface::init(
         posOutp_lowpassFilter_rArm.resize(RARMDOF);
         velOutp_lowpassFilter_rArm.resize(RARMDOF);
         for(int i = 0; i < LARMDOF; i++){
-            posOutp_lowpassFilter_lArm[i].init(outpFtr.lArm_posOutpFtr[i].sampRate, outpFtr.lArm_posOutpFtr[i].cutoffRate);
-            velOutp_lowpassFilter_lArm[i].init(outpFtr.lArm_velOutpFtr[i].sampRate, outpFtr.lArm_velOutpFtr[i].cutoffRate);
-            posOutp_lowpassFilter_rArm[i].init(outpFtr.rArm_posOutpFtr[i].sampRate, outpFtr.rArm_posOutpFtr[i].cutoffRate);
-            velOutp_lowpassFilter_rArm[i].init(outpFtr.rArm_velOutpFtr[i].sampRate, outpFtr.rArm_velOutpFtr[i].cutoffRate);
+            posOutp_lowpassFilter_lArm[i].init(1.0 / TEMPTIME, outpFtr.lArm_posOutpFtr[i].cutoffRate);
+            velOutp_lowpassFilter_lArm[i].init(1.0 / TEMPTIME, outpFtr.lArm_velOutpFtr[i].cutoffRate);
+            posOutp_lowpassFilter_rArm[i].init(1.0 / TEMPTIME, outpFtr.rArm_posOutpFtr[i].cutoffRate);
+            velOutp_lowpassFilter_rArm[i].init(1.0 / TEMPTIME, outpFtr.rArm_velOutpFtr[i].cutoffRate);
         }
         //将滤波器初值设为初始关节位置，避免上电瞬间滤波收敛产生的跳变
         for(int i = 0; i < LARMDOF; i++){

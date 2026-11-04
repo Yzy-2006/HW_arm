@@ -23,6 +23,8 @@ sudo 密码并配置 `servo_node`，具体见[环境与构建](environments/READ
 | 要做的事 | 使用的文档 | 常用命令 |
 |---|---|---|
 | 把当前代码迁移到另一台电脑 | [新电脑迁移与交接](docs/MIGRATION_HANDOVER.md) | 环境重建、参数核对、分阶段验收 |
+| 配置机器人与布料仿真环境 | [Newton 仿真环境](environments/NEWTON_SETUP.md) | `make sim-check`、`make sim-demo` |
+| 完整配置与使用双臂叠毛巾仿真、VR、自动对折及三路相机 | [双臂叠毛巾仿真完整指南](simulation/README.md) | `make sim`、`make sim-fold`、`make sim-vr` |
 | 部署已训练的 PI05 或 ACT 模型到机器人 | [机器人部署指南](docs/DEPLOYMENT.md) | `make pi05`/`make act`、`make bridge`、`make motion` |
 | 将 LeRobot 数据集动作通过控制链回放 | [数据集动作回放流程](docs/DATASET_REPLAY_WORKFLOW.md) | `make replay ARGS="--episode 0"`（默认 dry-run） |
 | 按正确顺序启动并采集真机数据 | [真机数据采集流程](docs/DATA_COLLECTION_WORKFLOW.md) | 分终端：`make servo` → `make arms` → `make robot` → `make record` → `make vr` |
@@ -57,10 +59,8 @@ cd /home/yanziyu/projects/HW_arm/towel_task
 
 头显连接页面并进入 **Virtual Reality** 后，回到终端 5 按 **Enter**。
 出现“开始发布位姿增量（扣动扳机生效）”后，按住对应手柄的扳机、小幅移动手柄进行遥操作。
-当前双臂开启工具轴自转锁定：过滤绕手腕到夹爪末端方向（工具局部 Z 轴）的 VR 旋转，
-保留另外两个方向的倾转和平移；不锁定某个实体关节，也不限制右 A/B 的关节姿态运动。
-恢复自转可将 `controllerConfig.yaml` 的 `vrOrientationControl.lock_tool_twist` 改为 `false`，
-同步配置包后重启 `make robot`。
+当前双臂开放全部三个 VR 旋转自由度，包括工具局部 Z 轴自转。
+`controllerConfig.yaml` 的 `vrOrientationControl.lock_tool_twist` 为 `false`；更改后重启 `make robot` 生效。
 `make vr-debug` 只显示诊断数据，不发送控制指令，不能替代 `make vr`。
 
 右手 A 键让双臂回到零位。右手 B 键在“快速移动”和“精细微调”两种 VR 响应模式之间切换；
@@ -73,11 +73,21 @@ cd /home/yanziyu/projects/HW_arm/towel_task
 make preview                         # 三个 OpenCV 窗口检查相机，不启动 ROS 或录制
 make record-opencv                   # make record 的兼容别名
 make record-rviz                     # 可选：向 ROS 发布 RViz 图像话题
+make visualize                       # 离线展示双臂模型，附带关节滑块，无需连接机器人
 make launch ARGS="visualize:=true"   # 可选：单独启动 RViz、状态桥接和独立 TF
 make watch                           # 观察 /towel/gripper_state；可通过 WATCH_TOPIC=... 改话题
 make calibrate-arm-zero SIDE=left    # 被选中左/右臂零电流；SIDE 可为 left、right、both
 make save-arm-zero SIDE=left TARGET=both  # 同步所选侧关节与末端零位；也可选 joint / cartesian
 ```
+
+`make visualize` 打开 RViz 和关节滑块窗口，可拖动滑块调整模型姿态。
+与 `make sim`、`make sim-fold`、`make sim-vr` 一样，统一加载 `dual_arm/urdf/dual_arm.urdf` 和其 STL 资产，
+使用新版模型自带的旋转夹爪，不再追加简易夹爪。RViz 中的 `arm_l_joint_finger` / `arm_r_joint_finger`
+滑块单位为弧度，范围分别是 -90°–0° / 0°–90°；初始姿态读取 `simulation/scene.yaml`。
+Newton 中夹爪开口使用百分比。真机控制模型与零位配置独立，不随仿真模型切换。
+只查看静态模型时使用 `make visualize ARGS="gui:=false"`，按 `Ctrl+C` 退出。
+该命令仅发布 `/model_viewer/` 下的展示状态，不启动伺服、相机或控制节点。
+需要 ROS 工作区已构建，并安装 `ros-jazzy-joint-state-publisher-gui`。
 
 `make record` 会在唯一的相机采集器中打开三个 OpenCV 窗口；`make vr` 仍只负责 VR 遥操作。
 不要同时启动 `make preview`、`make record` 或 `make record-opencv`，因为多个 RealSense

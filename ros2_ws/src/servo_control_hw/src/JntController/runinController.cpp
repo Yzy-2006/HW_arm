@@ -293,7 +293,7 @@ void lowpassFilter::init(double msampleRate, double cutoffFreq){
 double lowpassFilter::filter(double input)
 {
     // 一阶低通滤波公式：y(n) = α*y(n-1) + (1-α)*x(n)
-    lastOutput = alpha * lastOutput + (1 - alpha) * input;
+    lastOutput = (1 - alpha) * lastOutput + alpha * input;
     return lastOutput;
 }
 
@@ -463,13 +463,16 @@ void runin_control::init(
 
     posFilter_r.resize(RARMDOF);
     velFilter_r.resize(RARMDOF);
+    sampleRate = 1.0 / TEMPTIME;
 
     for(int i = 0; i < LARMDOF; i++){
         posFilter_l[i].init(sampleRate, cutoffFreq);
+        posFilter_l[i].reset(lArmPos_FirstTempInp[i]);
         velFilter_l[i].init(sampleRate, cutoffFreq);
     }
     for(int i = 0; i < RARMDOF; i++){
         posFilter_r[i].init(sampleRate, cutoffFreq);
+        posFilter_r[i].reset(rArmPos_FirstTempInp[i]);
         velFilter_r[i].init(sampleRate, cutoffFreq);
     }
 

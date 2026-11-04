@@ -158,6 +158,7 @@ class xr_telepercation_ctl{
         // Synchronize once from feedback when Cartesian teleoperation resumes
         // after A-key joint return, then go back to planner-state tracking.
         bool use_feedback_once_after_return = false;
+        bool handoff_pending = false;
         //末端笛卡尔位姿反馈缓存（回零完成后重新锚定笛卡尔遥操作基准）
         std::vector<double> l_desc_ret_cache;
         std::vector<double> r_desc_ret_cache;
@@ -188,6 +189,7 @@ class xr_telepercation_ctl{
 
         //A 键触发关节空间回零（由回零触发回调调用，仅置位请求标志）
         void trigger_joint_return();
+        bool reanchor_from_feedback();
         void trigger_preset_pose();
         bool accepts_vr_input() const {
             return !returnRequested && !returning && !preset_holding;

@@ -13,6 +13,9 @@ import csv
 import datetime as dt
 import json
 import logging
+import os
+import signal
+import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -21,6 +24,7 @@ import numpy as np
 import yaml
 
 from pi05_bridge import _as_vector, limit_action, load_joint_limits, load_pd
+from motion_safety import MotionFault, CommandSafety, attach_safety
 from minimum_snap import JOINT_INDICES, MinimumSnapTrajectory, interpolation_settings, validate_controller_rate
 
 
@@ -30,6 +34,89 @@ JOINT_LABELS = [
     *(f"left_joint_{index}" for index in range(1, 8)),
     *(f"right_joint_{index}" for index in range(1, 8)),
 ]
+RVIZ_ARM_JOINT_NAMES = [
+    *(f"arm_l_joint_{index}" for index in range(1, 8)),
+    *(f"arm_r_joint_{index}" for index in range(1, 8)),
+]
+RVIZ_JOINT_NAMES = [
+    *RVIZ_ARM_JOINT_NAMES[:7], "arm_l_joint_finger",
+    *RVIZ_ARM_JOINT_NAMES[7:], "arm_r_joint_finger",
+]
+
+
+def _rviz_joint_state(message_type, stamp, positions: np.ndarray, grippers=None):
+    """Build a JointState message for the isolated model_viewer namespace."""
+    values = np.asarray(positions, dtype=np.float64).reshape(-1)
+    if values.shape != (14,) or not np.isfinite(values).all():
+        raise ValueError("RViz joint positions must contain 14 finite values")
+    if grippers is None:
+        names = RVIZ_ARM_JOINT_NAMES
+        output = values
+    else:
+        states = np.asarray(grippers, dtype=np.float64).reshape(-1)
+        if states.shape != (2,) or not np.isfinite(states).all():
+            raise ValueError("RViz gripper states must contain two finite values")
+        # Dataset actions use 0=open and 1=closed. The URDF finger limits use
+        # the opposite normalized convention: 0=closed, 1=open.
+        opening = 1.0 - np.clip(states, 0.0, 1.0)
+        output = np.r_[values[:7], -1.5708 * opening[0], values[7:], 1.5708 * opening[1]]
+        names = RVIZ_JOINT_NAMES
+    msg = message_type()
+    msg.header.stamp = stamp
+    msg.name = list(names)
+    msg.position = output.tolist()
+    msg.velocity = []
+    msg.effort = []
+    return msg
+
+
+def _start_rviz() -> subprocess.Popen:
+    """Start the model viewer with its default joint publisher disabled."""
+    launch_file = ROOT / "ros2_ws/src/towel_bringup/launch/model_viewer.launch.py"
+    env = os.environ.copy()
+    env.setdefault("TOWEL_ROOT", str(ROOT))
+    # Importing pi05_bridge imports cv2, whose wheel sets private Qt paths.
+    # RViz must load its system Qt plugins, without changing this process's GUI.
+    for key in ("QT_QPA_PLATFORM_PLUGIN_PATH", "QT_QPA_FONTDIR", "QT_PLUGIN_PATH"):
+        if "cv2" in env.get(key, ""):
+            env.pop(key)
+    return subprocess.Popen([
+        "ros2", "launch", str(launch_file),
+        "gui:=false", "joint_publisher:=false", "rviz:=true",
+    ], env=env, start_new_session=True)
+
+
+def _stop_rviz(process: subprocess.Popen | None) -> None:
+    if process is None or process.poll() is not None:
+        return
+    os.killpg(process.pid, signal.SIGINT)
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
+
+
+def _wait_for_rviz(node, process, rclpy, timeout_s=20.0):
+    """Keep frame zero visible until both RViz and its TF publisher are present."""
+    node.timer.cancel()
+    deadline = time.monotonic() + timeout_s
+    ready_since = None
+    while rclpy.ok():
+        if process.poll() is not None:
+            raise RuntimeError("RViz viewer exited during startup; see the launch errors above")
+        now = time.monotonic()
+        if now >= deadline:
+            raise RuntimeError("RViz startup timed out; check the display and ROS discovery")
+        node._publish_rviz(node.actions[0])
+        ready = (("rviz2", "/model_viewer") in node.get_node_names_and_namespaces()
+                 and node.rviz_pub.get_subscription_count() > 0)
+        ready_since = (ready_since if ready_since is not None else now) if ready else None
+        if ready_since is not None and now - ready_since >= 1.0:
+            node.timer.reset()
+            return
+        rclpy.spin_once(node, timeout_sec=0.05)
+    raise KeyboardInterrupt
 
 
 class ReplayRecorder:
@@ -42,18 +129,27 @@ class ReplayRecorder:
         self.make_plot = make_plot
         self.started_at = time.monotonic()
         self.rows: list[dict[str, Any]] = []
-        stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.status = "interrupted"
+        self.failure_reason = ""
+        stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         self.prefix = f"episode_{episode}_start_{start_frame}_{stamp}"
 
     def record(self, frame: int, dataset_action: np.ndarray, command: np.ndarray,
                feedback: np.ndarray | None,
-               *, gripper_feedback: np.ndarray | None = None) -> None:
+               *, gripper_feedback: np.ndarray | None = None,
+               interpolated: np.ndarray | None = None,
+               source_knot: bool = False) -> None:
         dataset_action = np.asarray(dataset_action, dtype=np.float64).reshape(-1)
         if dataset_action.shape != (14,) or not np.isfinite(dataset_action).all():
             raise ValueError("Dataset action angles must contain 14 finite values")
         command = np.asarray(command, dtype=np.float64).reshape(-1)
         if command.shape != (14,) or not np.isfinite(command).all():
             raise ValueError("Replay command angles must contain 14 finite values")
+        if interpolated is None:
+            interpolated = command
+        interpolated = np.asarray(interpolated, dtype=np.float64).reshape(-1)
+        if interpolated.shape != (14,) or not np.isfinite(interpolated).all():
+            raise ValueError("Minimum-snap angles must contain 14 finite values")
         actual = np.full(14, np.nan, dtype=np.float64)
         if feedback is not None:
             actual = np.asarray(feedback, dtype=np.float64).reshape(-1)
@@ -68,11 +164,14 @@ class ReplayRecorder:
             "sample": len(self.rows),
             "dataset_frame": int(frame),
             "elapsed_s": time.monotonic() - self.started_at,
+            "source_knot": int(bool(source_knot)),
         }
         for label, value in zip(JOINT_LABELS, dataset_action):
             row[f"dataset_{label}"] = float(value)
         for label, value in zip(JOINT_LABELS, command):
             row[f"command_{label}"] = float(value)
+        for label, value in zip(JOINT_LABELS, interpolated):
+            row[f"interpolated_{label}"] = float(value)
         for label, value in zip(JOINT_LABELS, actual):
             row[f"feedback_{label}"] = float(value)
         row["feedback_left_gripper_deg"] = float(gripper[0])
@@ -83,13 +182,20 @@ class ReplayRecorder:
     def fields(self) -> list[str]:
         return [
             "sample", "dataset_frame", "elapsed_s",
+            "source_knot",
             *(f"dataset_{label}" for label in JOINT_LABELS),
             *(f"command_{label}" for label in JOINT_LABELS),
+            *(f"interpolated_{label}" for label in JOINT_LABELS),
             *(f"feedback_{label}" for label in JOINT_LABELS),
             "feedback_left_gripper_deg", "feedback_right_gripper_deg",
         ]
 
     def save(self) -> tuple[Path | None, Path | None]:
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        (self.output_dir / f"{self.prefix}.json").write_text(json.dumps({
+            "episode": self.episode, "start_frame": self.start_frame,
+            "status": self.status, "failure_reason": self.failure_reason, "samples": len(self.rows),
+        }, indent=2) + "\n")
         if not self.rows:
             LOG.warning("No replay samples were recorded; no CSV or plot was written")
             return None, None
@@ -120,6 +226,11 @@ class ReplayRecorder:
             [row[f"dataset_{label}"] for label in JOINT_LABELS]
             for row in self.rows
         ], dtype=np.float64)
+        interpolated = np.asarray([
+            [row[f"interpolated_{label}"] for label in JOINT_LABELS]
+            for row in self.rows
+        ], dtype=np.float64)
+        source_knots = np.asarray([bool(row["source_knot"]) for row in self.rows])
         feedback = np.asarray([
             [row[f"feedback_{label}"] for label in JOINT_LABELS]
             for row in self.rows
@@ -127,14 +238,20 @@ class ReplayRecorder:
         fig, axes = plt.subplots(7, 2, figsize=(15, 22), sharex=True)
         axes = np.asarray(axes).reshape(-1)
         for index, (axis, label) in enumerate(zip(axes, JOINT_LABELS)):
-            axis.plot(times, dataset_actions[:, index], label="dataset action",
-                      color="tab:blue", linewidth=1.2)
+            axis.plot(times, interpolated[:, index], label="minimum-snap interpolation",
+                      color="tab:green", linewidth=1.2, zorder=2)
+            # Only mark each source waypoint once; the recorder may contain many
+            # high-rate interpolation samples between two dataset frames.
+            if source_knots.any():
+                axis.scatter(times[source_knots], dataset_actions[source_knots, index],
+                             label="original waypoint", color="tab:blue", s=5,
+                             linewidths=0, alpha=0.85, zorder=3)
             if np.isfinite(feedback[:, index]).any():
                 axis.plot(times, feedback[:, index], label="motor feedback",
                           color="tab:orange", linewidth=1.0)
             else:
-                axis.text(0.5, 0.5, "no feedback", transform=axis.transAxes,
-                          ha="center", va="center")
+                axis.text(0.99, 0.03, "no feedback", transform=axis.transAxes,
+                          ha="right", va="bottom", fontsize=8, color="0.45")
             axis.set_title(label)
             axis.set_ylabel("rad")
             axis.grid(True, alpha=0.3)
@@ -142,8 +259,8 @@ class ReplayRecorder:
                 axis.legend(loc="best")
         axes[-1].set_xlabel("elapsed time (s)")
         axes[-2].set_xlabel("elapsed time (s)")
-        fig.suptitle(f"Replay episode {self.episode}: dataset action vs motor feedback")
-        fig.tight_layout()
+        fig.suptitle(f"Replay episode {self.episode}: original waypoints and minimum-snap replay")
+        fig.tight_layout(rect=(0, 0, 1, 0.98))
         plot_path = self.output_dir / f"{self.prefix}.png"
         fig.savefig(plot_path, dpi=150)
         plt.close(fig)
@@ -266,13 +383,18 @@ def load_episode_actions(
 
 
 def _make_bridge_message(message_type, stamp, action: np.ndarray, kp_l, kd_l, kp_r, kd_r,
-                         *, hold: bool, reanchor: bool, rigidity_mode: int = 2):
+                         *, hold: bool, reanchor: bool, rigidity_mode: int = 2,
+                         target_period: float = 0.02, velocity=None, acceleration=None):
     msg = message_type()
     msg.header.stamp = stamp
     msg.ctl_trans_mod = 3
     msg.torque_feedforward_ctl = 0
     msg.if_reach_end = False
     msg.hold_position = bool(hold)
+    msg.target_period_s = target_period
+    msg.derivatives_valid = velocity is not None and acceleration is not None and not hold
+    msg.l_arm_des_acc = np.zeros(7).tolist() if acceleration is None else acceleration[:7].tolist()
+    msg.r_arm_des_acc = np.zeros(7).tolist() if acceleration is None else acceleration[7:].tolist()
     msg.l_arm_if_use_jntlim = False
     msg.r_arm_if_use_jntlim = False
     msg.l_arm_limjnt_num = 0
@@ -281,8 +403,8 @@ def _make_bridge_message(message_type, stamp, action: np.ndarray, kp_l, kd_l, kp
     msg.r_arm_des_msg = action[8:15].tolist()
     msg.l_arm_des_tor_msg = [0.0] * 7
     msg.r_arm_des_tor_msg = [0.0] * 7
-    msg.l_arm_mdp_des_jnt_vel = [0.0] * 7
-    msg.r_arm_mdp_des_jnt_vel = [0.0] * 7
+    msg.l_arm_mdp_des_jnt_vel = [0.0] * 7 if velocity is None else velocity[:7].tolist()
+    msg.r_arm_mdp_des_jnt_vel = [0.0] * 7 if velocity is None else velocity[7:].tolist()
     msg.if_init_use_ret = int(reanchor and not hold)
     msg.l_arm_rigidity_mod = [rigidity_mode] * 7
     msg.r_arm_rigidity_mod = [rigidity_mode] * 7
@@ -323,6 +445,9 @@ def create_replay_node(args, actions: np.ndarray, fps: float, recorder: ReplayRe
     from rclpy.qos import qos_profile_sensor_data
     from ctl_msgs_hw.msg import BridgeCtlMsg, GripperCtl, MidNodeCtlMsgRet
     from std_msgs.msg import Float64MultiArray
+    JointState = None
+    if getattr(args, "rviz", False):
+        from sensor_msgs.msg import JointState
 
     config_path = Path(args.config).expanduser().resolve()
     config = _read_yaml(config_path)
@@ -354,6 +479,8 @@ def create_replay_node(args, actions: np.ndarray, fps: float, recorder: ReplayRe
     ], dtype=np.float64)
     period = 1.0 / (fps * args.speed)
     interpolate, publish_rate_hz = interpolation_settings(bridge_cfg, fps * args.speed)
+    if args.motion and publish_rate_hz < 4.0:
+        raise ValueError("Motion publication must be at least 4 Hz; enable minimum_snap for slower source trajectories")
     if interpolate:
         validate_controller_rate(controller_cfg, publish_rate_hz)
     state_timeout = float(bridge_cfg.get("state_timeout_s", 0.25))
@@ -371,22 +498,34 @@ def create_replay_node(args, actions: np.ndarray, fps: float, recorder: ReplayRe
             self.last_command = None
             self.reanchor = True
             self.done = False
+            self.failed = ""
+            self.safety = None
+            self.command_safety = CommandSafety(bridge_cfg, lower, upper, now=time.monotonic)
             self.trajectory = None
             self.trajectory_started_at = None
             self.trajectory_start_index = 0
             self.last_log_at = -float("inf")
             self.initial_grippers = None
+            self.last_recorded_frame = None
             self.command_pub = self.create_publisher(BridgeCtlMsg, "/dexbotCtl/bridge_ctl_msg", 1)
             self.gripper_pub = self.create_publisher(GripperCtl, "/gripper/ctl", 10)
-            self.create_subscription(MidNodeCtlMsgRet, "/dexbotCtl/midMonitor_msg_send", self._joint_callback,
-                                     qos_profile_sensor_data)
-            self.create_subscription(Float64MultiArray, "/gripper/fdb", self._gripper_callback,
-                                     qos_profile_sensor_data)
+            self.rviz_pub = (
+                self.create_publisher(JointState, "/model_viewer/joint_states", 10)
+                if JointState is not None else None
+            )
+            if self.motion:
+                self.create_subscription(MidNodeCtlMsgRet, "/dexbotCtl/midMonitor_msg_send", self._joint_callback,
+                                         qos_profile_sensor_data)
+                self.create_subscription(Float64MultiArray, "/gripper/fdb", self._gripper_callback,
+                                         qos_profile_sensor_data)
             self.timer = self.create_timer(1.0 / publish_rate_hz, self.step)
+            if self.motion:
+                self.safety = attach_safety(self, self._fault)
             self.get_logger().warning(
                 f"dataset replay {'MOTION' if self.motion else 'DRY-RUN'}: "
                 f"frames={len(actions)} rate={fps * args.speed:g}Hz slow_factor={slow_factor:g} "
-                f"minimum_snap={interpolate} publish_rate_hz={publish_rate_hz:g}"
+                f"minimum_snap={interpolate} publish_rate_hz={publish_rate_hz:g} "
+                f"rviz={bool(getattr(args, 'rviz', False))}"
             )
 
         def _joint_callback(self, msg):
@@ -403,6 +542,9 @@ def create_replay_node(args, actions: np.ndarray, fps: float, recorder: ReplayRe
                 self.gripper_feedback_at = time.monotonic()
 
         def _publish_hold(self):
+            self.command_safety.reset()
+            if self.safety is not None and self.safety.fault:
+                return
             if not self.motion or self.last_command is None:
                 return
             stamp = self.get_clock().now().to_msg()
@@ -411,17 +553,49 @@ def create_replay_node(args, actions: np.ndarray, fps: float, recorder: ReplayRe
                 hold=True, reanchor=True, rigidity_mode=rigidity_mode,
             ))
 
+        def _publish_rviz(self, target: np.ndarray):
+            if self.rviz_pub is None:
+                return
+            positions = np.r_[target[:7], target[8:15]]
+            self.rviz_pub.publish(_rviz_joint_state(
+                JointState, self.get_clock().now().to_msg(), positions, target[[7, 15]],
+            ))
+
         def step(self):
+            try:
+                self._step()
+            except Exception as exc:
+                if self.motion:
+                    self.safety.trip(str(exc))
+                else:
+                    raise
+
+        def _fault(self, reason):
+            self.failed = str(reason)
+            if recorder is not None:
+                recorder.status = "fault"
+                recorder.failure_reason = str(reason)
+            self.done = True
+            self.timer.cancel()
+            self.get_logger().error(f"Replay aborted and fault latched: {reason}")
+
+        def _step(self):
+            if self.failed or (self.safety is not None and not self.safety.ready()):
+                return
             if self.index >= len(self.actions):
                 self._publish_hold()
                 self.timer.cancel()
                 self.done = True
+                if recorder is not None:
+                    recorder.status = "completed"
                 self.get_logger().info("Replay completed; holding position")
                 return
             now = time.monotonic()
             if self.motion:
                 if (self.joints is None or now - self.joint_received_at > state_timeout
                         or now - self.gripper_feedback_at > state_timeout):
+                    if self.last_command is not None:
+                        raise MotionFault("Joint or gripper feedback lost during replay")
                     self._publish_hold()
                     self.reanchor = True
                     self.trajectory = None
@@ -435,6 +609,7 @@ def create_replay_node(args, actions: np.ndarray, fps: float, recorder: ReplayRe
             else:
                 state = self.actions[self.index].copy()
             finished = False
+            velocity = acceleration = None
             if interpolate:
                 if self.trajectory is None:
                     remaining = self.actions[self.index:]
@@ -442,6 +617,9 @@ def create_replay_node(args, actions: np.ndarray, fps: float, recorder: ReplayRe
                         np.arange(len(remaining) + 1) * period,
                         np.vstack([state[JOINT_INDICES], remaining[:, JOINT_INDICES]]),
                     )
+                    if self.motion:
+                        self.trajectory.validate_limits(lower, upper, self.command_safety.max_velocity,
+                                                        self.command_safety.max_acceleration)
                     self.trajectory_start_index = self.index
                     self.trajectory_started_at = time.monotonic()
                     self.initial_grippers = gripper.update(self.gripper_feedback) if self.motion else state[[7, 15]]
@@ -456,28 +634,34 @@ def create_replay_node(args, actions: np.ndarray, fps: float, recorder: ReplayRe
                 raw = self.actions[self.index]
                 target = raw.copy()
                 target[JOINT_INDICES] = self.trajectory.at(elapsed)
+                velocity = self.trajectory.at(elapsed, 1)
+                acceleration = self.trajectory.at(elapsed, 2)
                 if elapsed < period:
                     target[[7, 15]] = self.initial_grippers
             else:
                 raw = self.actions[self.index]
                 target = raw.copy()
+            source_knot = self.index != self.last_recorded_frame
             if self.motion and (time.monotonic() - self.joint_received_at > state_timeout
                                 or time.monotonic() - self.gripper_feedback_at > state_timeout):
-                self._publish_hold()
-                self.reanchor = True
-                self.trajectory = None
-                return
+                raise MotionFault("Feedback expired before replay publication")
             action = limit_action(target, state, lower, upper, max_step) if self.motion else target
+            if self.motion:
+                if interpolate and not np.allclose(action[JOINT_INDICES], target[JOINT_INDICES], atol=1e-9, rtol=0):
+                    raise MotionFault("Trajectory exceeds feedback allowance; refusing to distort derivatives")
+                self.command_safety.check(action, state, 1.0 / publish_rate_hz, velocity, acceleration)
             self.last_command = action
             if self.motion:
                 stamp = self.get_clock().now().to_msg()
                 self.command_pub.publish(_make_bridge_message(
                     BridgeCtlMsg, stamp, action, kp_l, kd_l, kp_r, kd_r,
                     hold=False, reanchor=self.reanchor, rigidity_mode=rigidity_mode,
+                    target_period=1.0 / publish_rate_hz, velocity=velocity, acceleration=acceleration,
                 ))
                 self.gripper_pub.publish(_make_gripper_message(GripperCtl, action, gripper, zero_deg,
                                                                 publish_rate_hz))
                 self.reanchor = False
+            self._publish_rviz(target)
             if recorder is not None:
                 recorder.record(
                     args.start_frame + self.index,
@@ -485,7 +669,10 @@ def create_replay_node(args, actions: np.ndarray, fps: float, recorder: ReplayRe
                     np.r_[action[:7], action[8:15]],
                     self.joints,
                     gripper_feedback=self.gripper_feedback,
+                    interpolated=np.r_[target[:7], target[8:15]],
+                    source_knot=source_knot,
                 )
+            self.last_recorded_frame = self.index
             if now - self.last_log_at >= 1.0:
                 self.last_log_at = now
                 self.get_logger().info(
@@ -513,6 +700,10 @@ def main() -> int:
     parser.add_argument("--config", default=str(ROOT / "config/pi05_deployment.yaml"))
     parser.add_argument("--motion", action="store_true", help="Publish robot and gripper commands")
     parser.add_argument(
+        "--rviz", action="store_true",
+        help="Replay in the isolated RViz model viewer (dry-run only; incompatible with --motion)",
+    )
+    parser.add_argument(
         "--output-dir",
         default=str(ROOT / "outputs/replay_logs"),
         help="Directory for replay CSV and PNG measurements",
@@ -528,6 +719,8 @@ def main() -> int:
         args.slow_factor <= 0 or args.slow_factor > 1 or not np.isfinite(args.slow_factor)
     ):
         parser.error("--slow-factor must satisfy 0 < value <= 1")
+    if args.motion and args.rviz:
+        parser.error("--rviz is a dry-run safety preview and cannot be combined with --motion")
     if args.list_episodes:
         for row in list_episodes(args.dataset):
             print(f"episode={row['episode']} length={row['length']} frames={row['from']}:{row['to']}")
@@ -548,19 +741,41 @@ def main() -> int:
     import rclpy
     rclpy.init()
     node = None
+    rviz_process = None
+    saved = False
     try:
+        rviz_process = _start_rviz() if args.rviz else None
         node = create_replay_node(args, actions, fps, recorder)
+        if rviz_process is not None:
+            _wait_for_rviz(node, rviz_process, rclpy)
+            recorder.started_at = time.monotonic()
         while rclpy.ok() and not node.done:
+            if rviz_process is not None and rviz_process.poll() is not None:
+                raise RuntimeError("RViz viewer closed before replay completed")
             rclpy.spin_once(node, timeout_sec=0.2)
+        if node.failed:
+            LOG.error("Replay aborted: %s", node.failed)
+            return 1
+        if args.rviz and node.done:
+            recorder.save()
+            saved = True
+            LOG.info("Replay saved; RViz holds the final pose. Close its window or press Ctrl+C to exit.")
+            while rclpy.ok() and rviz_process.poll() is None:
+                node._publish_rviz(node.last_command)
+                rclpy.spin_once(node, timeout_sec=0.05)
     except KeyboardInterrupt:
         if node is not None:
             node._publish_hold()
     finally:
-        if node is not None:
-            node.destroy_node()
-        if rclpy.ok():
-            rclpy.shutdown()
-        recorder.save()
+        try:
+            if node is not None:
+                node.destroy_node()
+            if rclpy.ok():
+                rclpy.shutdown()
+            if not saved:
+                recorder.save()
+        finally:
+            _stop_rviz(rviz_process)
     return 0
 
 

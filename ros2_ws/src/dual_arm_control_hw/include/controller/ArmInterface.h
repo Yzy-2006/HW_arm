@@ -104,7 +104,8 @@ class DualArmGravWrap{
             //输入量
             std::vector<double> waist_pos, std::vector<double> waist_vel,       //基座位置、速度
             std::vector<double> lArm_pos, std::vector<double> lArm_vel,
-            std::vector<double> rArm_pos, std::vector<double> rArm_vel
+            std::vector<double> rArm_pos, std::vector<double> rArm_vel,
+            const std::vector<double>& acceleration = {}
         );
 
         //纯粹的重力补偿函数——输出中仅包含重力补偿

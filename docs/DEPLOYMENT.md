@@ -32,6 +32,9 @@ make motion PI05_SLOW_FACTOR=0.1
 
 `make bridge ARGS=...` 和 `make motion ARGS=...` 支持传递额外 bridge 参数。
 
+需要部署中暂停模型、切换 VR 并采集恢复动作时，使用 `--intervention`，完整操作见
+[VR 接管与补采](POLICY_INTERVENTION.md)。该模式复用部署相机，不另启 `make record`。
+
 ## 环境分工
 
 - `.venv-robot`：ROS2 Jazzy、RealSense、EtherCAT/CAN、机器人控制和 bridge。

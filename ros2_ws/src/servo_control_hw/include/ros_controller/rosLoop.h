@@ -13,6 +13,8 @@
 #include <chrono>
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/float64_multi_array.hpp"
+#include "std_msgs/msg/string.hpp"
+#include "std_srvs/srv/trigger.hpp"
 
 #include "servo_control/zero_pos_config.h"
 #include "servo_control/command.h"
@@ -154,6 +156,10 @@ class ServoNode : public rclcpp::Node {
         void run();
 
     private:
+        rclcpp::Publisher<std_msgs::msg::String>::SharedPtr safety_pub_;
+        rclcpp::Subscription<std_msgs::msg::String>::SharedPtr safety_stop_;
+        rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr safety_reset_;
+        rclcpp::TimerBase::SharedPtr safety_timer_;
         //====================消息发送变量====================
 
         //----------反馈信息发送----------
@@ -177,6 +183,7 @@ class ServoNode : public rclcpp::Node {
         //添加标志位，标记是否接收到指令
         bool has_received_command_;     //当该标志位为false -- 非使能状态； 当标志位为true -- 使能状态
         bool ifFirstTemp;
+        bool trajectory_sample_ = false;
 
         // Arm zero calibration is an explicit, isolated mode.  It must never
         // fall through to the normal homing or upper-controller path.
@@ -221,8 +228,6 @@ class ServoNode : public rclcpp::Node {
 
         //----------插补器变量----------
         //滤波器初始化触发器 -- 在初次接收到中层节点后要进行滤波器初始化
-        bool ifInitFilter;              //是否触发滤波器初始化
-        bool ifTriggered;               //触发标志变量
 
         //左右臂插补位置初始化刷新量
         std::vector<double> l_posReceive_atRuninSt;
@@ -360,9 +365,6 @@ class ServoNode : public rclcpp::Node {
         runinOutpFtr TorOutpFtr;
 
         //初始段输出控制代码
-        int ftrInitOutpTimes = 4000;
-        int ftrInitOutpCount = 0;
-        bool ifFirstFtrInitOutp = true;
 
         //摩擦补偿
         Stribeck_FricCompWrap stribeckComp_wrap;

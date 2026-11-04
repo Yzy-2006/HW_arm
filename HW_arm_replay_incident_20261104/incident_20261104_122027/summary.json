@@ -1,0 +1,41 @@
+{
+  "replay_rows": 300,
+  "monitor_rows": 432,
+  "first_observed": {
+    "left_feedforward_abs_over_10": {
+      "local_time": "12:20:32.789",
+      "seconds_after_launch": 5.601010322570801,
+      "window_flags": 0
+    },
+    "left_feedforward_abs_over_90": {
+      "local_time": "12:20:32.839",
+      "seconds_after_launch": 5.651880264282227,
+      "window_flags": 16
+    },
+    "left_speed_peak_over_2": {
+      "local_time": "12:20:32.839",
+      "seconds_after_launch": 5.651880264282227,
+      "window_flags": 16
+    },
+    "left_decode_age_over_100ms": {
+      "local_time": "12:20:33.802",
+      "seconds_after_launch": 6.614941358566284,
+      "window_flags": 28
+    },
+    "bad_wkc_window": {
+      "local_time": "12:20:35.826",
+      "seconds_after_launch": 8.63835620880127,
+      "window_flags": 94
+    },
+    "command_timeout_window": null
+  },
+  "l0_feedforward_largest_absolute": {
+    "value": -44114.107,
+    "local_time": "12:20:34.661"
+  },
+  "l0_peak_speed_rad_s_largest_absolute": {
+    "value": 16.514286,
+    "local_time": "12:20:34.207"
+  },
+  "left_shoulder_dataset_max_frame_step_rad": 0.021955817937850952
+}

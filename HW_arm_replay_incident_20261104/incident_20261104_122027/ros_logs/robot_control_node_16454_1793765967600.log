@@ -1,0 +1,5 @@
+[INFO] [1793765967.618395806] [robot_upperMonitor]: CtlTransmit bridge initialized.
+[INFO] [1793765967.621050831] [robot_upperMonitor]: Chassis transmit initialized
+[INFO] [1793765989.152026903] [robot_upperMonitor]: BridgeCtlMsg received: ctl_trans_mod=3
+[INFO] [1793765990.152084185] [robot_upperMonitor]: BridgeCtlMsg received: ctl_trans_mod=3
+[INFO] [1793765998.178538337] [robot_upperMonitor]: 程序已安全退出

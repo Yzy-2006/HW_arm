@@ -1599,7 +1599,7 @@ bool ForceComp_floatBase::init(
     //初始化加速度滤波器
     acc_ftr.resize(LARMDOF + RARMDOF);
     for(int i = 0; i < LARMDOF + RARMDOF; i++){
-        acc_ftr[i].FilterInit(0.0, mRobotGravCompInte.acc_ftr[i].Q_gain, mRobotGravCompInte.acc_ftr[i].R_gain);
+        acc_ftr[i].FilterInit(0.0, mRobotGravCompInte.acc_ftr[i].Q_gain, mRobotGravCompInte.acc_ftr[i].R_gain, TEMPTIME);
     }
 
     printModelInfo();
@@ -1656,6 +1656,7 @@ std::vector<double> ForceComp_floatBase::gravComp(
     std::vector<double> lArm_pos, std::vector<double> lArm_vel,
     std::vector<double> rArm_pos, std::vector<double> rArm_vel)
 {
+    if (!mRobotGravCompInte.ifUseGravComp) return std::vector<double>(arm_nj_, 0.0);
     // ---- 填入手臂关节位置 (从 arm_q_offset_ 开始) ----
     int idx = arm_q_offset_;
     for(int i = 0; i < LARMDOF; i++){
@@ -1681,8 +1682,11 @@ std::vector<double> ForceComp_floatBase::gravComp(
 
 std::vector<double> ForceComp_floatBase::InteriaMulComp(
     std::vector<double> lArm_pos, std::vector<double> lArm_vel,
-    std::vector<double> rArm_pos, std::vector<double> rArm_vel)
+    std::vector<double> rArm_pos, std::vector<double> rArm_vel,
+    const std::vector<double>& acceleration)
 {
+    if (!mRobotGravCompInte.ifUseInertiaComp && !mRobotGravCompInte.ifUseCoriolisComp)
+        return std::vector<double>(arm_nj_, 0.0);
     // ---- 填入手臂关节位置 ----
     int idx_q = arm_q_offset_;
     for(int i = 0; i < LARMDOF; i++){
@@ -1711,7 +1715,12 @@ std::vector<double> ForceComp_floatBase::InteriaMulComp(
         v_lst_(i) = v_(i);
 
         //对加速度进行滤波处理并输出 (注意: acc_ftr 索引从0开始, 需减去 arm_v_offset_)
-        a_(i) = acc_ftr[i - arm_v_offset_].FilteredResCal(a_(i));
+        if (acceleration.size() == static_cast<size_t>(arm_nj_)) {
+            a_(i) = acceleration[i - arm_v_offset_] * inte_inp[i - arm_v_offset_];
+        } else {
+            a_(i) = mRobotGravCompInte.ifUseInertiaComp
+                ? acc_ftr[i - arm_v_offset_].FilteredResCal(a_(i)) : 0.0;
+        }
     }
 
     //针对速度进行画图分析
@@ -1727,13 +1736,18 @@ std::vector<double> ForceComp_floatBase::InteriaMulComp(
     }
 
     // ---- 科氏力项 ----
-    Eigen::VectorXd coriolis = pinocchio::computeCoriolisMatrix(model_, data_, q_, v_) * v_;
+    Eigen::VectorXd coriolis = Eigen::VectorXd::Zero(model_.nv);
+    if (mRobotGravCompInte.ifUseCoriolisComp)
+        coriolis = pinocchio::computeCoriolisMatrix(model_, data_, q_, v_) * v_;
 
     // ---- 惯性力项 (质量矩阵 × 加速度) ----
-    Eigen::MatrixXd mass_matrix = pinocchio::crba(model_, data_, q_);
-    mass_matrix.triangularView<Eigen::StrictlyLower>() =
-        mass_matrix.transpose().triangularView<Eigen::StrictlyLower>();
-    Eigen::VectorXd inertia = mass_matrix * a_;
+    Eigen::VectorXd inertia = Eigen::VectorXd::Zero(model_.nv);
+    if (mRobotGravCompInte.ifUseInertiaComp) {
+        Eigen::MatrixXd mass_matrix = pinocchio::crba(model_, data_, q_);
+        mass_matrix.triangularView<Eigen::StrictlyLower>() =
+            mass_matrix.transpose().triangularView<Eigen::StrictlyLower>();
+        inertia = mass_matrix * a_;
+    }
 
     // ---- 仅提取手臂关节力矩 (跳过基座6维) ----
     std::vector<double> tau_vec(arm_nj_);

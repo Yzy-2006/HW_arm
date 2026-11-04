@@ -29,6 +29,11 @@ bridge:
   interpolation:
     enabled: true
     publish_rate_hz: 300
+  motion_safety:
+    max_velocity_rad_s: 1.0
+    max_acceleration_rad_s2: 5.0
+    max_tracking_error_rad: 0.3
+    tracking_timeout_s: 0.1
   state_timeout_s: 0.25
   # Refresh the horizon asynchronously; control and feedback never wait for it.
   replan_interval_s: 0.5
@@ -42,6 +47,5 @@ bridge:
   # This is deliberately small
   # for first tests; increase only after replay and dry-run checks pass.
   max_joint_step_rad: 0.3
-  # Optional multiplier for slow-motion observation. Override temporarily with
-  # `--slow-factor 0.1` instead of changing this file.
+  # Scales feedback-relative allowance only, not physical speed or acceleration.
   slow_factor: 1.0

@@ -1,0 +1,3 @@
+[INFO] [1793765962.055577988] [dual_arm_control_node]: URDF directory found: /home/shaunxiang/Documents/projects/02_hw_arm_flexible_manipulation/HW_arm/ros2_ws/install/dual_arm_hw/share/dual_arm_hw/urdf/dual_arm.urdf
+[INFO] [1793765962.061414170] [robot_state_publisher]: Robot initialized
+[INFO] [1793766185.872480757] [rclcpp]: signal_handler(SIGINT/SIGTERM)

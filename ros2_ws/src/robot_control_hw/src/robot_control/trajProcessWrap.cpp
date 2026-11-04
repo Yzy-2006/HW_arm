@@ -180,6 +180,32 @@ void RobotCtlNode::xr_teleComu_init(){
     );
 
     xrTeleComuCtl.init();
+    safety_subscription_ = create_subscription<std_msgs::msg::String>("/towel/safety/state",
+        rclcpp::QoS(1).transient_local(), [this](std_msgs::msg::String::ConstSharedPtr msg) {
+            safety_received_ = std::chrono::steady_clock::now();
+            safety_ready_ = msg->data == "ready";
+            safety_fault_ = safety_fault_ || msg->data.rfind("fault:", 0) == 0;
+        });
+    vr_override_service = this->create_service<std_srvs::srv::SetBool>(
+        "/dexbotCtl/vr_override",
+        [this](const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+               std::shared_ptr<std_srvs::srv::SetBool::Response> response){
+            if (!motion_ready()) {
+                response->success = false;
+                response->message = "Handoff blocked by servo safety state; reset fault and restart controller";
+                return;
+            }
+            const double age = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - last_desc_feedback).count();
+            if(request->data && (age > 0.25 || !xrTeleComuCtl.reanchor_from_feedback())){
+                response->success = false;
+                response->message = "VR handoff requires fresh finite FK feedback within VR limits";
+                return;
+            }
+            bridge_transmit.set_vr_override(request->data);
+            response->success = true;
+            response->message = request->data ? "VR anchored to feedback" : "Bridge holding; awaiting fresh policy";
+        });
 }
 
 //遥操作数据转化并输出
@@ -189,6 +215,7 @@ void RobotCtlNode::xr_teleComu_outp(){
 
 //四个遥操作消息回调函数
 void RobotCtlNode::lArm_xrTele_endPos_callback(const geometry_msgs::msg::Vector3::SharedPtr msg){
+    if(!motion_ready() || bridge_transmit.active()){ return; }
 
     xrTeleComuCtl.apply_left_orientation_delta({
         msg->x, msg->y, msg->z
@@ -196,6 +223,7 @@ void RobotCtlNode::lArm_xrTele_endPos_callback(const geometry_msgs::msg::Vector3
  
 }
 void RobotCtlNode::rArm_xrTele_endPos_callback(const geometry_msgs::msg::Vector3::SharedPtr msg){
+    if(!motion_ready() || bridge_transmit.active()){ return; }
 
     xrTeleComuCtl.apply_right_orientation_delta({
         msg->x, msg->y, msg->z
@@ -203,7 +231,7 @@ void RobotCtlNode::rArm_xrTele_endPos_callback(const geometry_msgs::msg::Vector3
 
 }
 void RobotCtlNode::lArm_xrTele_endDelta_callback(const geometry_msgs::msg::Vector3::SharedPtr msg){
-    if(!xrTeleComuCtl.accepts_vr_input()){ return; }
+    if(!motion_ready() || bridge_transmit.active() || !xrTeleComuCtl.accepts_vr_input()){ return; }
 
     xrTeleComuCtl.l_arm_end_delta[0] += msg->x;
     xrTeleComuCtl.l_arm_end_delta[1] += msg->y;
@@ -211,7 +239,7 @@ void RobotCtlNode::lArm_xrTele_endDelta_callback(const geometry_msgs::msg::Vecto
     
 }
 void RobotCtlNode::rArm_xrTele_endDelta_callback(const geometry_msgs::msg::Vector3::SharedPtr msg){
-    if(!xrTeleComuCtl.accepts_vr_input()){ return; }
+    if(!motion_ready() || bridge_transmit.active() || !xrTeleComuCtl.accepts_vr_input()){ return; }
 
 
     xrTeleComuCtl.r_arm_end_delta[0] += msg->x;
@@ -222,6 +250,7 @@ void RobotCtlNode::rArm_xrTele_endDelta_callback(const geometry_msgs::msg::Vecto
 
 //A 键回零触发回调：收到 True 后置位回零请求标志
 void RobotCtlNode::zeroReturnCmd_callback(const std_msgs::msg::Bool::SharedPtr msg){
+    if(!motion_ready() || bridge_transmit.active()){ return; }
     if(msg->data){
         std::cout << " xr message get: A 键回零触发指令" << std::endl;
         xrTeleComuCtl.trigger_joint_return();
@@ -230,12 +259,14 @@ void RobotCtlNode::zeroReturnCmd_callback(const std_msgs::msg::Bool::SharedPtr m
 
 //末端笛卡尔位姿反馈回调：缓存当前末端位姿（用于回零完成后重新锚定）
 void RobotCtlNode::endDescPub_callback(const ctl_msgs_hw::msg::EndDescPub::SharedPtr msg){
+    if(msg->l_desc_pos_ret.size() != 6 || msg->r_desc_pos_ret.size() != 6) return;
     std::vector<double> l_desc_ret(6, 0.0), r_desc_ret(6, 0.0);
     for(int i = 0; i < 6; i++){
         l_desc_ret[i] = msg->l_desc_pos_ret[i];
         r_desc_ret[i] = msg->r_desc_pos_ret[i];
     }
     xrTeleComuCtl.update_desc_ret(l_desc_ret, r_desc_ret);
+    last_desc_feedback = std::chrono::steady_clock::now();
 }
 
 //-----------------------------------------------------------

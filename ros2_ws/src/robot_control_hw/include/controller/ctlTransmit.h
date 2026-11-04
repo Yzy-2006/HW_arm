@@ -38,9 +38,18 @@ public:
     DotOutpWrap bridgeMsg_getAndPub(const std::vector<double>& left_feedback,
                                   const std::vector<double>& right_feedback);
 
-    // Once a bridge message arrives, robot_control stays on the bridge stream
-    // until this process exits, so an idle bridge cannot compete with VR.
+    // Bridge ownership stays latched until an acknowledged VR handoff.
     bool active() const { return bridge_active_; }
+    void fill_stream_metadata(ctl_msgs_hw::msg::MidNodeCtlMsgSend& msg) const;
+    void set_vr_override(bool enabled) {
+        vr_override_ = enabled;
+        bridge_active_ = !enabled;
+        joint_stream_ = JointStreamGuard{};
+        joint_stream_mode_ = true;
+        stream_message_.reset();
+        bridge_data.armTrajMsg.ctlTransMod = 3;
+        joint_stream_.receive({}, {}, true, true, 0.0);
+    }
 
 private:
     DotOutpWrap bridge_data;
@@ -63,6 +72,8 @@ private:
     int zero_count;
     JointStreamGuard joint_stream_;
     bool joint_stream_mode_ = false;
+    bool vr_override_ = false;
+    ctl_msgs_hw::msg::BridgeCtlMsg::SharedPtr stream_message_;
 
 };
 

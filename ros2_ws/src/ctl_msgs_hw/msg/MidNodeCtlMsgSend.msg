@@ -30,6 +30,13 @@ float64[] kd_trans_r       #右臂关节Kd
 
 float64 upper_monitor_time   #上位机迭代时间
 
+# Original bridge sample identity; repeated forwarding must not restart interpolation.
+std_msgs/Header trajectory_header
+bool bridge_joint_stream
+bool derivatives_valid
+float64[] l_arm_des_acc
+float64[] r_arm_des_acc
+
 float64[] traj_time_l_arm  #左臂轨迹时间
 float64[] traj_time_r_arm  #右臂轨迹时间
 

@@ -165,9 +165,12 @@ DotOutpWrap CtlTransmit::bridgeMsg_getAndPub(const std::vector<double>& left_fee
 // 桥接消息回调 — 每接受一次BridgeCtlMsg就更新一次bridge_data
 void CtlTransmit::bridge_msg_callback(const ctl_msgs_hw::msg::BridgeCtlMsg::SharedPtr msg)
 {
-    if (!msg) return;
+    if (!msg || vr_override_) return;
 
     if (msg->ctl_trans_mod == 3) {
+        const double age = (node_ptr_->now() - msg->header.stamp).seconds();
+        if (age < -0.05 || age > JointStreamGuard::timeout_s) return;
+        if (stream_message_ && rclcpp::Time(msg->header.stamp) <= rclcpp::Time(stream_message_->header.stamp)) return;
         const auto valid = [](const std::vector<double>& values, int size) {
             return values.size() == static_cast<size_t>(size) &&
                 std::all_of(values.begin(), values.end(), [](double v) { return std::isfinite(v); });
@@ -176,6 +179,14 @@ void CtlTransmit::bridge_msg_callback(const ctl_msgs_hw::msg::BridgeCtlMsg::Shar
             RCLCPP_WARN(node_ptr_->get_logger(), "Ignoring invalid absolute joint targets");
             return;
         }
+        if (!std::isfinite(msg->target_period_s) || msg->target_period_s <= 0 || msg->target_period_s > 0.25 ||
+            (msg->derivatives_valid && (!valid(msg->l_arm_mdp_des_jnt_vel, LARMDOF) ||
+             !valid(msg->r_arm_mdp_des_jnt_vel, RARMDOF) || !valid(msg->l_arm_des_acc, LARMDOF) ||
+             !valid(msg->r_arm_des_acc, RARMDOF)))) {
+            RCLCPP_ERROR(node_ptr_->get_logger(), "Invalid joint stream timing or derivatives");
+            return;
+        }
+        stream_message_ = msg;
         if (!joint_stream_mode_) joint_stream_ = JointStreamGuard{};
         joint_stream_.receive(msg->l_arm_des_msg, msg->r_arm_des_msg,
                               msg->hold_position, msg->if_init_use_ret != 0, monotonic_seconds());
@@ -237,6 +248,21 @@ void CtlTransmit::bridge_msg_callback(const ctl_msgs_hw::msg::BridgeCtlMsg::Shar
     
 
     //bridge_data 已更新，交由 bridgeMsg_getAndPub 统一下发
+}
+
+void CtlTransmit::fill_stream_metadata(ctl_msgs_hw::msg::MidNodeCtlMsgSend& msg) const {
+    if (!bridge_active_ || !joint_stream_mode_ || !stream_message_) return;
+    const auto& sample = *stream_message_;
+    const double age = (node_ptr_->now() - sample.header.stamp).seconds();
+    if (sample.hold_position || age < 0 || age > JointStreamGuard::timeout_s) return;
+    msg.bridge_joint_stream = true;
+    msg.trajectory_header = sample.header;
+    msg.upper_monitor_time = sample.target_period_s;
+    msg.derivatives_valid = sample.derivatives_valid;
+    msg.l_arm_des_vel_jntspace = sample.l_arm_mdp_des_jnt_vel;
+    msg.r_arm_des_vel_jntspace = sample.r_arm_mdp_des_jnt_vel;
+    msg.l_arm_des_acc = sample.l_arm_des_acc;
+    msg.r_arm_des_acc = sample.r_arm_des_acc;
 }
 
 //===============================================================================================

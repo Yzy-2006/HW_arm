@@ -27,6 +27,9 @@ float64[] r_position_at_runin_st
 #位置保持模式控制代码：0--终止位置保持模式；1--开启位置保持模式
 int32 place_hold
 
+# Already sampled position/velocity from one validated joint trajectory.
+bool trajectory_sample
+
 #底层控制模式选择代码：
 int32[] base_rigidity_ctl_mode_l       #左臂各个关节底层控制模式选择
 int32[] base_rigidity_ctl_mode_r       #右臂各个关节底层控制模式选择

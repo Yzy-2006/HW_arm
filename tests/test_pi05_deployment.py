@@ -196,7 +196,7 @@ def bridge(monkeypatch, tmp_path, request):
             return SimpleNamespace(now=lambda: SimpleNamespace(to_msg=lambda: clock[0]))
 
         def get_logger(self):
-            return SimpleNamespace(warning=self.logs.append, info=self.logs.append)
+            return SimpleNamespace(warning=self.logs.append, info=self.logs.append, error=self.logs.append)
 
     class Cameras:
         def __init__(self, config):
@@ -221,11 +221,19 @@ def bridge(monkeypatch, tmp_path, request):
         monkeypatch.setitem(sys.modules, name, mod)
     monkeypatch.setattr(module, "ThreadPoolExecutor", FakePool)
     monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    from motion_safety import SafetyState
+    def safety(node, on_fault):
+        state = SafetyState(on_fault, now=lambda: clock[0])
+        state.ready = lambda: not state.fault
+        return state
+    monkeypatch.setattr(module, "attach_safety", safety)
     config = yaml.safe_load((ROOT / "config/pi05_deployment.yaml").read_text())
     # Control tests use an explicit limit, independent of the operator's tuning.
     config["bridge"]["max_joint_step_rad"] = 0.02
     config["bridge"]["interpolation"] = {"enabled": False}
     config["bridge"]["replan_interval_s"] = 0.25
+    # These tests isolate inference/handoff timing, not physical motion limits.
+    config["bridge"]["motion_safety"] = {"max_velocity_rad_s": 100, "max_acceleration_rad_s2": 100000}
     config["bridge"].update(getattr(request, "param", {}))
     config_path = tmp_path / "deployment.yaml"
     config_path.write_text(yaml.safe_dump(config))
@@ -244,7 +252,35 @@ def bridge(monkeypatch, tmp_path, request):
 
 
 def complete(node, value=1.0):
-    node.pending.set_result({"actions": np.full((50, 16), value).tolist()})
+    actions = np.full((50, 16), value)
+    actions[:, [4 - 1, 9]] *= -1  # Left elbow and right shoulder roll have nonpositive ranges.
+    node.pending.set_result({"actions": actions.tolist()})
+
+
+@pytest.mark.parametrize("bridge", [{"interpolation": {"enabled": True, "publish_rate_hz": 300}}], indirect=True)
+def test_intervention_blocks_all_policy_ticks_and_discards_inflight_result(bridge):
+    node, clock, feedback = bridge
+    node.step()
+    old = node.pending
+    generation = node.generation
+    node.intervention = SimpleNamespace(mode="paused")
+    node.pause_policy()
+    assert node.generation > generation
+    assert node.command_pub.messages[-1].hold_position
+    count = len(node.command_pub.messages)
+    old.set_result({"actions": np.full((50, 16), 999).tolist()})
+    node.step()
+    node.publish_step()
+    assert len(node.command_pub.messages) == count
+    assert not node.gripper_pub.messages
+    node.resume_policy()
+    node.intervention.mode = "policy"
+    feedback()
+    node.step()
+    assert node.chunk is None
+    assert node.pending is not old
+    assert node.inference_pool.calls[-1][1][-1] is True
+    assert node.last_command is None
 
 
 @pytest.mark.parametrize("bridge", [{"rate_hz": 60, "action_rate_hz": 15}], indirect=True)
@@ -291,7 +327,7 @@ def test_failure_holds_without_gripper_commands_and_reanchors(bridge, failure):
     clock[0] += 0.04
     node.step()
     gripper_count = len(node.gripper_pub.messages)
-    clock[0] += 0.3
+    clock[0] += 0.22 if failure == "inference" else 0.3
     if failure == "camera":
         feedback()
         node.cameras.error = True
@@ -302,6 +338,13 @@ def test_failure_holds_without_gripper_commands_and_reanchors(bridge, failure):
         gripper_count = len(node.gripper_pub.messages)
     node.step()
     assert node.chunk is None
+    if failure == "feedback":
+        assert node.safety.fault
+        count = len(node.command_pub.messages)
+        feedback()
+        node.step()
+        assert len(node.command_pub.messages) == count
+        return
     assert node.command_pub.messages[-1].hold_position
     assert len(node.gripper_pub.messages) == gripper_count
     node.cameras.error = False

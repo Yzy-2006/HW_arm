@@ -1293,10 +1293,10 @@ GravCompConfig::GravCompConfig()
     : yaml_path_("")
     , loaded_(false)
 {
-    mGravCompData.ifUseGravComp = 1;
+    mGravCompData.ifUseGravComp = 0;
     mGravCompData.ifUseInpFtr   = 1;
     mGravCompData.ifUseOutpFtr  = 1;
-    mGravCompData.ifUseFricComp = 1;
+    mGravCompData.ifUseFricComp = 0;
     mGravCompData.ifUsePosVelOutpFtr = 1;
     mGravCompData.InpDataMod    = 1;
     mGravCompData.GravCompStZeroTimes   = 10;
@@ -1308,10 +1308,10 @@ GravCompConfig::GravCompConfig(const std::string& yaml_path)
     : yaml_path_(yaml_path)
     , loaded_(false)
 {
-    mGravCompData.ifUseGravComp = 1;
+    mGravCompData.ifUseGravComp = 0;
     mGravCompData.ifUseInpFtr   = 1;
     mGravCompData.ifUseOutpFtr  = 1;
-    mGravCompData.ifUseFricComp = 1;
+    mGravCompData.ifUseFricComp = 0;
     mGravCompData.ifUsePosVelOutpFtr = 1;
     mGravCompData.InpDataMod    = 1;
     mGravCompData.GravCompStZeroTimes   = 10;
@@ -1331,10 +1331,12 @@ bool GravCompConfig::loadFromYaml(const std::string& yaml_path){
             const auto& gc = config["gravComp"];
 
             // 开关量
-            mGravCompData.ifUseGravComp = gc["ifUseGravComp"].as<int>(1);
+            mGravCompData.ifUseGravComp = gc["ifUseGravComp"].as<int>(0);
+            mGravCompData.ifUseInertiaComp = gc["ifUseInertiaComp"].as<int>(0);
+            mGravCompData.ifUseCoriolisComp = gc["ifUseCoriolisComp"].as<int>(0);
             mGravCompData.ifUseInpFtr   = gc["ifUseInpFtr"].as<int>(1);
             mGravCompData.ifUseOutpFtr  = gc["ifUseOutpFtr"].as<int>(1);
-            mGravCompData.ifUseFricComp = gc["ifUseFricComp"].as<int>(1);
+            mGravCompData.ifUseFricComp = gc["ifUseFricComp"].as<int>(0);
             mGravCompData.ifUsePosVelOutpFtr = gc["ifUsePosVelOutpFtr"].as<int>(1);
 
             // 数据输入模式
@@ -1459,6 +1461,8 @@ bool GravCompConfig::isLoaded() const{
 }
 
 void GravCompConfig::printConfig() const{
+    std::cout << "  Inertia compensation: " << mGravCompData.ifUseInertiaComp
+              << ", Coriolis compensation: " << mGravCompData.ifUseCoriolisComp << std::endl;
     std::cout << "========================================" << std::endl;
     std::cout << "  重力补偿配置摘要" << std::endl;
     std::cout << "========================================" << std::endl;

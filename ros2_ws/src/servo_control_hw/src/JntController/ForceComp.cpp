@@ -1,4 +1,6 @@
 #include "JntController/ForceComp.h"
+#include <limits>
+#include <stdexcept>
 
 
 float sgn(float x)  //符号函数sgn(x)
@@ -173,7 +175,7 @@ double K_comp::posComp(double IqInp, int JointID){
     if(ifStart){
         dKalmanFilter.resize(7);
         for(int i = 0; i < 7; i++){
-            dKalmanFilter[i].FilterInit(IqInp, all_Qgain[i], all_Rgain[i]);
+            dKalmanFilter[i].FilterInit(IqInp, all_Qgain[i], all_Rgain[i], TEMPTIME);
         }
         ifStart = false;
     }
@@ -244,11 +246,11 @@ std::vector<std::vector<double>> Stribeck_FricCompWrap::fricCompRes(
 
         //初始化滤波器
         for(int i = 0; i < 7; i++){
-            dKalmanFtr_TorInp_l[i].FilterInit(lArm_tor[i], all_Qgain_tor[i], all_Rgain_tor[i]);
-            dKalmanFtr_TorInp_r[i].FilterInit(rArm_tor[i], all_Qgain_tor[i], all_Rgain_tor[i]);
+            dKalmanFtr_TorInp_l[i].FilterInit(lArm_tor[i], all_Qgain_tor[i], all_Rgain_tor[i], TEMPTIME);
+            dKalmanFtr_TorInp_r[i].FilterInit(rArm_tor[i], all_Qgain_tor[i], all_Rgain_tor[i], TEMPTIME);
 
-            dKalmanFtr_velInp_l[i].FilterInit(lArm_vel[i], all_Qgain_vel[i], all_Rgain_vel[i]);
-            dKalmanFtr_velInp_r[i].FilterInit(rArm_vel[i], all_Qgain_vel[i], all_Rgain_vel[i]);
+            dKalmanFtr_velInp_l[i].FilterInit(lArm_vel[i], all_Qgain_vel[i], all_Rgain_vel[i], TEMPTIME);
+            dKalmanFtr_velInp_r[i].FilterInit(rArm_vel[i], all_Qgain_vel[i], all_Rgain_vel[i], TEMPTIME);
         }
 
         //初始化补偿器
@@ -308,8 +310,8 @@ std::vector<std::vector<double>> runinOutpFtr::Outp_ftr(std::vector<double> lArm
         dKalmanFilter_r.resize(7);
 
         for(int i = 0; i < 7; i++){
-            dKalmanFilter_l[i].FilterInit(lArm_inp[i], all_Qgain[i], all_Rgain[i]);
-            dKalmanFilter_r[i].FilterInit(rArm_inp[i], all_Qgain[i], all_Rgain[i]);
+            dKalmanFilter_l[i].FilterInit(lArm_inp[i], all_Qgain[i], all_Rgain[i], TEMPTIME);
+            dKalmanFilter_r[i].FilterInit(rArm_inp[i], all_Qgain[i], all_Rgain[i], TEMPTIME);
         }
     }
     
@@ -338,8 +340,15 @@ void kalman_filter::mMatrixMul(double a[],double b[],int m,int n,int k,double c[
     }
 }
 
-void kalman_filter::FilterInit(double inputVar, double mQgain, double mRgain)
+void kalman_filter::FilterInit(double inputVar, double mQgain, double mRgain, double dt)
 {
+    if (!std::isfinite(inputVar) || !std::isfinite(dt) || dt <= 0 ||
+        !std::isfinite(mQgain) || mQgain < 0 || !std::isfinite(mRgain) || mRgain <= 0)
+        throw std::invalid_argument("Invalid servo Kalman parameters");
+    FAImtrx[0][1] = FAImtrxT[1][0] = dt;
+    Qmtrx[0][0] = dt * dt * dt / 3.0;
+    Qmtrx[0][1] = Qmtrx[1][0] = dt * dt / 2.0;
+    Qmtrx[1][1] = dt;
     //****** debug
     for(int i=0;i<2;i++){
         for(int j=0;j<2;j++)
@@ -356,26 +365,32 @@ void kalman_filter::FilterInit(double inputVar, double mQgain, double mRgain)
 
 double kalman_filter::FilteredResCal(double inputvar)
 {
-    // 预测阶段
-    mMatrixMul(FAImtrx[0], outvar, 2, 2, 1, midx); // 这里假设MatrixMul能正确处理这些尺寸
-    mMatrixMul(FAImtrx[0], Pmtrx[0], 2, 2, 2, FAIPFAIT[0]); // 预测协方差矩阵
-    // 加上过程噪声
+    if (!std::isfinite(inputvar)) return std::numeric_limits<double>::quiet_NaN();
+    mMatrixMul(FAImtrx[0], outvar, 2, 2, 1, midx);
+    mMatrixMul(FAImtrx[0], Pmtrx[0], 2, 2, 2, tempMtrx[0]);
+    mMatrixMul(tempMtrx[0], FAImtrxT[0], 2, 2, 2, FAIPFAIT[0]);
     for (int i = 0; i < 2; i++) {
         for (int j = 0; j < 2; j++) {
             FAIPFAIT[i][j] += Qgain * Qgain * Qmtrx[i][j];
         }
     }
-    // 计算卡尔曼增益
-    float K = FAIPFAIT[0][0] / (FAIPFAIT[0][0] + Rgain * Rgain);
-
-    // 更新状态
-    outvar[0] = midx[0] + K * (inputvar - midx[0]); // 对于一维状态，只更新第一个元素
-
-    // 更新协方差矩阵（对于一维状态，只更新相关的元素）
-    double I_minus_KH[2][2] = {{1.0f - K, 0.0f}, {-K, 1.0f}}; // 实际上，对于一维情况，这简化为[1-K, 0; -K, 1]（但保留2x2形式以备将来扩展）
-    mMatrixMul(I_minus_KH[0], FAIPFAIT[0], 2, 2, 2, Pmtrx[0]); // 更新后的协方差矩阵
-
-    // 返回结果
+    const double variance = Rgain * Rgain;
+    const double innovation = FAIPFAIT[0][0] + variance;
+    if (!std::isfinite(innovation) || innovation <= 0)
+        return std::numeric_limits<double>::quiet_NaN();
+    for (int i = 0; i < 2; ++i) {
+        Kgain[i] = FAIPFAIT[i][0] / innovation;
+        outvar[i] = midx[i] + Kgain[i] * (inputvar - midx[0]);
+    }
+    // Joseph covariance update, matching the mid-level filter.
+    double A[2][2] = {{1.0 - Kgain[0], 0.0}, {-Kgain[1], 1.0}};
+    double AT[2][2] = {{A[0][0], A[1][0]}, {0.0, 1.0}};
+    mMatrixMul(A[0], FAIPFAIT[0], 2, 2, 2, tempMtrx[0]);
+    mMatrixMul(tempMtrx[0], AT[0], 2, 2, 2, Pmtrx[0]);
+    for (int i = 0; i < 2; ++i)
+        for (int j = 0; j < 2; ++j)
+            Pmtrx[i][j] += Kgain[i] * variance * Kgain[j];
+    Pmtrx[0][1] = Pmtrx[1][0] = (Pmtrx[0][1] + Pmtrx[1][0]) * 0.5;
     return outvar[0];
 }
 

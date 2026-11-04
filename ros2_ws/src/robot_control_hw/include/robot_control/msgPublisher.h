@@ -163,6 +163,14 @@ class RobotCtlNode : public rclcpp::Node{
 
     private:
         //----------通讯变量----------
+        rclcpp::Subscription<std_msgs::msg::String>::SharedPtr safety_subscription_;
+        std::chrono::steady_clock::time_point safety_received_{};
+        bool safety_ready_ = false;
+        bool safety_fault_ = false;
+        bool motion_ready() const {
+            return safety_ready_ && !safety_fault_ &&
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - safety_received_).count() < 0.2;
+        }
 
         //全局时间戳
         rclcpp::Time global_timestamp_;
@@ -215,6 +223,8 @@ class RobotCtlNode : public rclcpp::Node{
         rclcpp::Subscription<geometry_msgs::msg::Vector3>::SharedPtr rArm_end_delta;
         //A 键回零触发订阅
         rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr zeroReturnCmd_sub;
+        rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr vr_override_service;
+        std::chrono::steady_clock::time_point last_desc_feedback{};
         //末端笛卡尔位姿反馈订阅（回零完成后重新锚定笛卡尔遥操作基准）
         rclcpp::Subscription<ctl_msgs_hw::msg::EndDescPub>::SharedPtr endDescPub_sub;
 

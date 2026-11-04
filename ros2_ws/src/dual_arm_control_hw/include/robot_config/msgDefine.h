@@ -153,7 +153,9 @@ struct gravCompFtr{
 struct gravCompInte{
 
     //开关变量
-    int ifUseGravComp;      //是否打开重力补偿
+    int ifUseGravComp = 0;  // Gravity only; dynamics have independent switches.
+    int ifUseInertiaComp = 0;
+    int ifUseCoriolisComp = 0;
     int ifUseInpFtr;        //是否使用输入滤波
     int ifUseOutpFtr;       //是否使用输出滤波
     int ifUseFricComp;      //是否使用摩擦补偿

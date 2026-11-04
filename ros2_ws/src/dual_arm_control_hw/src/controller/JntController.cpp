@@ -5,6 +5,8 @@
 //#include <control_toolbox/filters.h>
 #include <fstream>
 #include <cmath>
+#include <stdexcept>
+#include <limits>
 #include <time.h>
 #include <sys/time.h>
 
@@ -127,8 +129,15 @@ namespace Kernel
 
     //--------------------filter--------------------
 
-    void Filter::FilterInit(double inputVar, double mQgain, double mRgain)
+    void Filter::FilterInit(double inputVar, double mQgain, double mRgain, double dt)
     {
+        if (!std::isfinite(inputVar) || !std::isfinite(dt) || dt <= 0 ||
+            !std::isfinite(mQgain) || mQgain < 0 || !std::isfinite(mRgain) || mRgain <= 0)
+            throw std::invalid_argument("Invalid Kalman filter parameters");
+        FAImtrx[0][1] = FAImtrxT[1][0] = dt;
+        Qmtrx[0][0] = dt * dt * dt / 3.0;
+        Qmtrx[0][1] = Qmtrx[1][0] = dt * dt / 2.0;
+        Qmtrx[1][1] = dt;
         //memcpy(Pmtrx, P0mtrx, sizeof(Pmtrx));
 
         //****** debug
@@ -183,32 +192,41 @@ namespace Kernel
 
     double Filter::FilteredResCal(double inputvar)
     {
-        // 预测阶段
-        mMatrixMul(FAImtrx[0], outvar, 2, 2, 1, midx); // 这里假设MatrixMul能正确处理这些尺寸
-        mMatrixMul(FAImtrx[0], Pmtrx[0], 2, 2, 2, FAIPFAIT[0]); // 预测协方差矩阵
-        // 加上过程噪声
+        if (!std::isfinite(inputvar)) return std::numeric_limits<double>::quiet_NaN();
+        mMatrixMul(FAImtrx[0], outvar, 2, 2, 1, midx);
+        mMatrixMul(FAImtrx[0], Pmtrx[0], 2, 2, 2, tempMtrx[0]);
+        mMatrixMul(tempMtrx[0], FAImtrxT[0], 2, 2, 2, FAIPFAIT[0]);
         for (int i = 0; i < 2; i++) {
             for (int j = 0; j < 2; j++) {
                 FAIPFAIT[i][j] += Qgain * Qgain * Qmtrx[i][j];
             }
         }
-        // 计算卡尔曼增益
-        double K = FAIPFAIT[0][0] / (FAIPFAIT[0][0] + Rgain * Rgain);
-
-        // 更新状态
-        outvar[0] = midx[0] + K * (inputvar - midx[0]); // 对于一维状态，只更新第一个元素
-
-        // 更新协方差矩阵（对于一维状态，只更新相关的元素）
-        double I_minus_KH[2][2] = {{1.0f - K, 0.0f}, {-K, 1.0f}}; // 实际上，对于一维情况，这简化为[1-K, 0; -K, 1]（但保留2x2形式以备将来扩展）
-        mMatrixMul(I_minus_KH[0], FAIPFAIT[0], 2, 2, 2, Pmtrx[0]); // 更新后的协方差矩阵
-
-        // 返回结果
+        const double variance = Rgain * Rgain;
+        const double innovation = FAIPFAIT[0][0] + variance;
+        if (!std::isfinite(innovation) || innovation <= 0)
+            return std::numeric_limits<double>::quiet_NaN();
+        for (int i = 0; i < 2; ++i) {
+            Kgain[i] = FAIPFAIT[i][0] / innovation;
+            outvar[i] = midx[i] + Kgain[i] * (inputvar - midx[0]);
+        }
+        // Joseph form preserves covariance symmetry and positive semidefiniteness.
+        double A[2][2] = {{1.0 - Kgain[0], 0.0}, {-Kgain[1], 1.0}};
+        double AT[2][2] = {{A[0][0], A[1][0]}, {0.0, 1.0}};
+        mMatrixMul(A[0], FAIPFAIT[0], 2, 2, 2, tempMtrx[0]);
+        mMatrixMul(tempMtrx[0], AT[0], 2, 2, 2, Pmtrx[0]);
+        for (int i = 0; i < 2; ++i)
+            for (int j = 0; j < 2; ++j)
+                Pmtrx[i][j] += Kgain[i] * variance * Kgain[j];
+        Pmtrx[0][1] = Pmtrx[1][0] = (Pmtrx[0][1] + Pmtrx[1][0]) * 0.5;
         return outvar[0];
     }
 
     //--------------------Low pass filter--------------------
 
     void lowpassFilter::init(double msampleRate, double cutoffFreq){
+        if (!std::isfinite(msampleRate) || msampleRate <= 0 ||
+            !std::isfinite(cutoffFreq) || cutoffFreq <= 0)
+            throw std::invalid_argument("Invalid low-pass filter parameters");
         //初始化函数
         this->sampleRate = msampleRate;
         this->timeConstant = 1.0 / (2*M_PI*cutoffFreq);
@@ -219,7 +237,7 @@ namespace Kernel
     double lowpassFilter::filter(double input)
     {
         // 一阶低通滤波公式：y(n) = α*y(n-1) + (1-α)*x(n)
-        lastOutput = alpha * lastOutput + (1 - alpha) * input;
+        lastOutput = (1 - alpha) * lastOutput + alpha * input;
         return lastOutput;
     }
 

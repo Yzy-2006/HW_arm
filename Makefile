@@ -6,6 +6,7 @@ ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 LAUNCH_FILE := towel_experiment.launch.py
 ARGS ?=
 VENV ?= $(ROOT)/.venv-robot
+SIM_ENV ?= towel-newton
 OPENROBOTS_PREFIX ?= /opt/openrobots
 WATCH_TOPIC ?= /towel/gripper_state
 WATCH_ARGS ?=
@@ -41,7 +42,7 @@ export TOWEL_OPENROBOTS_PREFIX="$(OPENROBOTS_PREFIX)"
 source "$(ROOT)/scripts/env.sh"
 endef
 
-.PHONY: help env check check-control check-record check-visualize build test launch teleop experiment teleop-watch preview camera-list servo arms robot vr vr-opencv vr-debug record record-opencv record-rviz watch watch-arm calibrate calibrate-arm-zero scan-arm-can save-arm-zero validate-data export-data pi05 pi05-bench act bridge motion replay clean-build
+.PHONY: help env check check-control check-record check-visualize build test launch visualize sim-check sim-demo sim teleop experiment teleop-watch preview camera-list servo arms robot vr vr-opencv vr-debug record record-opencv record-rviz watch watch-arm calibrate calibrate-arm-zero scan-arm-can save-arm-zero validate-data export-data pi05 pi05-bench act bridge motion replay clean-build
 
 help:
 	@echo "Towel task commands"
@@ -57,6 +58,12 @@ help:
 	@echo "  make record                 Recorder plus three OpenCV camera windows"
 	@echo "  make record-opencv          Compatibility alias for make record"
 	@echo "  make record-rviz            Recorder plus camera topics for RViz"
+	@echo "  make visualize              Show the robot model in RViz with joint sliders (no hardware)"
+	@echo "  make sim-check              Check Newton and CUDA in Conda environment $(SIM_ENV)"
+	@echo "  make sim-demo               Run the official Newton robot-cloth example"
+	@echo "  make sim                    Run the ENCOS dual-arm, gripper and towel scene"
+	@echo "  make sim-fold               Run automatic corner grasp and one dual-arm half-fold"
+	@echo "  make sim-vr                 Control Newton arms and grippers with existing VR input (no video)"
 	@echo "  make launch ARGS=\"visualize:=true\"  Start optional RViz/TF visualization"
 	@echo "  make calibrate SIDE=left ENDPOINT=open   Capture one gripper endpoint"
 	@echo "  make calibrate-arm-zero SIDE=left|right|both  Start passive arm zero calibration"
@@ -70,7 +77,10 @@ help:
 	@echo "  make bridge                       Start the policy bridge in dry-run mode"
 	@echo "  make motion                       Start the policy bridge with motion enabled"
 	@echo "  make motion PI05_SLOW_FACTOR=0.1  Start motion at 10% joint step size"
+	@echo "  make motion ARGS=\"--intervention\"  Enable VR correction capture (starts paused)"
+	@echo "  make vr ARGS=\"--intervention\"      VR standby; left B takes over/saves and resumes"
 	@echo "  make replay ARGS=\"--episode 0\"  Replay recorded actions (dry-run by default)"
+	@echo "  make replay ARGS=\"--episode 0 --max-frames 90 --rviz\"  Replay safely in RViz"
 	@echo "  Defaults: VENV=$(VENV), OPENROBOTS_PREFIX=$(OPENROBOTS_PREFIX), DATASET_ROOT=$(DATASET_ROOT), EXPORT_CONFIG=$(EXPORT_CONFIG)"
 
 env:
@@ -107,6 +117,27 @@ test:
 launch:
 	@$(ROBOT_ENV)
 	@ros2 launch towel_bringup "$(LAUNCH_FILE)" $(ARGS)
+
+visualize:
+	@$(ROBOT_ENV)
+	@ros2 launch "$(ROOT)/ros2_ws/src/towel_bringup/launch/model_viewer.launch.py" $(ARGS)
+
+sim-check:
+	@conda run --no-capture-output -n "$(SIM_ENV)" python -I -u "$(ROOT)/scripts/check_newton.py" $(ARGS)
+
+sim-demo:
+	@conda run --no-capture-output -n "$(SIM_ENV)" python -I -u -m newton.examples cloth_franka --device cuda:0 $(ARGS)
+
+sim:
+	@conda run --no-capture-output -n "$(SIM_ENV)" python -I -u "$(ROOT)/simulation/towel_scene.py" $(ARGS)
+
+.PHONY: sim-fold
+sim-fold:
+	@conda run --no-capture-output -n "$(SIM_ENV)" python -I -u "$(ROOT)/simulation/towel_scene.py" --auto-fold --num-frames 2400 $(ARGS)
+
+.PHONY: sim-vr
+sim-vr:
+	@conda run --no-capture-output -n "$(SIM_ENV)" python -I -u "$(ROOT)/simulation/towel_scene.py" --vr --vr-python "$(VENV)/bin/python" $(ARGS)
 
 # Keep the removed one-command names as explicit failures: `teleop/` is a
 # source directory, so omitting this recipe would otherwise make `make teleop`
@@ -173,7 +204,7 @@ record-rviz:
 
 vr:
 	@$(ROBOT_ENV)
-	@python3 "$(ROOT)/teleop/VR_controller/vr_pose_increment_publisher.py"
+	@python3 "$(ROOT)/teleop/VR_controller/vr_pose_increment_publisher.py" $(ARGS)
 
 vr-opencv:
 	@echo "相机窗口由 make record 启动；vr-opencv 现在只兼容转发到 make vr" >&2

@@ -22,6 +22,7 @@ from typing import Any
 
 import cv2
 import numpy as np
+from motion_safety import MotionFault, CommandSafety, attach_safety
 import yaml
 
 from pi05_common import encode_bytes, recv_packet, send_packet
@@ -161,22 +162,28 @@ def limit_action(
     upper: np.ndarray,
     max_step: np.ndarray,
 ) -> np.ndarray:
-    """Apply shape, finite, joint-range, and per-cycle delta checks."""
+    """Clip targets to the intersection of joint and feedback-relative limits.
+
+    This allowance is not a velocity limiter; CommandSafety checks emitted motion.
+    """
     result = np.asarray(action, dtype=np.float64).reshape(-1)
     current = np.asarray(state, dtype=np.float64).reshape(-1)
     if result.shape != (16,) or current.shape != (16,):
         raise ValueError("PI05 state/action must both have shape (16,)")
     if not np.isfinite(result).all() or not np.isfinite(current).all():
         raise ValueError("PI05 state/action contains non-finite values")
+    from motion_safety import MotionFault
+    feedback = current[JOINT_ACTION_INDICES]
+    if np.any(feedback < lower - 0.02) or np.any(feedback > upper + 0.02):
+        raise MotionFault("Joint feedback outside absolute limits")
     safe = result.copy()
     for action_index, joint_index in zip(JOINT_ACTION_INDICES, range(14)):
         state_index = joint_index if joint_index < 7 else joint_index + 1
-        target = np.clip(
-            safe[action_index],
-            current[state_index] - max_step[joint_index],
-            current[state_index] + max_step[joint_index],
-        )
-        safe[action_index] = np.clip(target, lower[joint_index], upper[joint_index])
+        lo = max(current[state_index] - max_step[joint_index], lower[joint_index])
+        hi = min(current[state_index] + max_step[joint_index], upper[joint_index])
+        if lo > hi:
+            raise MotionFault("Feedback allowance does not intersect joint limits")
+        safe[action_index] = np.clip(safe[action_index], lo, hi)
     for index in GRIPPER_ACTION_INDICES:
         safe[index] = float(safe[index] >= 0.5)
     return safe
@@ -276,6 +283,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default=str(ROOT / "config/pi05_deployment.yaml"))
     parser.add_argument("--motion", action="store_true", help="Publish robot and gripper commands")
+    parser.add_argument("--intervention", action="store_true",
+                        help="Enable VR takeover and shared-camera correction recording; starts paused")
+    parser.add_argument("--intervention-dir", default=str(ROOT / "data/raw/interventions"))
     parser.add_argument("--worker-host")
     parser.add_argument("--worker-port", type=int)
     parser.add_argument("--token")
@@ -286,6 +296,8 @@ def main() -> int:
     )
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args()
+    if args.intervention and not args.motion:
+        parser.error("--intervention requires --motion")
     logging.basicConfig(level=getattr(logging, args.log_level.upper()), format="%(asctime)s %(levelname)s %(message)s")
 
     import rclpy
@@ -297,6 +309,8 @@ def main() -> int:
     try:
         node = create_bridge_node(args)
         executor.add_node(node)
+        if node.recorder is not None:
+            executor.add_node(node.recorder)
         executor.spin()
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
@@ -334,6 +348,8 @@ def create_bridge_node(args):
     rate_hz = float(bridge_cfg.get("rate_hz", camera_cfg.get("fps", 30)))
     action_rate_hz = float(bridge_cfg.get("action_rate_hz", camera_cfg.get("fps", 30)))
     interpolate, publish_rate_hz = interpolation_settings(bridge_cfg, rate_hz)
+    if args.motion and publish_rate_hz < 4.0:
+        raise ValueError("Motion publication must be at least 4 Hz; enable minimum_snap for slower source trajectories")
     if interpolate:
         validate_controller_rate(controller_cfg, publish_rate_hz)
     state_timeout_s = float(bridge_cfg.get("state_timeout_s", 0.25))
@@ -392,6 +408,11 @@ def create_bridge_node(args):
         def __init__(self):
             super().__init__("pi05_encos_bridge")
             self.motion = bool(args.motion)
+            self.intervention = None
+            self.safety = None
+            self.command_safety = CommandSafety(bridge_cfg, lower, upper, now=time.monotonic)
+            self.sample_velocity = self.sample_acceleration = None
+            self.recorder = None
             self.client = PolicyClient(worker_host, worker_port, token, float(worker_cfg.get("timeout_s", 5.0)))
             self.cameras = Cameras(camera_cfg)
             self.state_lock = threading.Lock()
@@ -429,6 +450,21 @@ def create_bridge_node(args):
                                      qos_profile_sensor_data, callback_group=self.feedback_group)
             self.control_timer = self.create_timer(1.0 / rate_hz, self.step)
             self.publish_timer = self.create_timer(1.0 / publish_rate_hz, self.publish_step) if interpolate else None
+            if self.motion:
+                self.safety = attach_safety(self, self._safety_fault)
+            if getattr(args, "intervention", False):
+                from record import make_node
+                from intervention import attach_intervention
+
+                recording_config = dict(camera_cfg)
+                recording_config["dataset_root"] = str(Path(args.intervention_dir).expanduser().resolve())
+                recording_config["min_joint_delta_rad"] = 0.0
+                recording_config["episode_metadata"] = {
+                    "source": "policy_intervention", "control_source": "vr",
+                    "deployment_config": config, "task": task,
+                }
+                self.recorder = make_node(recording_config, self.cameras)
+                attach_intervention(self)
             self.get_logger().warning(
                 f"PI05 bridge started in {'MOTION' if self.motion else 'DRY-RUN'} "
                 f"mode; worker={worker_host}:{worker_port} task={task!r} "
@@ -466,6 +502,8 @@ def create_bridge_node(args):
             return np.r_[joints[:7], states[0], joints[7:], states[1]].astype(np.float32)
 
         def _publish_command(self, action: np.ndarray, hold: bool = False):
+            if self.safety is not None and not self.safety.ready():
+                return
             joints_l = action[:7].tolist()
             joints_r = action[8:15].tolist()
             bridge_msg = BridgeCtlMsg()
@@ -474,6 +512,10 @@ def create_bridge_node(args):
             bridge_msg.torque_feedforward_ctl = 0
             bridge_msg.if_reach_end = False
             bridge_msg.hold_position = bool(hold)
+            bridge_msg.target_period_s = 1.0 / publish_rate_hz
+            bridge_msg.derivatives_valid = self.sample_velocity is not None and not hold
+            bridge_msg.l_arm_des_acc = [0.0] * 7 if hold or self.sample_acceleration is None else self.sample_acceleration[:7].tolist()
+            bridge_msg.r_arm_des_acc = [0.0] * 7 if hold or self.sample_acceleration is None else self.sample_acceleration[7:].tolist()
             bridge_msg.l_arm_if_use_jntlim = False
             bridge_msg.r_arm_if_use_jntlim = False
             bridge_msg.l_arm_limjnt_num = 0
@@ -484,6 +526,9 @@ def create_bridge_node(args):
             bridge_msg.r_arm_des_tor_msg = [0.0] * 7
             bridge_msg.l_arm_mdp_des_jnt_vel = [0.0] * 7
             bridge_msg.r_arm_mdp_des_jnt_vel = [0.0] * 7
+            if bridge_msg.derivatives_valid:
+                bridge_msg.l_arm_mdp_des_jnt_vel = self.sample_velocity[:7].tolist()
+                bridge_msg.r_arm_mdp_des_jnt_vel = self.sample_velocity[7:].tolist()
             bridge_msg.if_init_use_ret = int(self.reanchor_next_command and not hold)
             bridge_msg.l_arm_rigidity_mod = [rigidity_mode] * 7
             bridge_msg.r_arm_rigidity_mod = [rigidity_mode] * 7
@@ -511,6 +556,9 @@ def create_bridge_node(args):
                 self.reanchor_next_command = False
 
         def _hold(self):
+            self.command_safety.reset()
+            if self.intervention is not None and self.intervention.mode != "policy":
+                return
             if self.motion and self.last_command is not None:
                 # Targets in this packet are ignored by the controller: it
                 # captures its own joint feedback once on entry to hold.
@@ -522,10 +570,35 @@ def create_bridge_node(args):
             self.interpolation_clipped = False
             self.generation += 1
 
+        def pause_policy(self):
+            self.command_safety.reset()
+            self._invalidate()
+            self.reanchor_next_command = True
+            # A hold packet locks the controller before requesting VR ownership.
+            state = self._snapshot_state()
+            if self.motion:
+                self._publish_command(state if state is not None else np.zeros(16), hold=True)
+
+        def resume_policy(self):
+            if self.safety is not None and not self.safety.ready():
+                raise MotionFault("Policy resume requires healthy servo safety state")
+            self.command_safety.reset()
+            self._invalidate()
+            self.last_command = None
+            self.reanchor_next_command = True
+            self.last_observation_check = -float("inf")
+            self.last_request_at = -float("inf")
+
         def publish_step(self):
+            if self.safety is not None and not self.safety.ready():
+                return
+            if self.intervention is not None and self.intervention.mode != "policy":
+                return
             try:
                 now = time.monotonic()
                 current = self._snapshot_state()
+                if self.motion and current is None and self.last_command is not None:
+                    raise MotionFault("Joint or gripper feedback lost during motion")
                 if current is None or now - self.last_observation_check > state_timeout_s:
                     raise ValueError("Feedback or observation check expired before interpolation publication")
                 raw = None if self.chunk is None else self.chunk.at(now)
@@ -534,13 +607,23 @@ def create_bridge_node(args):
                     self._hold()
                     return
                 target = self.interpolator.at(now, raw)
+                elapsed = now - self.interpolator.started_at
+                self.sample_velocity = self.interpolator.trajectory.at(elapsed, 1)
+                self.sample_acceleration = self.interpolator.trajectory.at(elapsed, 2)
                 action = limit_action(target, current, lower, upper, max_step)
                 self.interpolation_clipped = not np.allclose(
                     action[JOINT_ACTION_INDICES], target[JOINT_ACTION_INDICES], atol=1e-9, rtol=0,
                 )
+                if self.motion:
+                    if self.interpolation_clipped:
+                        raise MotionFault("Trajectory exceeds feedback allowance")
+                    self.command_safety.check(action, current, 1.0 / publish_rate_hz,
+                                              self.sample_velocity, self.sample_acceleration)
                 self.last_command = action
                 if self.motion:
                     self._publish_command(action)
+            except MotionFault as exc:
+                self._trip_safety(exc)
             except Exception as exc:
                 self._invalidate()
                 self._warn(f"PI05 interpolation failed: {exc}")
@@ -551,9 +634,15 @@ def create_bridge_node(args):
             return self.client.infer(state, encoded, task, request_id, reset=reset)
 
         def step(self):
+            if self.safety is not None and not self.safety.ready():
+                return
+            if self.intervention is not None and self.intervention.mode != "policy":
+                return
             try:
                 state = self._snapshot_state()
                 if state is None:
+                    if self.motion and self.last_command is not None:
+                        raise MotionFault("Joint or gripper feedback lost during motion")
                     raise ValueError("Waiting for fresh joint and gripper feedback")
                 now = time.monotonic()
                 images, _ = self.cameras.snapshot(now)
@@ -578,6 +667,9 @@ def create_bridge_node(args):
                             anchor = state if self.interpolator is None or self.last_command is None else self.last_command
                             previous = None if self.interpolation_clipped else self.interpolator
                             self.interpolator = ChunkInterpolator(self.chunk, now, anchor, previous)
+                            if self.motion:
+                                self.interpolator.trajectory.validate_limits(lower, upper,
+                                    self.command_safety.max_velocity, self.command_safety.max_acceleration)
                             self.interpolation_clipped = False
                 if self.pending is None and (
                     self.chunk is None or len(self.chunk.actions) == 1
@@ -602,6 +694,7 @@ def create_bridge_node(args):
                 if not interpolate:
                     self.last_command = action
                 if self.motion and not interpolate:
+                    self.command_safety.check(action, current, 1.0 / publish_rate_hz)
                     self._publish_command(action)
                 now = time.monotonic()
                 if now - self.last_log >= 1.0:
@@ -613,10 +706,25 @@ def create_bridge_node(args):
                         f"motion={self.motion} "
                         f"action={np.array2string(action, precision=3, suppress_small=True)}"
                     )
+            except MotionFault as exc:
+                self._trip_safety(exc)
             except Exception as exc:
                 self._invalidate()
                 self._warn(f"PI05 step failed: {exc}")
                 self._hold()
+
+        def _trip_safety(self, reason):
+            if self.safety is not None:
+                self.safety.trip(str(reason))
+            else:
+                self._warn(str(reason))
+
+        def _safety_fault(self, reason):
+            self._invalidate()
+            self.last_command = None
+            if self.intervention is not None:
+                self.intervention.latch_fault(reason)
+            self.get_logger().error(f"Motion fault latched; policy and VR blocked: {reason}")
 
         def _warn(self, message: str):
             now = time.monotonic()
@@ -629,6 +737,7 @@ def create_bridge_node(args):
             if self.publish_timer is not None:
                 self.publish_timer.cancel()
             try:
+                import rclpy
                 # Ctrl+C can cause ROS to invalidate publishers before node.close
                 # runs. In that case the controller watchdog handles the stop.
                 if rclpy.ok():
@@ -638,6 +747,8 @@ def create_bridge_node(args):
                 # still holds the arms when this stream disappears.
                 LOG.warning("Could not publish shutdown hold: %s", exc)
             finally:
+                if self.recorder is not None:
+                    self.recorder.close()
                 self.inference_pool.shutdown(wait=True, cancel_futures=True)
                 self.client.close()
                 self.cameras.close()

@@ -324,7 +324,8 @@ ArmCtlNode::ArmCtlNode() : Node("dual_arm_control_node") ,
     ifCheckTemp = true;
 
     //重力补偿控制变量
-    ifUse_gravComp = robotGravCompInte.ifUseGravComp;
+    ifUse_gravComp = robotGravCompInte.ifUseGravComp ||
+        robotGravCompInte.ifUseInertiaComp || robotGravCompInte.ifUseCoriolisComp;
     gravInpMode = robotGravCompInte.InpDataMod;
 
     ifGravCompInit = true;
@@ -347,6 +348,7 @@ void ArmCtlNode::msg_publish()
 
 
     tempCtlData_pub.temp_time = TEMPTIME;   //发送迭代时间
+    tempCtlData_pub.trajectory_sample = stream_sample_ && stream_sample_->derivatives_valid;
 
     //发送控制量
     tempCtlData_pub.runin_mod = runin_mod;
@@ -1312,6 +1314,24 @@ void ArmCtlNode::run(){
         
 
 
+        // Bridge samples already contain a coherent trajectory state. Preserve
+        // its derivatives instead of differentiating the sparse position stream.
+        stream_acceleration_.clear();
+        if (stream_sample_ && stream_sample_->derivatives_valid && modCtlMsg_get.transMod == 3) {
+            const auto& s = *stream_sample_;
+            const double age = (now() - s.trajectory_header.stamp).seconds();
+            const bool fresh = age >= 0 && age <= s.upper_monitor_time * 2.0;
+            lArm_joint_pos = s.l_arm_des_pos_jntspace;
+            rArm_joint_pos = s.r_arm_des_pos_jntspace;
+            lArm_joint_spd = fresh ? s.l_arm_des_vel_jntspace : std::vector<double>(7, 0);
+            rArm_joint_spd = fresh ? s.r_arm_des_vel_jntspace : std::vector<double>(7, 0);
+            stream_acceleration_.assign(14, 0);
+            if (fresh) {
+                std::copy(s.l_arm_des_acc.begin(), s.l_arm_des_acc.end(), stream_acceleration_.begin());
+                std::copy(s.r_arm_des_acc.begin(), s.r_arm_des_acc.end(), stream_acceleration_.begin() + 7);
+            }
+        }
+
         if(ifIKsolverInited){
             //----------执行末端轨迹画图任务----------
             //先获取返回值
@@ -1390,12 +1410,12 @@ void ArmCtlNode::GlobalFilterInit(){
     rArm_JointKt = robotModelStructConfig.rArm_jnt_Kt;
 
     for(int i = 0; i < LARMDOF; i++){
-        lArm_posFdback_dKalmanFtr[i].FilterInit(lArm_pos_fdback[i], dataTransLoopCtl.lArm_posFeedback_uniFtr[i].Q_gain, dataTransLoopCtl.lArm_posFeedback_uniFtr[i].R_gain);
-        lArm_IqFdback_dKalmanFtr[i].FilterInit(lArm_iq_fdback[i], dataTransLoopCtl.lArm_IqFeedback_uniFtr[i].Q_gain, dataTransLoopCtl.rArm_IqFeedback_uniFtr[i].R_gain);
+        lArm_posFdback_dKalmanFtr[i].FilterInit(lArm_pos_fdback[i], dataTransLoopCtl.lArm_posFeedback_uniFtr[i].Q_gain, dataTransLoopCtl.lArm_posFeedback_uniFtr[i].R_gain, TEMPTIME);
+        lArm_IqFdback_dKalmanFtr[i].FilterInit(lArm_iq_fdback[i], dataTransLoopCtl.lArm_IqFeedback_uniFtr[i].Q_gain, dataTransLoopCtl.lArm_IqFeedback_uniFtr[i].R_gain, TEMPTIME);
     }
     for(int i = 0; i < RARMDOF; i++){
-        rArm_posFdback_dKalmanFtr[i].FilterInit(rArm_pos_fdback[i], dataTransLoopCtl.rArm_posFeedback_uniFtr[i].Q_gain, dataTransLoopCtl.rArm_posFeedback_uniFtr[i].R_gain);
-        rArm_IqFdback_dKalmanFtr[i].FilterInit(rArm_iq_fdback[i], dataTransLoopCtl.rArm_IqFeedback_uniFtr[i].Q_gain, dataTransLoopCtl.rArm_IqFeedback_uniFtr[i].R_gain);
+        rArm_posFdback_dKalmanFtr[i].FilterInit(rArm_pos_fdback[i], dataTransLoopCtl.rArm_posFeedback_uniFtr[i].Q_gain, dataTransLoopCtl.rArm_posFeedback_uniFtr[i].R_gain, TEMPTIME);
+        rArm_IqFdback_dKalmanFtr[i].FilterInit(rArm_iq_fdback[i], dataTransLoopCtl.rArm_IqFeedback_uniFtr[i].Q_gain, dataTransLoopCtl.rArm_IqFeedback_uniFtr[i].R_gain, TEMPTIME);
     }
 
     lArm_posFdback_Ftred.assign(LARMDOF, 0.0);
@@ -1478,7 +1498,8 @@ TorCompWrap ArmCtlNode::gravCompCalOutp(
         dyCompRes = gravComp_floatBase.onlyGravComp(waist_pos, waist_spd, lArm_Jnt_pos, lArm_JntVelCor, rArm_Jnt_pos, rArm_JntVelCor);
     }else{
         //完整的动力学补偿
-        dyCompRes = gravComp_floatBase.GravCompOutp(waist_pos, waist_spd, lArm_Jnt_pos, lArm_JntVelCor, rArm_Jnt_pos, rArm_JntVelCor);
+        dyCompRes = gravComp_floatBase.GravCompOutp(waist_pos, waist_spd, lArm_Jnt_pos, lArm_JntVelCor,
+            rArm_Jnt_pos, rArm_JntVelCor, gravInpMode == 1 && !ifTrigger ? stream_acceleration_ : std::vector<double>{});
     }
 
     //重力补偿修正
@@ -1701,6 +1722,24 @@ void ArmCtlNode::message_callback(const ctl_msgs_hw::msg::RetInformation::Shared
 //从上位机获取的控制数据
 void ArmCtlNode::upperMonitor_msg_callback(const ctl_msgs_hw::msg::MidNodeCtlMsgSend::SharedPtr msg)
 {
+    if (msg->bridge_joint_stream) {
+        const auto valid = [](const auto& values) {
+            return values.size() == 7 && std::all_of(values.begin(), values.end(),
+                [](double v) { return std::isfinite(v); });
+        };
+        if (!std::isfinite(msg->upper_monitor_time) || msg->upper_monitor_time < TEMPTIME * 0.99 ||
+            msg->upper_monitor_time > 0.25 || !valid(msg->l_arm_des_pos_jntspace) ||
+            !valid(msg->r_arm_des_pos_jntspace) || (msg->derivatives_valid &&
+            (!valid(msg->l_arm_des_vel_jntspace) || !valid(msg->r_arm_des_vel_jntspace) ||
+             !valid(msg->l_arm_des_acc) || !valid(msg->r_arm_des_acc)))) {
+            RCLCPP_ERROR(get_logger(), "Rejected malformed bridge trajectory sample");
+            return;
+        }
+        if (stream_sample_ && stream_sample_->trajectory_header.stamp == msg->trajectory_header.stamp) return;
+        stream_sample_ = msg;
+    } else {
+        stream_sample_.reset();
+    }
     //----------综合模式控制信息解包----------
 
     RCLCPP_DEBUG(this->get_logger(), "upper monitor data get success");

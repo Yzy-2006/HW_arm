@@ -22,6 +22,12 @@ bool if_reach_end
 # feedback once. Release only when a new command with hold_position=false arrives.
 bool hold_position
 
+# Time between source targets, distinct from ROS controller loop periods.
+float64 target_period_s
+bool derivatives_valid
+float64[] l_arm_des_acc
+float64[] r_arm_des_acc
+
 #----- 关节限位控制 (左臂) -----
 bool l_arm_if_use_jntlim
 int32 l_arm_limjnt_num

@@ -63,3 +63,14 @@ def test_tool_axis_lock_preserves_swing_and_translation(preset_executable, tmp_p
     subprocess.run([
         str(preset_executable), str(tmp_path), "lock_enabled" if enabled else "lock_disabled",
     ], check=True, capture_output=True, text=True)
+
+
+def test_vr_handoff_reanchors_feedback_clears_deltas_and_never_returns_home(preset_executable, tmp_path):
+    config = tmp_path / "config"
+    config.mkdir()
+    control = yaml.safe_load((CONFIG / "controllerConfig.yaml").read_text())
+    control["vrTeleoperationLimit"]["position_enabled"] = False
+    control["vrTeleoperationLimit"]["orientation_enabled"] = False
+    (config / "controllerConfig.yaml").write_text(yaml.safe_dump(control))
+    subprocess.run([str(preset_executable), str(tmp_path), "handoff"],
+                   check=True, capture_output=True, text=True)

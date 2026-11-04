@@ -1,0 +1,23 @@
+[INFO] [1793766001.412230020] [robot_upperMonitor]: CtlTransmit bridge initialized.
+[INFO] [1793766001.415067325] [robot_upperMonitor]: Chassis transmit initialized
+[INFO] [1793766027.612456984] [robot_upperMonitor]: BridgeCtlMsg received: ctl_trans_mod=3
+[INFO] [1793766028.675862231] [robot_upperMonitor]: BridgeCtlMsg received: ctl_trans_mod=3
+[INFO] [1793766029.745829816] [robot_upperMonitor]: BridgeCtlMsg received: ctl_trans_mod=3
+[INFO] [1793766030.809270697] [robot_upperMonitor]: BridgeCtlMsg received: ctl_trans_mod=3
+[INFO] [1793766031.875865278] [robot_upperMonitor]: BridgeCtlMsg received: ctl_trans_mod=3
+[INFO] [1793766032.942482966] [robot_upperMonitor]: BridgeCtlMsg received: ctl_trans_mod=3
+[INFO] [1793766034.009154566] [robot_upperMonitor]: BridgeCtlMsg received: ctl_trans_mod=3
+[INFO] [1793766035.009234781] [robot_upperMonitor]: BridgeCtlMsg received: ctl_trans_mod=3
+[INFO] [1793766036.012487650] [robot_upperMonitor]: BridgeCtlMsg received: ctl_trans_mod=3
+[INFO] [1793766037.076218902] [robot_upperMonitor]: BridgeCtlMsg received: ctl_trans_mod=3
+[INFO] [1793766038.079184551] [robot_upperMonitor]: BridgeCtlMsg received: ctl_trans_mod=3
+[INFO] [1793766039.145843302] [robot_upperMonitor]: BridgeCtlMsg received: ctl_trans_mod=3
+[INFO] [1793766040.145905678] [robot_upperMonitor]: BridgeCtlMsg received: ctl_trans_mod=3
+[INFO] [1793766041.209556355] [robot_upperMonitor]: BridgeCtlMsg received: ctl_trans_mod=3
+[INFO] [1793766042.209585526] [robot_upperMonitor]: BridgeCtlMsg received: ctl_trans_mod=3
+[INFO] [1793766043.209649908] [robot_upperMonitor]: BridgeCtlMsg received: ctl_trans_mod=3
+[INFO] [1793766044.276394806] [robot_upperMonitor]: BridgeCtlMsg received: ctl_trans_mod=3
+[INFO] [1793766045.342891037] [robot_upperMonitor]: BridgeCtlMsg received: ctl_trans_mod=3
+[INFO] [1793766046.342996378] [robot_upperMonitor]: BridgeCtlMsg received: ctl_trans_mod=3
+[INFO] [1793766047.409677070] [robot_upperMonitor]: BridgeCtlMsg received: ctl_trans_mod=3
+[INFO] [1793766186.729092867] [robot_upperMonitor]: 程序已安全退出

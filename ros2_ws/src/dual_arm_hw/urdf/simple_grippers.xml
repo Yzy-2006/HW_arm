@@ -1,0 +1,145 @@
+<?xml version="1.0"?>
+<!-- URDF extension for visualization and simulation; append to dual_arm.urdf.
+     Placeholder dimensions and inertias, not calibrated hardware parameters.
+     Each slider is one finger's travel: aperture = 2 * travel (0 to 70 mm).
+     The palm starts at link_8 and fingers extend along local -Z. -->
+<robot name="simple_grippers">
+  <material name="gripper_palm_blue"><color rgba="0.12 0.45 0.65 1"/></material>
+  <material name="gripper_finger_silver"><color rgba="0.72 0.75 0.78 1"/></material>
+
+  <link name="gripper_l_base">
+    <inertial>
+      <origin xyz="0 0 -0.0125"/>
+      <mass value="0.18"/>
+      <inertia ixx="0.000033375" ixy="0" ixz="0" iyy="0.000130875" iyz="0" izz="0.0001455"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 -0.0125"/>
+      <geometry><box size="0.09 0.04 0.025"/></geometry>
+      <material name="gripper_palm_blue"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 -0.0125"/>
+      <geometry><box size="0.09 0.04 0.025"/></geometry>
+    </collision>
+  </link>
+  <joint name="gripper_l_mount" type="fixed">
+    <parent link="arm_l_link_8"/>
+    <child link="gripper_l_base"/>
+  </joint>
+  <link name="gripper_l_finger_1">
+    <inertial>
+      <origin xyz="0 0 -0.03"/>
+      <mass value="0.03"/>
+      <inertia ixx="0.00000981" ixy="0" ixz="0" iyy="0.00000916" iyz="0" izz="0.00000097"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 -0.03"/>
+      <geometry><box size="0.008 0.018 0.06"/></geometry>
+      <material name="gripper_finger_silver"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 -0.03"/>
+      <geometry><box size="0.008 0.018 0.06"/></geometry>
+    </collision>
+  </link>
+  <joint name="gripper_l_joint" type="prismatic">
+    <origin xyz="0.004 0 -0.025"/>
+    <parent link="gripper_l_base"/>
+    <child link="gripper_l_finger_1"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="0" upper="0.035" effort="20" velocity="0.1"/>
+  </joint>
+  <link name="gripper_l_finger_2">
+    <inertial>
+      <origin xyz="0 0 -0.03"/>
+      <mass value="0.03"/>
+      <inertia ixx="0.00000981" ixy="0" ixz="0" iyy="0.00000916" iyz="0" izz="0.00000097"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 -0.03"/>
+      <geometry><box size="0.008 0.018 0.06"/></geometry>
+      <material name="gripper_finger_silver"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 -0.03"/>
+      <geometry><box size="0.008 0.018 0.06"/></geometry>
+    </collision>
+  </link>
+  <joint name="gripper_l_mimic_joint" type="prismatic">
+    <origin xyz="-0.004 0 -0.025"/>
+    <parent link="gripper_l_base"/>
+    <child link="gripper_l_finger_2"/>
+    <axis xyz="-1 0 0"/>
+    <limit lower="0" upper="0.035" effort="20" velocity="0.1"/>
+    <mimic joint="gripper_l_joint" multiplier="1" offset="0"/>
+  </joint>
+
+  <link name="gripper_r_base">
+    <inertial>
+      <origin xyz="0 0 -0.0125"/>
+      <mass value="0.18"/>
+      <inertia ixx="0.000033375" ixy="0" ixz="0" iyy="0.000130875" iyz="0" izz="0.0001455"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 -0.0125"/>
+      <geometry><box size="0.09 0.04 0.025"/></geometry>
+      <material name="gripper_palm_blue"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 -0.0125"/>
+      <geometry><box size="0.09 0.04 0.025"/></geometry>
+    </collision>
+  </link>
+  <joint name="gripper_r_mount" type="fixed">
+    <parent link="arm_r_link_8"/>
+    <child link="gripper_r_base"/>
+  </joint>
+  <link name="gripper_r_finger_1">
+    <inertial>
+      <origin xyz="0 0 -0.03"/>
+      <mass value="0.03"/>
+      <inertia ixx="0.00000981" ixy="0" ixz="0" iyy="0.00000916" iyz="0" izz="0.00000097"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 -0.03"/>
+      <geometry><box size="0.008 0.018 0.06"/></geometry>
+      <material name="gripper_finger_silver"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 -0.03"/>
+      <geometry><box size="0.008 0.018 0.06"/></geometry>
+    </collision>
+  </link>
+  <joint name="gripper_r_joint" type="prismatic">
+    <origin xyz="0.004 0 -0.025"/>
+    <parent link="gripper_r_base"/>
+    <child link="gripper_r_finger_1"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="0" upper="0.035" effort="20" velocity="0.1"/>
+  </joint>
+  <link name="gripper_r_finger_2">
+    <inertial>
+      <origin xyz="0 0 -0.03"/>
+      <mass value="0.03"/>
+      <inertia ixx="0.00000981" ixy="0" ixz="0" iyy="0.00000916" iyz="0" izz="0.00000097"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 -0.03"/>
+      <geometry><box size="0.008 0.018 0.06"/></geometry>
+      <material name="gripper_finger_silver"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 -0.03"/>
+      <geometry><box size="0.008 0.018 0.06"/></geometry>
+    </collision>
+  </link>
+  <joint name="gripper_r_mimic_joint" type="prismatic">
+    <origin xyz="-0.004 0 -0.025"/>
+    <parent link="gripper_r_base"/>
+    <child link="gripper_r_finger_2"/>
+    <axis xyz="-1 0 0"/>
+    <limit lower="0" upper="0.035" effort="20" velocity="0.1"/>
+    <mimic joint="gripper_r_joint" multiplier="1" offset="0"/>
+  </joint>
+</robot>

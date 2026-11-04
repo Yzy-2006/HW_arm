@@ -421,6 +421,7 @@ void RobotCtlNode::msg_publish(){
         temp_upperMonitorData_pub.r_arm_des_vel_jntspace[i] = upperMonitor_dataSend.ctlDesMsg.desVel_r_MDPjointSpace[i];
     }
 
+    bridge_transmit.fill_stream_metadata(temp_upperMonitorData_pub);
     upperMointor_Msg_send->publish(temp_upperMonitorData_pub);
     ifFirstOutput = false;
 }

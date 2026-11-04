@@ -296,6 +296,7 @@ def make_node(config, cameras, *, show_opencv=False):
                                 "content": path.read_text(),
                             }
                     self.episode = EpisodeWriter(config["dataset_root"], {
+                        **config.get("episode_metadata", {}),
                         "config": config, "calibration": calibration,
                         "start_wall_time_ns": time.time_ns(), "start_monotonic_s": now,
                     }, self.write_image)

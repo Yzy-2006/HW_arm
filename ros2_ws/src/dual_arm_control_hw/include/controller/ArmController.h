@@ -299,7 +299,8 @@ class ForceComp_floatBase{
         //惯性综合补偿 (惯性力 + 科氏力)
         std::vector<double> InteriaMulComp(
             std::vector<double> lArm_pos, std::vector<double> lArm_vel,
-            std::vector<double> rArm_pos, std::vector<double> rArm_vel);
+            std::vector<double> rArm_pos, std::vector<double> rArm_vel,
+            const std::vector<double>& acceleration = {});
 
         //打印模型信息
         void printModelInfo();

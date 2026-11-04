@@ -15,12 +15,17 @@ from pathlib import Path
 from multiprocessing import shared_memory
 
 import numpy as np
+from pose_mapping import (
+    matrix_to_quaternion, quaternion_to_euler_zyx, _head_yaw_rotation, _head_rotation,
+    _rotate_xy, _limit_increment, _conservative_deadband,
+    robot_frame_position_delta, robot_frame_orientation_delta,
+)
 
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSHistoryPolicy, QoSReliabilityPolicy
 from geometry_msgs.msg import Vector3
-from std_msgs.msg import Bool, Float64MultiArray, Int8MultiArray
+from std_msgs.msg import Bool, Float64MultiArray, Int8MultiArray, String
 from std_srvs.srv import SetBool, Trigger
 from ctl_msgs_hw.msg import GripperCtl
 from ament_index_python.packages import get_package_share_directory
@@ -197,194 +202,6 @@ def load_gripper_config():
 # 四元数 / 欧拉角工具（取自 demo/vr_ros2_publisher_webtrc.py，无外部依赖）
 # -----------------------------------------------------------------------------
 
-def matrix_to_quaternion(matrix):
-    """从 4x4 变换矩阵提取单位四元数，返回 [w, x, y, z]。"""
-    rotation_matrix = matrix[:3, :3]
-
-    trace = rotation_matrix[0, 0] + rotation_matrix[1, 1] + rotation_matrix[2, 2]
-
-    if trace > 0:
-        s = 0.5 / np.sqrt(trace + 1.0)
-        w = 0.25 / s
-        x = (rotation_matrix[2, 1] - rotation_matrix[1, 2]) * s
-        y = (rotation_matrix[0, 2] - rotation_matrix[2, 0]) * s
-        z = (rotation_matrix[1, 0] - rotation_matrix[0, 1]) * s
-    else:
-        if rotation_matrix[0, 0] > rotation_matrix[1, 1] and rotation_matrix[0, 0] > rotation_matrix[2, 2]:
-            s = 2.0 * np.sqrt(1.0 + rotation_matrix[0, 0] - rotation_matrix[1, 1] - rotation_matrix[2, 2])
-            w = (rotation_matrix[2, 1] - rotation_matrix[1, 2]) / s
-            x = 0.25 * s
-            y = (rotation_matrix[0, 1] + rotation_matrix[1, 0]) / s
-            z = (rotation_matrix[0, 2] + rotation_matrix[2, 0]) / s
-        elif rotation_matrix[1, 1] > rotation_matrix[2, 2]:
-            s = 2.0 * np.sqrt(1.0 + rotation_matrix[1, 1] - rotation_matrix[0, 0] - rotation_matrix[2, 2])
-            w = (rotation_matrix[0, 2] - rotation_matrix[2, 0]) / s
-            x = (rotation_matrix[0, 1] + rotation_matrix[1, 0]) / s
-            y = 0.25 * s
-            z = (rotation_matrix[1, 2] + rotation_matrix[2, 1]) / s
-        else:
-            s = 2.0 * np.sqrt(1.0 + rotation_matrix[2, 2] - rotation_matrix[0, 0] - rotation_matrix[1, 1])
-            w = (rotation_matrix[1, 0] - rotation_matrix[0, 1]) / s
-            x = (rotation_matrix[0, 2] + rotation_matrix[2, 0]) / s
-            y = (rotation_matrix[1, 2] + rotation_matrix[2, 1]) / s
-            z = 0.25 * s
-
-    norm = np.sqrt(w * w + x * x + y * y + z * z)
-    if norm > 0:
-        w, x, y, z = w / norm, x / norm, y / norm, z / norm
-
-    return np.array([w, x, y, z])
-
-
-def quaternion_to_euler_zyx(quaternion):
-    """四元数 [w, x, y, z] 转 ZYX 欧拉角，返回 [yaw, pitch, roll]。"""
-    w, x, y, z = quaternion
-
-    siny_cosp = 2.0 * (w * z + x * y)
-    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
-    yaw = np.arctan2(siny_cosp, cosy_cosp)
-
-    sinp = 2.0 * (w * y - z * x)
-    if abs(sinp) >= 1.0:
-        pitch = np.copysign(np.pi / 2, sinp)
-    else:
-        pitch = np.arcsin(sinp)
-
-    sinr_cosp = 2.0 * (w * x + y * z)
-    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
-    roll = np.arctan2(sinr_cosp, cosr_cosp)
-
-    return np.array([yaw, pitch, roll])
-
-
-def _head_yaw_rotation(head_pose):
-    """Return the horizontal (yaw-only) head rotation in robot coordinates."""
-    if head_pose is None:
-        return np.eye(3)
-    rotation = np.asarray(head_pose, dtype=float)[:3, :3]
-    # Robot axes are x=front, y=left, z=up.  Ignore headset pitch/roll so
-    # looking up/down cannot turn a horizontal hand motion into vertical motion.
-    yaw = np.arctan2(rotation[1, 0], rotation[0, 0])
-    c, s = np.cos(yaw), np.sin(yaw)
-    return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
-
-
-def _head_rotation(head_pose):
-    """Return a proper full head rotation, with a safe identity fallback."""
-    if head_pose is None:
-        return np.eye(3)
-    rotation = np.asarray(head_pose, dtype=float)[:3, :3]
-    if rotation.shape != (3, 3) or not np.all(np.isfinite(rotation)):
-        return np.eye(3)
-    # XR tracking matrices should already be orthonormal.  Re-orthogonalize
-    # defensively so noisy frames cannot inject scale/shear into a quaternion.
-    u, _, vh = np.linalg.svd(rotation)
-    rotation = u @ vh
-    if np.linalg.det(rotation) < 0.0:
-        u[:, -1] *= -1.0
-        rotation = u @ vh
-    return rotation
-
-
-def _rotate_xy(delta, cy, sy):
-    """Rotate the horizontal (x=front, y=left) plane of a 3-vector by a yaw.
-
-    The vertical z component is left unchanged.  Used to cancel a constant
-    angular offset between the hand frame and the robot frame so that straight
-    hand motion maps to straight robot motion.
-    """
-    x, y, z = delta[0], delta[1], delta[2]
-    return np.array([cy * x - sy * y, sy * x + cy * y, z])
-
-
-def _limit_increment(delta, enabled, hard_max_norm, max_speed, sample_dt):
-    """Reject tracking jumps and cap speed without rescaling displacement."""
-    delta = np.asarray(delta, dtype=float).copy()
-    norm = float(np.linalg.norm(delta))
-    if not enabled or not np.all(np.isfinite(delta)) or norm > hard_max_norm:
-        return np.zeros(3)
-    max_step = max_speed * sample_dt
-    if norm > max_step and norm > 1e-12:
-        delta *= max_step / norm
-    return delta
-
-
-def _conservative_deadband(delta, residual, threshold, enabled):
-    """Keep sub-threshold movement until it accumulates into an increment."""
-    if not enabled:
-        residual.fill(0.0)
-        return np.zeros(3)
-    residual += delta
-    output = residual.copy()
-    output[np.abs(output) < threshold] = 0.0
-    residual -= output
-    return output
-
-
-def robot_frame_position_delta(
-    current_pose,
-    previous_pose,
-    current_head_pose,
-    previous_head_pose,
-    head_reference_rotation,
-):
-    """Compute a head-relative hand displacement and express it in robot axes."""
-    if current_pose is None or previous_pose is None:
-        return np.zeros(3)
-    waist_offset = np.array([0.15, 0.0, 0.45])
-    current = np.asarray(current_pose, dtype=float)[:3, 3] - waist_offset
-    previous = np.asarray(previous_pose, dtype=float)[:3, 3] - waist_offset
-    # Position follows the horizontal head frame only.  Looking up/down or
-    # tilting the headset must not turn a horizontal hand motion into Z motion.
-    current_head = _head_yaw_rotation(current_head_pose)
-    previous_head = _head_yaw_rotation(previous_head_pose)
-    reference = np.asarray(head_reference_rotation, dtype=float)
-    if reference.shape != (3, 3) or not np.all(np.isfinite(reference)):
-        reference = np.eye(3)
-    reference_yaw = np.arctan2(reference[1, 0], reference[0, 0])
-    c, s = np.cos(reference_yaw), np.sin(reference_yaw)
-    reference = np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
-    delta_in_head = current_head.T @ current - previous_head.T @ previous
-    return reference @ delta_in_head
-
-
-def robot_frame_orientation_delta(
-    current_arm_pose,
-    previous_arm_pose,
-    current_head_pose,
-    previous_head_pose,
-    head_reference_rotation,
-):
-    """Return the controller rotation increment in the fixed robot frame.
-
-    The tracker reports both controller and headset in its world frame.  The
-    controller must be relative to the headset so body/head motion does not
-    command the robot.  That relative increment is expressed in head axes,
-    however, while robot_control_hw left-multiplies every received increment
-    in fixed robot axes.  Conjugating with the headset orientation captured at
-    teleoperation start performs this frame conversion explicitly.
-    """
-    if current_arm_pose is None or previous_arm_pose is None:
-        return np.zeros(3)
-
-    current_arm = _head_rotation(current_arm_pose)
-    previous_arm = _head_rotation(previous_arm_pose)
-    current_head = _head_rotation(current_head_pose)
-    previous_head = _head_rotation(previous_head_pose)
-    reference = np.asarray(head_reference_rotation, dtype=float)
-    if reference.shape != (3, 3) or not np.all(np.isfinite(reference)):
-        reference = np.eye(3)
-
-    current_relative = current_head.T @ current_arm
-    previous_relative = previous_head.T @ previous_arm
-    delta_in_head = current_relative @ previous_relative.T
-    delta_in_robot = reference @ delta_in_head @ reference.T
-
-    transform = np.eye(4)
-    transform[:3, :3] = delta_in_robot
-    return quaternion_to_euler_zyx(matrix_to_quaternion(transform))
-
-
 # -----------------------------------------------------------------------------
 # ROS2 发布节点
 # -----------------------------------------------------------------------------
@@ -392,8 +209,16 @@ def robot_frame_orientation_delta(
 class VRPoseIncrementPublisher(Node):
     """订阅(内部)VR 数据，逐帧计算位姿增量，并按扳机门控发布到 ROS2 话题。"""
 
-    def __init__(self):
+    def __init__(self, intervention=False):
         super().__init__('vr_pose_increment_publisher')
+        self.intervention_enabled = intervention
+        self.intervention_mode = "paused"
+        self.intervention_received_at = -float("inf")
+        self.intervention_was_active = False
+        self.intervention_request_pending = False
+        if intervention:
+            self.intervention_client = self.create_client(SetBool, "/towel/intervene")
+            self.create_subscription(String, "/towel/intervention/state", self._intervention_state, 1)
 
         # Increment topics are a latest-sample stream.  A deep reliable queue
         # replays stale per-frame deltas after a scheduling hiccup, producing
@@ -504,7 +329,8 @@ class VRPoseIncrementPublisher(Node):
         self._right_pos_filter = np.zeros(3)
         self._left_rot_filter = np.zeros(3)
         self._right_rot_filter = np.zeros(3)
-        self.gripper_ctl_pub = self.create_publisher(GripperCtl, "/gripper/ctl", 10)
+        self.gripper_ctl_pub = self.create_publisher(
+            GripperCtl, "/towel/intervention/gripper_command" if intervention else "/gripper/ctl", 1)
         self.gripper_fdb_sub = self.create_subscription(
             Float64MultiArray, "/gripper/fdb", self._gripper_fdb_callback, 10
         )
@@ -559,6 +385,9 @@ class VRPoseIncrementPublisher(Node):
 
     def publish_increment(self, teleData):
         """逐帧计算位姿增量并发布。未扣扳机时发布零增量。"""
+        if getattr(self, "intervention_enabled", False) and not self._intervention_active():
+            self.first_frame = True
+            return
         if teleData is None or teleData.head_pose is None:
             return
 
@@ -606,7 +435,7 @@ class VRPoseIncrementPublisher(Node):
         # 在「按下」的上升沿发布一次 /vr/zero_return_cmd=True，由 robot_control_hw
         # 以 controllerConfig.yaml 配置的平滑关节轨迹从当前反馈角回归 zeropos.yaml。
         a_button = bool(state.right_aButton) if state is not None else False
-        if a_button and not self.prev_a_button:
+        if a_button and not self.prev_a_button and not getattr(self, "intervention_enabled", False):
             self.get_logger().info("检测到 A 键按下，发布关节空间回零触发指令")
             self.zero_return_pub.publish(Bool(data=True))
         self.prev_a_button = a_button
@@ -769,7 +598,48 @@ class VRPoseIncrementPublisher(Node):
         self.prev_head_pose = head_pose.copy()
 
     def _gripper_fdb_callback(self, msg):
+        if self.intervention_enabled and not self._intervention_active():
+            for side in self.dual_grippers.sides.values():
+                side.invalidate()
         self.dual_grippers.feedback(msg.data, time.monotonic())
+
+    def _intervention_state(self, msg):
+        self.intervention_mode = msg.data
+        self.intervention_received_at = time.monotonic()
+
+    def _intervention_active(self):
+        active = (self.intervention_mode == "vr"
+                  and time.monotonic() - self.intervention_received_at < 0.3)
+        if active != self.intervention_was_active:
+            self.first_frame = True
+            if not active:
+                for side in self.dual_grippers.sides.values():
+                    side.invalidate()
+            self.intervention_was_active = active
+        return active
+
+    def toggle_intervention(self):
+        if self.intervention_request_pending:
+            return
+        if not self.intervention_client.service_is_ready():
+            self.get_logger().warning("Intervention service unavailable; VR commands remain disabled")
+            return
+        if self.intervention_mode in {"arming_vr", "saving", "resuming"}:
+            return
+        request = SetBool.Request()
+        request.data = self.intervention_mode != "vr"
+        self.intervention_request_pending = True
+        future = self.intervention_client.call_async(request)
+
+        def done(result):
+            self.intervention_request_pending = False
+            try:
+                response = result.result()
+                self.get_logger().info(response.message)
+            except Exception as exc:
+                self.get_logger().warning(f"Intervention request failed: {exc}")
+
+        future.add_done_callback(done)
 
     def update_gripper(self, teleData):
         state = teleData.tele_state if teleData is not None else None
@@ -777,13 +647,18 @@ class VRPoseIncrementPublisher(Node):
         discard_button = bool(getattr(state, LEFT_DISCARD_BUTTON_ATTR, False))
         left_button = bool(getattr(state, "left_squeeze_ctrl_state", False))
         right_button = bool(getattr(state, "right_squeeze_ctrl_state", False))
+        managed = getattr(self, "intervention_enabled", False)
+        active = not managed or self._intervention_active()
         if record_button and not self.prev_record_button:
-            self.toggle_recording()
-        if discard_button and not self.prev_discard_button:
+            if managed:
+                self.toggle_intervention()
+            else:
+                self.toggle_recording()
+        if discard_button and not self.prev_discard_button and not managed:
             self.discard_recording()
         positions, states = self.dual_grippers.step(time.monotonic(), {
-            "left": left_button and not self.prev_left_gripper_button,
-            "right": right_button and not self.prev_right_gripper_button,
+            "left": active and left_button and not self.prev_left_gripper_button,
+            "right": active and right_button and not self.prev_right_gripper_button,
         })
         self.prev_record_button, self.prev_discard_button = record_button, discard_button
         self.prev_left_gripper_button, self.prev_right_gripper_button = left_button, right_button
@@ -791,7 +666,8 @@ class VRPoseIncrementPublisher(Node):
         ctl.ctl_time = 0.02
         ctl.l_arm_gripper_pos, ctl.r_arm_gripper_pos = positions
         ctl.l_arm_gripper_tor = ctl.r_arm_gripper_tor = 0.0
-        self.gripper_ctl_pub.publish(ctl)
+        if active and np.isfinite(positions).all():
+            self.gripper_ctl_pub.publish(ctl)
         msg = Int8MultiArray()
         msg.data = states  # measured L/R, commanded L/R; 0=open, 1=closed, -1=invalid
         self.gripper_state_pub.publish(msg)
@@ -881,6 +757,8 @@ class VRPoseIncrementPublisher(Node):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--intervention", action="store_true",
+                        help="Wait for deployment ownership; left B takes over/saves and resumes")
     parser.add_argument(
         "--debug-controller-input",
         action="store_true",
@@ -911,7 +789,7 @@ def main():
 
     # 4. ROS2 节点
     rclpy.init()
-    node = VRPoseIncrementPublisher()
+    node = VRPoseIncrementPublisher(intervention=args.intervention)
 
     try:
         input("请先用 XR 设备浏览器打开 https://<本机IP>:8012?ws=wss://<本机IP>:8012，"

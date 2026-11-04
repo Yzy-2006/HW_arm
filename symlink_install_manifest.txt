@@ -1,0 +1,16 @@
+/home/yanziyu/projects/HW_arm/towel_task/ros2_ws/install/robot_control_hw/lib/robot_control_hw/robot_control_node
+/home/yanziyu/projects/HW_arm/towel_task/ros2_ws/install/robot_control_hw/share/ament_index/resource_index/package_run_dependencies/robot_control_hw
+/home/yanziyu/projects/HW_arm/towel_task/ros2_ws/install/robot_control_hw/share/ament_index/resource_index/parent_prefix_path/robot_control_hw
+/home/yanziyu/projects/HW_arm/towel_task/ros2_ws/install/robot_control_hw/share/robot_control_hw/environment/ament_prefix_path.sh
+/home/yanziyu/projects/HW_arm/towel_task/ros2_ws/install/robot_control_hw/share/robot_control_hw/environment/ament_prefix_path.dsv
+/home/yanziyu/projects/HW_arm/towel_task/ros2_ws/install/robot_control_hw/share/robot_control_hw/environment/path.sh
+/home/yanziyu/projects/HW_arm/towel_task/ros2_ws/install/robot_control_hw/share/robot_control_hw/environment/path.dsv
+/home/yanziyu/projects/HW_arm/towel_task/ros2_ws/install/robot_control_hw/share/robot_control_hw/local_setup.bash
+/home/yanziyu/projects/HW_arm/towel_task/ros2_ws/install/robot_control_hw/share/robot_control_hw/local_setup.sh
+/home/yanziyu/projects/HW_arm/towel_task/ros2_ws/install/robot_control_hw/share/robot_control_hw/local_setup.zsh
+/home/yanziyu/projects/HW_arm/towel_task/ros2_ws/install/robot_control_hw/share/robot_control_hw/local_setup.dsv
+/home/yanziyu/projects/HW_arm/towel_task/ros2_ws/install/robot_control_hw/share/robot_control_hw/package.dsv
+/home/yanziyu/projects/HW_arm/towel_task/ros2_ws/install/robot_control_hw/share/ament_index/resource_index/packages/robot_control_hw
+/home/yanziyu/projects/HW_arm/towel_task/ros2_ws/install/robot_control_hw/share/robot_control_hw/cmake/robot_control_hwConfig.cmake
+/home/yanziyu/projects/HW_arm/towel_task/ros2_ws/install/robot_control_hw/share/robot_control_hw/cmake/robot_control_hwConfig-version.cmake
+/home/yanziyu/projects/HW_arm/towel_task/ros2_ws/install/robot_control_hw/share/robot_control_hw/package.xml

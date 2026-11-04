@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 class TeleVuer:
-    def __init__(self, binocular: bool, use_hand_tracking: bool, img_shape, img_shm_name, cert_file=None, key_file=None, ngrok=False, webrtc=False):
+    def __init__(self, binocular: bool, use_hand_tracking: bool, img_shape, img_shm_name, cert_file=None, key_file=None, ngrok=False, webrtc=False, stream_images=True):
         """
         TeleVuer class for OpenXR-based XR teleoperate applications.
         This class handles the communication with the Vuer server and manages the shared memory for image and pose data.
@@ -47,11 +47,14 @@ class TeleVuer:
         else:
             self.vuer.add_handler("CONTROLLER_MOVE")(self.on_controller_move)
 
-        existing_shm = shared_memory.SharedMemory(name=img_shm_name)
-        self.img_array = np.ndarray(img_shape, dtype=np.uint8, buffer=existing_shm.buf)
+        if stream_images:
+            existing_shm = shared_memory.SharedMemory(name=img_shm_name)
+            self.img_array = np.ndarray(img_shape, dtype=np.uint8, buffer=existing_shm.buf)
 
         self.webrtc = webrtc
-        if self.binocular and not self.webrtc:
+        if not stream_images:
+            self.vuer.spawn(start=False)(self.main_controllers)
+        elif self.binocular and not self.webrtc:
             self.vuer.spawn(start=False)(self.main_image_binocular)
         elif not self.binocular and not self.webrtc:
             self.vuer.spawn(start=False)(self.main_image_monocular)
@@ -107,6 +110,13 @@ class TeleVuer:
 
     def vuer_run(self):
         self.vuer.run()
+
+    async def main_controllers(self, session):
+        """Input-only session: no shared image memory or video transmission."""
+        session.upsert(MotionControllers(stream=True, key="motionControllers", left=True, right=True),
+                       to="bgChildren")
+        while True:
+            await asyncio.sleep(1)
 
     async def on_cam_move(self, event, session, fps=60):
         try:

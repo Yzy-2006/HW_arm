@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
-from scipy.interpolate import make_interp_spline
+from scipy.interpolate import make_interp_spline, PPoly
 
 
 JOINT_INDICES = np.r_[0:7, 8:15]
@@ -65,6 +65,22 @@ class MinimumSnapTrajectory:
             return np.zeros(self.spline.c.shape[1:])
         value = self.spline(np.clip(elapsed / self.duration, 0.0, 1.0), nu=derivative)
         return value / self.duration ** derivative
+
+    def validate_limits(self, lower, upper, max_velocity, max_acceleration):
+        """Check every polynomial interval, including extrema between waypoints."""
+        from motion_safety import MotionFault
+        for joint in range(self.spline.c.shape[1]):
+            polynomial = PPoly.from_spline((self.spline.t, self.spline.c[:, joint], self.spline.k))
+            for order, lo, hi in ((0, lower[joint], upper[joint]),
+                                  (1, -max_velocity, max_velocity),
+                                  (2, -max_acceleration, max_acceleration)):
+                derivative = polynomial.derivative(order)
+                roots = derivative.derivative().roots(extrapolate=False)
+                points = np.r_[0., 1., roots[np.isfinite(roots) & (roots >= 0) & (roots <= 1)]]
+                values = derivative(points) / self.duration ** order
+                if not np.isfinite(values).all() or np.min(values) < lo - 1e-8 or np.max(values) > hi + 1e-8:
+                    raise MotionFault(f"Trajectory joint {joint + 1} derivative {order} exceeds limits; "
+                                      "reduce replay speed or revise the trajectory")
 
 
 class ChunkInterpolator:

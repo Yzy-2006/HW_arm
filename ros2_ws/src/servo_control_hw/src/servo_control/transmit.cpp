@@ -11,6 +11,12 @@
 #include <vector>
 #include "time.h"
 #include <iostream>
+#include <chrono>
+
+ArmSafetyGuard arm_safety;
+double arm_safety_now() {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 
 
 #define EC_TIMEOUTM
@@ -633,6 +639,7 @@ void EtherCAT_Run()
 
 void EtherCAT_Data_Get()
 {
+    if (ecat_phys < 0 || wkc < expectedWKC) return;
     memcpy(pdo_rx, ec_slave[ecat_phys].inputs, ETC_PDO_SIZE);
 
     // debug: print RX feedback decoded every 1000 cycles
@@ -666,10 +673,16 @@ void EtherCAT_Data_Get()
         }
     }
 
+    int arm_index = 0;
     for(int ch = 0; ch < ServoStruct.CAN_board_num; ch++){
         int channel = ServoStruct.CAN_boards[ch].channel_idx;
         for(int j = 0; j < ServoStruct.CAN_boards[ch].JntNum_onCan; j++){
             int slot = ServoStruct.CAN_boards[ch].motor_slot[j];
+            const int id = ServoStruct.CAN_boards[ch].can_jnt_ID[j];
+            const int index = id == 8 ? -1 : arm_index++;
+            const auto& block = pdo_rx[channel][slot];
+            // Only a complete ACK1 for this exact motor updates arm freshness.
+            if (block.id != id || block.dlc < 7 || (block.data[0] >> 5) != 1) continue;
             uint8_t repack_rc = RV_can_data_repack(&pdo_rx[channel][slot], comm_ack, ch);
             if (repack_rc == 255) {
                 // 无有效反馈帧（dlc==0 / 广播 / 未知帧）：跳过本轮读取。
@@ -684,6 +697,12 @@ void EtherCAT_Data_Get()
             ServoStruct.CAN_boards[ch].can_jnt_ret_msg[j].joint_spdRet = ServoStruct.CAN_boards[ch].can_jnt_direComp[j] * rv_motor_msg[rv_ID].speed_actual_rad;
             ServoStruct.CAN_boards[ch].can_jnt_ret_msg[j].joint_currentRet = rv_motor_msg[rv_ID].current_actual_float;
             ServoStruct.CAN_boards[ch].can_jnt_ret_msg[j].joint_temperature = (rv_motor_msg[rv_ID].temperature - 50.0)/2.0;
+
+            if (index >= 0 && index < 14) {
+                const auto& f = ServoStruct.CAN_boards[ch].can_jnt_ret_msg[j];
+                arm_safety.feedback[index] = {f.joint_posRet, f.joint_spdRet,
+                    arm_safety_now(), block.data[0] & 0x1F};
+            }
 
             gripperFdbDecode(channel, motor_id, repack_rc,
                              rv_motor_msg[rv_ID], pdo_rx[channel][slot]);
@@ -732,8 +751,21 @@ int CommandMODE = 1;         //命令模式，根据不同的命令模式执行�
 
 void EtherCAT_Command_Set()
 {
+    const double safety_now = arm_safety_now();
+    arm_safety.check_feedback(safety_now);
+    int safety_index = 0;
+    for (const auto& board : ServoStruct.CAN_boards) {
+        for (int j = 0; j < board.JntNum_onCan; ++j) {
+            if (board.can_jnt_ID[j] == 8) continue;
+            const auto& c = board.can_jnt_des_msg[j];
+            arm_safety.check_command(safety_index++,
+                {c.joint_pos, c.joint_spd, c.joint_tor, c.joint_Kp, c.joint_Kd}, safety_now);
+        }
+    }
+    if (safety_index != 14) arm_safety.trip("invalid_joint_mapping");
+    const bool inhibit = !arm_safety.ready(safety_now);
     // handle queue commands
-    if (ecat_phys > 0 && messages[0].read_available()) {
+    if (!inhibit && ecat_phys > 0 && messages[0].read_available()) {
         MotorBlock_ptr queue_msg;
         if (messages[0].pop(queue_msg) && queue_msg != nullptr) {
             memset(pdo_tx, 0, sizeof(pdo_tx));
@@ -760,6 +792,13 @@ void EtherCAT_Command_Set()
             double pos = jnt_direComp[j] * joint_des_msg[j].joint_pos;
             double spd = jnt_direComp[j] * joint_des_msg[j].joint_spd;
             double tor = jnt_direComp[j] * joint_des_msg[j].joint_tor;
+
+            if (inhibit) {
+                // Motor-local velocity damping does not require cached host position.
+                send_motor_ctrl_cmd(&pdo_tx[channel][slot], motor_id,
+                    0.0, motor_id == 8 ? 2.2 : arm_safety.limits.damping, 0.0, 0.0, 0.0);
+                continue;
+            }
 
             // gripper joints: pos/spd/tor/Kp/Kd from topic, channel区分左右
             if(motor_id == 8){

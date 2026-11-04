@@ -1,10 +1,10 @@
 #控制器配置文件
 # 本文件统一管理控制器的所有硬件相关参数
 
-# VR rotation only: remove spin around the current tool-local Z axis on both arms.
-# Keep tool tilt and translation. A/B joint-pose commands are unaffected.
+# Allow all three VR rotation axes on both arms, including tool-local Z spin.
+# Set true to filter tool-axis spin. A/B joint-pose commands are unaffected.
 vrOrientationControl:
-  lock_tool_twist: true
+  lock_tool_twist: false
 
 #============================================
 # VR 遥操作最终末端目标限位
@@ -38,13 +38,32 @@ vrJointReturn:
 #============================================
 # 重力补偿配置
 #============================================
+armSafety:
+  # Conservative software trip thresholds, not certified hardware limits.
+  feedback_timeout_s: 0.1
+  command_timeout_s: 0.25
+  max_speed_rad_s: 1.5
+  max_feedforward: 5.0
+  max_feedforward_rate: 200.0
+  tracking_error_rad: 0.3
+  tracking_duration_s: 0.1
+  fault_damping: 12.0
+  feedback_position_tolerance_rad: 0.02
+  # Left J1-J7, right J1-J7, matching the installed URDF.
+  lower: [-3.1416, 0.0, -2.3562, -2.6180, -2.3562, -1.5708, -1.5708,
+          -1.5708, -1.5708, -2.3562, 0.0, -2.3562, -1.5708, -1.5708]
+  upper: [1.5708, 1.5708, 2.3562, 0.0, 2.3562, 1.5708, 1.5708,
+          3.1416, 0.0, 2.3562, 2.6180, 2.3562, 1.5708, 1.5708]
+
 gravComp:
 
   # ---------- 开关量 ----------
-  ifUseGravComp: 1      #是否使用重力补偿 0 -- 否； 1 -- 是
+  ifUseGravComp: 0      # Gravity only. All compensation stays off pending validation.
+  ifUseInertiaComp: 0
+  ifUseCoriolisComp: 0
   ifUseInpFtr: 1        #是否使用输入滤波器
   ifUseOutpFtr: 1       #是否使用输出滤波器
-  ifUseFricComp: 1      #是否使用stribeck摩擦补偿
+  ifUseFricComp: 0      #是否使用stribeck摩擦补偿
   ifUsePosVelOutpFtr: 1 #是否使用关节角度/角速度输出低通滤波器 0 -- 否； 1 -- 是
 
   # 数据输入模式
@@ -84,55 +103,55 @@ gravCompFtr:
   # ---- 位置输入滤波器 ----
   posInpFtr:
     lArm:
-      sampRate:   [10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0]
+      sampRate:   [300.0, 300.0, 300.0, 300.0, 300.0, 300.0, 300.0]
       cutoffRate: [20,      20,      20,      20,      20,      20,      20     ]
     rArm:
-      sampRate:   [10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0]
+      sampRate:   [300.0, 300.0, 300.0, 300.0, 300.0, 300.0, 300.0]
       cutoffRate: [20,      20,      20,      20,      20,      20,      20     ]
 
   # ---- 速度输入滤波器 ----
   velInpFtr:
     lArm:
-      sampRate:   [10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0]
+      sampRate:   [300.0, 300.0, 300.0, 300.0, 300.0, 300.0, 300.0]
       cutoffRate: [20,      20,      20,      20,      20,      20,      20     ]
     rArm:
-      sampRate:   [10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0]
+      sampRate:   [300.0, 300.0, 300.0, 300.0, 300.0, 300.0, 300.0]
       cutoffRate: [20,      20,      20,      20,      20,      20,      20     ]
 
   # ---- 力矩输入滤波器 ----
   torInpFtr:
     lArm:
-      sampRate:   [10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0]
+      sampRate:   [300.0, 300.0, 300.0, 300.0, 300.0, 300.0, 300.0]
       cutoffRate: [20,      20,      20,      20,      20,      20,      20     ]
     rArm:
-      sampRate:   [10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0]
+      sampRate:   [300.0, 300.0, 300.0, 300.0, 300.0, 300.0, 300.0]
       cutoffRate: [20,      20,      20,      20,      20,      20,      20     ]
 
   # ---- 力矩输出滤波器 ----
   torOutpFtr:
     lArm:
-      sampRate:   [50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0]
+      sampRate:   [300.0, 300.0, 300.0, 300.0, 300.0, 300.0, 300.0]
       cutoffRate: [20.0, 20.0, 20.0, 20.0, 20.0,     20,     20     ]
     rArm:
-      sampRate:   [50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0]
+      sampRate:   [300.0, 300.0, 300.0, 300.0, 300.0, 300.0, 300.0]
       cutoffRate: [20,     20,     20,     20,     20,     20,     20     ]
 
   # ---- 关节角度输出滤波器 ----
   posOutpFtr:
     lArm:
-      sampRate:   [50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0]
+      sampRate:   [300.0, 300.0, 300.0, 300.0, 300.0, 300.0, 300.0]
       cutoffRate: [20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0]
     rArm:
-      sampRate:   [50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0]
+      sampRate:   [300.0, 300.0, 300.0, 300.0, 300.0, 300.0, 300.0]
       cutoffRate: [20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0]
 
   # ---- 关节角速度输出滤波器 ----
   velOutpFtr:
     lArm:
-      sampRate:   [50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0]
+      sampRate:   [300.0, 300.0, 300.0, 300.0, 300.0, 300.0, 300.0]
       cutoffRate: [20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0]
     rArm:
-      sampRate:   [50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0]
+      sampRate:   [300.0, 300.0, 300.0, 300.0, 300.0, 300.0, 300.0]
       cutoffRate: [20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0]
 
 

@@ -1,0 +1,46 @@
+haunxiang@shaunxianglaptop:~/Documents/projects/02_hw_arm_flexible_manipulation/HW_arm$ make replay ARGS="--config config/replay_20261031.yaml --dataset $PWD/data/lerobot/fold_towel_59_no_episode6_20261102 --episode 3 --max-frames 300 --speed 0.5 --motion"
+2026-11-04 12:20:27,188 INFO Loaded episode=3 frames=300 fps=30
+[WARN] [1793766027.423166928] [towel_dataset_replay]: dataset replay MOTION: frames=300 rate=15Hz slow_factor=0.3 minimum_snap=False publish_rate_hz=15
+[WARN] [1793766027.475855411] [towel_dataset_replay]: Waiting for fresh joint and gripper feedback; replay frame is paused
+[INFO] [1793766028.478629534] [towel_dataset_replay]: replay frame 14/300 action=[ 0.417  0.164 -0.265 -1.815 -1.627 -0.697  0.067  1.    -0.305 -0.016
+  0.117  1.804  1.356  0.692  0.056  1.   ]
+[INFO] [1793766029.544459877] [towel_dataset_replay]: replay frame 30/300 action=[ 0.434  0.082 -0.36  -1.719 -1.468 -0.75   0.08   1.    -0.305 -0.016
+  0.117  1.804  1.356  0.692  0.056  1.   ]
+[INFO] [1793766030.610516628] [towel_dataset_replay]: replay frame 46/300 action=[ 0.44   0.063 -0.356 -1.704 -1.382 -0.759  0.056  0.    -0.305 -0.016
+  0.117  1.804  1.356  0.692  0.056  1.   ]
+[INFO] [1793766031.676669463] [towel_dataset_replay]: replay frame 62/300 action=[ 0.386  0.004 -0.405 -1.611 -1.283 -0.7    0.129  0.    -0.305 -0.015
+  0.117  1.804  1.356  0.693  0.056  1.   ]
+[INFO] [1793766032.743194395] [towel_dataset_replay]: replay frame 78/300 action=[ 0.216  0.002 -0.466 -1.411 -1.367 -0.72   0.203  0.    -0.305 -0.015
+  0.117  1.804  1.356  0.693  0.056  1.   ]
+[INFO] [1793766033.744258903] [towel_dataset_replay]: replay frame 93/300 action=[ 1.451  0.    -2.143  0.    -1.31  -0.809  0.172  0.    -0.305 -0.015
+  0.117  1.804  1.356  0.693  0.056  1.   ]
+[INFO] [1793766034.809990444] [towel_dataset_replay]: replay frame 109/300 action=[-1.37   0.    -2.143  0.    -1.315 -0.809  0.113  0.    -0.305 -0.015
+  0.118  1.804  1.356  0.693  0.056  1.   ]
+[INFO] [1793766035.810341762] [towel_dataset_replay]: replay frame 124/300 action=[-1.578  0.    -2.143  0.    -1.282 -0.649  0.085  0.    -0.305 -0.015
+  0.117  1.804  1.356  0.693  0.056  1.   ]
+[INFO] [1793766036.810923239] [towel_dataset_replay]: replay frame 139/300 action=[-1.489  0.    -2.143  0.    -1.264 -0.629  0.085  0.    -0.305 -0.015
+  0.117  1.804  1.356  0.693  0.056  1.   ]
+[INFO] [1793766037.878073124] [towel_dataset_replay]: replay frame 155/300 action=[-1.489  0.    -2.143  0.    -1.315 -0.629  0.085  1.    -0.305 -0.015
+  0.117  1.804  1.356  0.693  0.056  0.   ]
+[INFO] [1793766038.877719020] [towel_dataset_replay]: replay frame 170/300 action=[-1.489  0.    -2.143  0.    -1.315 -0.629  0.085  1.    -0.326 -0.021
+  0.208  1.736  1.441  0.695  0.099  0.   ]
+[INFO] [1793766039.944444079] [towel_dataset_replay]: replay frame 186/300 action=[-1.489  0.    -2.143  0.    -1.315 -0.629  0.085  1.    -0.361 -0.002
+  0.146  1.718  1.397  0.603  0.018  0.   ]
+[INFO] [1793766040.944392476] [towel_dataset_replay]: replay frame 201/300 action=[-1.489  0.    -2.143  0.    -1.315 -0.629  0.085  1.    -0.282 -0.001
+  0.082  1.689  1.441  0.603 -0.04   0.   ]
+[INFO] [1793766042.011057854] [towel_dataset_replay]: replay frame 217/300 action=[-1.489  0.    -2.143  0.    -1.315 -0.629  0.085  1.    -0.222 -0.
+  0.078  1.689  1.441  0.603 -0.04   0.   ]
+[INFO] [1793766043.077553582] [towel_dataset_replay]: replay frame 233/300 action=[-1.489  0.    -2.143  0.    -1.315 -0.629  0.085  1.    -0.222 -0.001
+  0.165  1.689  1.441  0.603 -0.04   0.   ]
+[INFO] [1793766044.078689347] [towel_dataset_replay]: replay frame 248/300 action=[-1.489  0.    -2.143  0.    -1.315 -0.629  0.085  1.    -0.222 -0.
+  0.073  1.689  1.441  0.603 -0.04   0.   ]
+[INFO] [1793766045.077813233] [towel_dataset_replay]: replay frame 263/300 action=[-1.489  0.    -2.143  0.    -1.315 -0.629  0.085  1.    -0.301 -0.001
+  0.066  1.689  1.391  0.603 -0.04   0.   ]
+[INFO] [1793766046.144037783] [towel_dataset_replay]: replay frame 279/300 action=[-1.489  0.    -2.143  0.    -1.315 -0.629  0.085  1.    -0.241 -0.
+  0.028  1.689  1.384  0.603 -0.04   0.   ]
+[INFO] [1793766047.144311286] [towel_dataset_replay]: replay frame 294/300 action=[-1.489  0.    -2.143  0.    -1.315 -0.629  0.085  1.    -0.222 -0.
+  0.028  1.689  1.406  0.603 -0.04   0.   ]
+[INFO] [1793766047.609693420] [towel_dataset_replay]: Replay completed; holding position
+/home/shaunxiang/Documents/projects/02_hw_arm_flexible_manipulation/HW_arm/.venv-robot/lib/python3.12/site-packages/matplotlib/projections/__init__.py:63: UserWarning: Unable to import Axes3D. This may be due to multiple versions of Matplotlib being installed (e.g. as a system package and as a pip package). As a result, the 3D projection is not available.
+  warnings.warn("Unable to import Axes3D. This may be due to multiple versions of "
+2026-11-04 12:20:48,777 INFO Replay measurements saved: csv=/home/shaunxiang/Documents/projects/02_hw_arm_flexible_manipulation/HW_arm/outputs/replay_logs/episode_3_start_0_20261104_122027.csv plot=/home/shaunxiang/Documents/projects/02_hw_arm_flexible_manipulation/HW_arm/outputs/replay_logs/episode_3_start_0_20261104_122027.png

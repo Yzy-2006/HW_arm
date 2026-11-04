@@ -117,7 +117,7 @@ namespace Kernel
                 double Kgain[2]; // 卡尔曼增益
 
         public:
-            void FilterInit(double inputVar, double mQgain, double mRgain);     //初始化函数
+            void FilterInit(double inputVar, double mQgain, double mRgain, double dt);
             double FilteredResCal(double inputvar);      //滤波结果计算函数
             //以下是老版本滤波器计算函数，对比来看新版本效果更好
             double FilteredResCaloldVersion(double inputvar); //老版本滤波器计算函数

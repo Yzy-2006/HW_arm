@@ -390,6 +390,8 @@ class ArmCtlNode : public rclcpp::Node{
 
     private:
         //----------通讯变量----------
+        ctl_msgs_hw::msg::MidNodeCtlMsgSend::SharedPtr stream_sample_;
+        std::vector<double> stream_acceleration_;
 
         std::string ifname_;
         rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr set_joint_service_;

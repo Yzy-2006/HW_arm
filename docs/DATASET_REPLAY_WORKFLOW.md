@@ -114,8 +114,10 @@ ros2 topic hz /dexbotCtl/midMonitor_msg_send
 ros2 topic hz /gripper/fdb
 ```
 
-回放脚本在真机模式下需要这两个反馈流。关节反馈或夹爪反馈超过配置中的
-`state_timeout_s`（默认 0.25 秒）时，当前帧会暂停，不会推进到下一帧。
+回放脚本在真机模式下需要这两个反馈流，以及 `/towel/safety/state` 的新鲜 `ready` 状态。
+开始执行后，反馈超过 `state_timeout_s`（默认 0.25 秒）会锁存故障并中止回放，不会自动恢复。
+启动前还没有反馈时仅等待，不发送动作。新的故障处理、补偿关闭状态及验证边界见
+[控制安全说明](CONTROL_SAFETY.md)；短片段正常不代表可以恢复事故后的真机运行。
 
 ## 第一步：dry-run
 
@@ -132,6 +134,20 @@ make replay ARGS="--dataset /home/yanziyu/datasets/fold-towel-93 --episode 0 --s
 2. 日志中的 action 是 16 个数，左臂关节位于第 1 至第 7 位，右臂关节位于第 9 至第 15 位。
 3. 日志显示 `Replay completed; holding position`。
 4. 机器人没有因为这个 dry-run 产生运动。
+
+### RViz 安全预览
+
+可以在独立的 RViz 模型中预览同一段回放。该模式自动启动隔离的模型查看器，只发布
+`/model_viewer/joint_states`，不会向真机控制话题发布命令，也不能与 `--motion` 同时使用：
+
+```bash
+make replay ARGS="--dataset /home/yanziyu/datasets/fold-towel-93 --episode 0 --start-frame 0 --max-frames 90 --rviz"
+```
+
+建议先用较短的 `--max-frames` 检查左右臂方向、关节限位和动作顺序，再进行真机回放。
+脚本等待 RViz 和模型发布器就绪后开始回放。正常结束立即保存 CSV/PNG，窗口保持最后一帧，
+关闭窗口或按 `Ctrl+C` 退出。若 RViz 启动失败则报错停止，不会继续进行不可见的回放。
+关闭 RViz 或按 `Ctrl+C` 后，回放 CSV/PNG 仍会写入输出目录。
 
 dry-run 只验证数据读取、episode 选择、帧率调度和消息构造，不验证电机实际响应。
 
@@ -200,22 +216,26 @@ make replay ARGS="--dataset /home/yanziyu/datasets/fold-towel-93 --episode 0 --m
 
 ## 保存角度并生成对比图
 
-每次回放都会记录三组 14 维机械臂关节角：
+每次回放都会记录四组 14 维机械臂关节角：
 
 - `dataset_*`：Parquet 中的原始数据集动作，不经过 `slow_factor` 限幅。
 - `command_*`：经过当前反馈限幅、实际放入 `BridgeCtlMsg` 的关节目标。
+- `interpolated_*`：minimum-snap 插值后的目标；RViz 预览也显示这一组轨迹。
 - `feedback_*`：回放节点在发送该帧时最近收到的 `/dexbotCtl/midMonitor_msg_send` 关节反馈。
+
+`source_knot` 为 1 的行对应原始数据集锚点。PNG 中蓝色散点是原始轨迹，绿色曲线是
+minimum-snap 插值，橙色曲线是电机反馈（如果有反馈）。
 
 默认输出到：
 
 ```text
 outputs/replay_logs/
-├── episode_0_start_0_YYYYMMDD_HHMMSS.csv
-└── episode_0_start_0_YYYYMMDD_HHMMSS.png
+├── episode_0_start_0_YYYYMMDD_HHMMSS_microseconds.csv
+└── episode_0_start_0_YYYYMMDD_HHMMSS_microseconds.png
 ```
 
 CSV 还会保存左右夹爪反馈的原始角度字段 `feedback_left_gripper_deg` 和
-`feedback_right_gripper_deg`。PNG 包含 14 个子图，每个子图叠加数据集原始动作和电机实际
+`feedback_right_gripper_deg`。PNG 包含 14 个子图，每个子图叠加原始锚点、插值目标和电机实际
 反馈角度，单位为弧度。`command_*` 仍保留在 CSV 中，用于诊断限幅对原动作的影响。dry-run
 也会保存数据集动作；如果没有收到反馈，对应反馈列会是空值，图中会标注 `no feedback`。
 
@@ -231,8 +251,8 @@ make replay ARGS="--dataset /home/yanziyu/datasets/fold-towel-93 --episode 0 --m
 make replay ARGS="--dataset /home/yanziyu/datasets/fold-towel-93 --episode 0 --max-frames 90 --no-plot"
 ```
 
-注意：PNG 对比的是 Parquet 原始 `action` 和电机反馈，因此可以直接观察回放动作相对于原始
-示教动作的变形。CSV 中的 `command_*` 列则是实际发送给控制器的限幅后目标。
+PNG 对比 Parquet 原始 `action`、minimum-snap 插值和电机反馈，因此可以直接观察回放动作
+相对于原始示教动作的变形。CSV 中的 `command_*` 列则是实际发送给控制器的限幅后目标。
 
 ## 停止回放
 

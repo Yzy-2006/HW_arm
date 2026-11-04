@@ -647,6 +647,45 @@ void xr_telepercation_ctl::trigger_joint_return(){
     returnRequested = true;
 }
 
+bool xr_telepercation_ctl::reanchor_from_feedback(){
+    if(!desc_ret_valid) return false;
+    for(int i = 0; i < 6; ++i){
+        if(!std::isfinite(l_desc_ret_cache[i]) || !std::isfinite(r_desc_ret_cache[i])) return false;
+    }
+    // Refuse a handoff that would clamp the measured pose to a distant VR limit.
+    for(int i = 0; i < 3; ++i){
+        if(position_limit_enabled && (l_desc_ret_cache[i] < l_pos_min[i] ||
+            l_desc_ret_cache[i] > l_pos_max[i] || r_desc_ret_cache[i] < r_pos_min[i] ||
+            r_desc_ret_cache[i] > r_pos_max[i])) return false;
+        if(orientation_limit_enabled && (l_desc_ret_cache[i+3] < l_rpy_min[i] ||
+            l_desc_ret_cache[i+3] > l_rpy_max[i] || r_desc_ret_cache[i+3] < r_rpy_min[i] ||
+            r_desc_ret_cache[i+3] > r_rpy_max[i])) return false;
+    }
+    for(int i = 0; i < 3; ++i){
+        st_pos_l[i] = l_desc_ret_cache[i];
+        st_pos_r[i] = r_desc_ret_cache[i];
+        st_gesture_l[i] = l_desc_ret_cache[i+3];
+        st_gesture_r[i] = r_desc_ret_cache[i+3];
+    }
+    l_arm_end_delta.assign(3, 0.0);
+    r_arm_end_delta.assign(3, 0.0);
+    l_arm_end_pos.assign(3, 0.0);
+    r_arm_end_pos.assign(3, 0.0);
+    l_arm_quat_accum = {1.0, 0.0, 0.0, 0.0};
+    r_arm_quat_accum = {1.0, 0.0, 0.0, 0.0};
+    last_arm_zyx_valid = false;
+    returnRequested = returning = preset_holding = false;
+    ifFirstOutp = false;
+    zero_outputTimes = total_zeroTimes;
+    mdataSend.ctl_transMod = 4;
+    mdataSend.runinMod = 1;
+    mdataSend.ifUseTemp = 0;
+    mdataSend.TrajTime[0].assign(LARMDOF, 0.20);
+    mdataSend.TrajTime[1].assign(RARMDOF, 0.20);
+    handoff_pending = true;
+    return true;
+}
+
 void xr_telepercation_ctl::trigger_preset_pose(){
     if(!preset_pose_valid){
         std::cerr << "[遥操作] 右 B 请求被忽略：预设姿态配置无效" << std::endl;
@@ -730,6 +769,13 @@ void xr_telepercation_ctl::build_joint_return_cmd(){
 
 
 dataSendWrap xr_telepercation_ctl::trans_and_outp(){
+    if(handoff_pending){
+        handoff_pending = false;
+        mdataSend.ifUseRet = 1;
+        use_feedback_once_after_return = true;
+        trans_and_outp_core();
+        return mdataSend;
+    }
     if(ifFirstOutp){
         std::cout << "准备开始遥操作" << std::endl;
         ifFirstOutp = false;

@@ -1,0 +1,13 @@
+{
+  "verified_at": "2026-11-04T13:55:27.053402+08:00",
+  "original_manifest_entries_verified": 33,
+  "native_filter_rebuilt_from_packaged_source": true,
+  "native_filter_csv_byte_identical_to_saved_result": true,
+  "portable_open_loop_summary_matches_saved_cases": true,
+  "portable_source_hashes_match_original_audit": true,
+  "hardware_or_ros_nodes_started": false,
+  "excluded_from_archive": [
+    "reproduction_output/",
+    "original compiled filter executables and .so"
+  ]
+}

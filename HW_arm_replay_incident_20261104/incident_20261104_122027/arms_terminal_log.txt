@@ -1,0 +1,181 @@
+1580      1000
+  right_shoulder_yaw_joint              2000      3050
+  right_elbow_joint                     1580      1000
+  right_wrist_roll_joint                 580       300
+  right_wrist_pitch_joint                580       300
+  right_wrist_yaw_joint                  580       300
+========================================
+超高刚度PD参数配置成功
+5. 拖拽过程PD参数配置
+===============PD 配置加载完毕===============
+  刚度等级: tag
+========================================
+  机械臂 PD 增益配置  [tag]
+========================================
+--- 左臂 (Left Arm) ---
+  关节名称                            Kp        Kd
+  ----------------------------------------------------
+  left_shoulder_pitch_joint                0        12
+  left_shoulder_roll_joint                 0        12
+  left_shoulder_yaw_joint                  0        12
+  left_elbow_joint                         0        12
+  left_wrist_roll_joint                    0        12
+  left_wrist_pitch_joint                   0        12
+  left_wrist_yaw_joint                     0        12
+--- 右臂 (Right Arm) ---
+  关节名称                            Kp        Kd
+  ----------------------------------------------------
+  right_shoulder_pitch_joint               0        12
+  right_shoulder_roll_joint                0        12
+  right_shoulder_yaw_joint                 0        12
+  right_elbow_joint                        0        12
+  right_wrist_roll_joint                   0        12
+  right_wrist_pitch_joint                  0        12
+  right_wrist_yaw_joint                    0        12
+========================================
+拖拽过程PD参数配置成功
+PD 配置已同步到全局控制变量 (low/mid/high/superhigh/tag)
+ ===== 初始化关节连杆结构配置 ===== 
+===============关节连杆结构配置加载完毕===============
+========================================
+  关节连杆结构配置
+========================================
+--- 左臂 (Left Arm)  joint_num = 7 ---
+  frame_name      rotation_axis   
+  --------------------------------
+  arm_l_link_1    y               
+  arm_l_link_2    x               
+  arm_l_link_3    z               
+  arm_l_link_4    y               
+  arm_l_link_5    z               
+  arm_l_link_6    y               
+  arm_l_link_7    x               
+--- 右臂 (Right Arm)  joint_num = 7 ---
+  frame_name      rotation_axis   
+  --------------------------------
+  arm_r_link_1    y               
+  arm_r_link_2    x               
+  arm_r_link_3    z               
+  arm_r_link_4    y               
+  arm_r_link_5    z               
+  arm_r_link_6    y               
+  arm_r_link_7    x               
+========================================
+关节连杆结构配置已同步到全局变量 robotJointLinkConfig
+ ===== 初始化机器人求解器配置 ===== 
+===============求解器控制配置加载完毕===============
+========================================
+  求解器控制配置摘要
+========================================
+  --- 优化器控制参数 ---
+  优化权重 (optiWeight): [50, 1, 0.002, 0.01, 2e-05]
+  最大迭代次数 (templateTimes):  100
+  误差容差 (errorTolerance):     1e-05
+  关节目标跳变保护: 开启, 步长(rad): 0.025 ... (14 joints)
+  --- 信息打印控制参数 ---
+  打印优化日志 (ifPrintLevel):       0
+  打印计算时间 (ifPrintOptiTime):   否
+  打印关节配置 (ifDispJntInfo):     否
+  Meshcat可视化 (ifUse_visulization): 否
+  打印优化器信息 (ifDispMessages):  否
+========================================
+求解器控制参数已同步到全局变量 optimizerControParam / msgPringControlParam
+ ===== 初始化机器人重力补偿配置 ===== 
+===============重力补偿配置加载完毕===============
+========================================
+  重力补偿配置摘要
+========================================
+  重力补偿   : 开启
+  输入滤波器 : 开启
+  输出滤波器 : 开启
+  数据输入模式 : 1
+  摩擦补偿     : 开启
+  重力补偿零输出轮数 : 10
+  重力补偿平滑输出轮数 : 75
+  关节控制初始化稳定轮数 : 100
+  GravCompInte    [14] : 2.4 2.4 2.2 2.4 2.2 2.2 2.2 2.4 2.4 2.2 2.4 2.2 2.2 2.2
+  CoriousCompInte [14] : 2.0 2.0 2.2 2.2 2.2 2.2 2.2 2.0 2.0 2.2 2.2 2.2 2.2 2.2
+  InteriaCompInte [14] : 2.0 2.0 2.2 2.2 2.2 2.2 2.2 2.0 2.0 2.2 2.2 2.2 2.2 2.2
+  加速度卡尔曼滤波器 [14] :
+    Q_gain: 1 1 1 1 1 1 1 1 1 1 1 1 1 1
+    R_gain: 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+  位置输入滤波器 (左臂) : [10000/20] [10000/20] [10000/20] [10000/20] [10000/20] [10000/20] [10000/20]
+  力矩输出滤波器 (左臂) : [50/20] [50/20] [50/20] [50/20] [50/20] [50/20] [50/20]
+========================================
+重力补偿配置已同步到全局变量 robotGravCompInte
+ ===== 初始化机器人结构模型 ===== 
+===============机器人结构配置加载完毕===============
+  base_name: arm_base_link
+  左臂关节数: 7  右臂关节数: 7
+  左臂关节限制 (lower, upper, vel, acc, tor):
+    J1: [  -3.14,   +1.57, 13.82, 13.82,  130.0]
+    J2: [  +0.00,   +1.57, 11.62, 11.62,   70.0]
+    J3: [  -2.36,   +2.36, 11.62, 11.62,   70.0]
+    J4: [  -2.62,   +0.00, 11.62, 11.62,   70.0]
+    J5: [  -2.36,   +2.36, 23.04, 23.04,   12.0]
+    J6: [  -1.57,   +1.57, 23.04, 23.04,   12.0]
+    J7: [  -1.57,   +1.57, 23.04, 23.04,   12.0]
+  右臂关节限制 (lower, upper, vel, acc, tor):
+    J1: [  -1.57,   +3.14, 13.82, 13.82,  130.0]
+    J2: [  -1.57,   +0.00, 11.62, 11.62,   70.0]
+    J3: [  -2.36,   +2.36, 11.62, 11.62,   70.0]
+    J4: [  +0.00,   +2.62, 11.62, 11.62,   70.0]
+    J5: [  -2.36,   +2.36, 23.04, 23.04,   12.0]
+    J6: [  -1.57,   +1.57, 23.04, 23.04,   12.0]
+    J7: [  -1.57,   +1.57, 23.04, 23.04,   12.0]
+  左臂 Kt:
+    [1.0] [1.0] [1.0] [1.0] [1.0] [1.0] [1.0] 
+  右臂 Kt:
+    [1.0] [1.0] [1.0] [1.0] [1.0] [1.0] [1.0] 
+===============机器人模型构建完毕===============
+  URDF 文件: /home/shaunxiang/Documents/projects/02_hw_arm_flexible_manipulation/HW_arm/ros2_ws/install/dual_arm_hw/share/dual_arm_hw/urdf/dual_arm.urdf
+  基座名称: arm_base_link
+  基座位姿: [0, 0, 0, 0, 0, 0]
+  关节总数: 16
+  配置维度 (nq): 21  速度维度 (nv): 20
+===============机器人模型结构配置已同步到全局变量===============
+  robotModelStructConfig: base_name=arm_base_link, lArm_JntNum=7, rArm_JntNum=7
+  robotProcessedModel: njoints=16, nq=21, nv=20
+[INFO] [1793765962.055577988] [dual_arm_control_node]: URDF directory found: /home/shaunxiang/Documents/projects/02_hw_arm_flexible_manipulation/HW_arm/ros2_ws/install/dual_arm_hw/share/dual_arm_hw/urdf/dual_arm.urdf
+[INFO] [1793765962.061414170] [robot_state_publisher]: Robot initialized
+开始执行中层节点封装程序
+全局变量初始化完毕 (rosloop_var_init)
+轨迹执行频率为：300 Hz。
+lr pos in 0 = 0.309186 || -0.309186
+lr pos in 1 = 0.0871668 || -0.0627527
+lr pos in 2 = -0.389296 || 0.0616083
+lr pos in 3 = -1.76032 || 1.80266
+lr pos in 4 = -1.53334 || 1.40173
+lr pos in 5 = -0.87377 || 0.630388
+lr pos in 6 = -0.0314722 || 0.0387201
+[ik_solver] WARNING: Cannot locate workspace libcasadi for preload: package 'openrobots_libs_hw' not found
+<frozen importlib._bootstrap>:488: RuntimeWarning: to-Python converter for pinocchio::python::DeprecatedBool already registered; second conversion method ignored.
+PD参数已从YAML配置文件同步到PDInte
+初始化完成
+
+========== 浮动基座 Pinocchio 模型摘要 ==========
+模型名称: dual_arm
+总关节数: 16
+配置空间维度 (nq): 21
+速度空间维度 (nv): 20
+外部基座维度 (RPY): q=6  v=6
+手臂关节数: 14
+手臂偏移: q=7  v 偏移: 6
+基座位姿 [x,y,z,roll,pitch,yaw]: 0 0 0 0 0 0 
+基座速度 [vx,vy,vz, dr/dt, dp/dt, dy/dt]: 0 0 0 0 0 0 
+==================================================
+
+全部初始化流程完成，开始运行代码
+
+******************************************************************************
+This program contains Ipopt, a library for large-scale nonlinear optimization.
+ Ipopt is released as open source code under the Eclipse Public License (EPL).
+         For more information visit http://projects.coin-or.org/Ipopt
+******************************************************************************
+
+[IK安全] 检测到关节目标跳变，已启用逐关节步长限幅；后续周期将继续追踪目标
+[ModeSwitch] 切换到笛卡尔空间控制模式 (outpMod=4)，前20轮保持输出切换前关节角度
+[ModeSwitch] 切换到笛卡尔空间控制模式 (outpMod=4)，前20轮保持输出切换前关节角度
+^C[INFO] [1793766185.872480757] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[INFO] [1793766185.872785862] [dual_arm_control_node]: 程序已安全退出
+

@@ -1,0 +1,200 @@
+[
+  {
+    "source": "/home/shaunxiang/Documents/projects/02_hw_arm_flexible_manipulation/HW_arm/outputs/arm_monitor/monitor.2.csv",
+    "saved": "evidence/outputs/arm_monitor/monitor.2.csv",
+    "bytes": 32436268,
+    "sha256": "97c11ebfdf7ad5b91b92348165a304bb6065e225ce80c7badf2bbed988864166"
+  },
+  {
+    "source": "/home/shaunxiang/Documents/projects/02_hw_arm_flexible_manipulation/HW_arm/outputs/arm_monitor/monitor.3.csv",
+    "saved": "evidence/outputs/arm_monitor/monitor.3.csv",
+    "bytes": 67109806,
+    "sha256": "487b1ef2447a96c6b98013f7ba0c7b822d96fa84c0fe77a61f191eb97aa56168"
+  },
+  {
+    "source": "/home/shaunxiang/Documents/projects/02_hw_arm_flexible_manipulation/HW_arm/outputs/arm_monitor/monitor.csv",
+    "saved": "evidence/outputs/arm_monitor/monitor.csv",
+    "bytes": 7850662,
+    "sha256": "5a8a8deed19ede71e41264ea90891dc04d2b33d45b098acefc818ccd7a07808c"
+  },
+  {
+    "source": "/home/shaunxiang/Documents/projects/02_hw_arm_flexible_manipulation/HW_arm/outputs/arm_monitor/monitor.1.csv",
+    "saved": "evidence/outputs/arm_monitor/monitor.1.csv",
+    "bytes": 4152839,
+    "sha256": "825d0bbac7922d8d7f1ab1a0af56ad4ebef9018821503b42e8d1f6f2fe4d819c"
+  },
+  {
+    "source": "/home/shaunxiang/Documents/projects/02_hw_arm_flexible_manipulation/HW_arm/outputs/replay_logs/episode_3_start_0_20261104_120537.csv",
+    "saved": "evidence/outputs/replay_logs/episode_3_start_0_20261104_120537.csv",
+    "bytes": 538198,
+    "sha256": "76a060dcb8f0fab4efde1c1f0e31f96d5a3b1b689110771694249f4bf85b9608"
+  },
+  {
+    "source": "/home/shaunxiang/Documents/projects/02_hw_arm_flexible_manipulation/HW_arm/outputs/replay_logs/episode_3_start_0_20261104_122027.csv",
+    "saved": "evidence/outputs/replay_logs/episode_3_start_0_20261104_122027.csv",
+    "bytes": 265456,
+    "sha256": "de00c029e231f36e08147068e7c61b0d9f1056cd7e0d1e5da5de374924c5106e"
+  },
+  {
+    "source": "/home/shaunxiang/Documents/projects/02_hw_arm_flexible_manipulation/HW_arm/outputs/replay_logs/episode_3_start_0_20261104_121948.csv",
+    "saved": "evidence/outputs/replay_logs/episode_3_start_0_20261104_121948.csv",
+    "bytes": 27740,
+    "sha256": "0db9dab1f0162cbab8cd5e141f576b4f5c45d22f20792e3df0ff1f056e6400ac"
+  },
+  {
+    "source": "/home/shaunxiang/Documents/projects/02_hw_arm_flexible_manipulation/HW_arm/outputs/replay_logs/episode_3_start_0_20261104_120154.csv",
+    "saved": "evidence/outputs/replay_logs/episode_3_start_0_20261104_120154.csv",
+    "bytes": 6969432,
+    "sha256": "d15449209c87d7a952a3120c60785175c0cc146e9ceadb5549fc788ab8dc3dc9"
+  },
+  {
+    "source": "/home/shaunxiang/Documents/projects/02_hw_arm_flexible_manipulation/HW_arm/outputs/replay_logs/episode_3_start_0_20261104_121845.csv",
+    "saved": "evidence/outputs/replay_logs/episode_3_start_0_20261104_121845.csv",
+    "bytes": 20174,
+    "sha256": "d034d07837e31e17ce9c053176b71a583fa883483886509ca89bf924a4c86f62"
+  },
+  {
+    "source": "/home/shaunxiang/Documents/projects/02_hw_arm_flexible_manipulation/HW_arm/config/replay_20261031.yaml",
+    "saved": "evidence/config/replay_20261031.yaml",
+    "bytes": 723,
+    "sha256": "33dad923995348fc340bbe373959324ce26429cc93780b20dc9e89b2fedf1bb8"
+  },
+  {
+    "source": "/home/shaunxiang/Documents/projects/02_hw_arm_flexible_manipulation/HW_arm/config/pi05_deployment.yaml",
+    "saved": "evidence/config/pi05_deployment.yaml",
+    "bytes": 1883,
+    "sha256": "448dc3406de55b8458628119886ba21fc7bf6c2ea4f3dbedd1efe8e2aeebf0c5"
+  },
+  {
+    "source": "/home/shaunxiang/Documents/projects/02_hw_arm_flexible_manipulation/HW_arm/deployment/replay_dataset.py",
+    "saved": "evidence/deployment/replay_dataset.py",
+    "bytes": 25638,
+    "sha256": "8f1564f9314e3252ce2732b07f5899d1373f2a2fabba5fe2380852ac5d95aaac"
+  },
+  {
+    "source": "/home/shaunxiang/Documents/projects/02_hw_arm_flexible_manipulation/HW_arm/deployment/pi05_bridge.py",
+    "saved": "evidence/deployment/pi05_bridge.py",
+    "bytes": 29305,
+    "sha256": "9c2dc9cccc5a5a783b85417a09a692a669dcd61dee018533550075a3fa2c2472"
+  },
+  {
+    "source": "/home/shaunxiang/Documents/projects/02_hw_arm_flexible_manipulation/HW_arm/deployment/minimum_snap.py",
+    "saved": "evidence/deployment/minimum_snap.py",
+    "bytes": 4871,
+    "sha256": "8c2acd525ac42398d08ecc4f91b3dc78fb2f0ca328e119162734f3d1f30d0966"
+  },
+  {
+    "source": "/home/shaunxiang/Documents/projects/02_hw_arm_flexible_manipulation/HW_arm/ros2_ws/src/ctl_msgs_hw/config/controllerConfig.yaml",
+    "saved": "evidence/ros2_ws/src/ctl_msgs_hw/config/controllerConfig.yaml",
+    "bytes": 10151,
+    "sha256": "29936f09763f0f30eccb1a1e6866d10c48651dcc0cf7ece90c849d37408a7e84"
+  },
+  {
+    "source": "/home/shaunxiang/Documents/projects/02_hw_arm_flexible_manipulation/HW_arm/ros2_ws/src/ctl_msgs_hw/config/initialPD.yaml",
+    "saved": "evidence/ros2_ws/src/ctl_msgs_hw/config/initialPD.yaml",
+    "bytes": 7088,
+    "sha256": "a35d54ba26554cec4f95cbb4bf62ec71c226d53317b90629c681c8f250486a3d"
+  },
+  {
+    "source": "/home/shaunxiang/Documents/projects/02_hw_arm_flexible_manipulation/HW_arm/ros2_ws/src/dual_arm_hw/urdf/dual_arm.urdf",
+    "saved": "evidence/ros2_ws/src/dual_arm_hw/urdf/dual_arm.urdf",
+    "bytes": 19089,
+    "sha256": "d4eee5a552b085ac252a6b7d6ad347edc9fbe8bbca45f1bebdb9be36667f8ef4"
+  },
+  {
+    "source": "/home/shaunxiang/Documents/projects/02_hw_arm_flexible_manipulation/HW_arm/ros2_ws/src/servo_control_hw/src/servo_control/transmit.cpp",
+    "saved": "evidence/ros2_ws/src/servo_control_hw/src/servo_control/transmit.cpp",
+    "bytes": 44819,
+    "sha256": "ab2ac38d386884946ade48e87e3ec30260585decbdcdd52f16b4c9b068d36e44"
+  },
+  {
+    "source": "/home/shaunxiang/Documents/projects/02_hw_arm_flexible_manipulation/HW_arm/ros2_ws/src/servo_control_hw/src/ros_controller/rosLoop.cpp",
+    "saved": "evidence/ros2_ws/src/servo_control_hw/src/ros_controller/rosLoop.cpp",
+    "bytes": 49333,
+    "sha256": "680ea208752346bfce0ce9605fbf3119cdf398229c99d02c2a53c28bb5e94abd"
+  },
+  {
+    "source": "/home/shaunxiang/Documents/projects/02_hw_arm_flexible_manipulation/HW_arm/ros2_ws/src/robot_control_hw/include/controller/jointStreamGuard.h",
+    "saved": "evidence/ros2_ws/src/robot_control_hw/include/controller/jointStreamGuard.h",
+    "bytes": 1370,
+    "sha256": "795d427238ee3303f578e6fa513b0a40080bbef72351361eb360dfac7be77592"
+  },
+  {
+    "source": "/home/shaunxiang/Documents/projects/02_hw_arm_flexible_manipulation/HW_arm/ros2_ws/src/robot_control_hw/src/controller/ctlTransmit.cpp",
+    "saved": "evidence/ros2_ws/src/robot_control_hw/src/controller/ctlTransmit.cpp",
+    "bytes": 10577,
+    "sha256": "a13b49e445133ed0e1a8b2163bc7b24f7ab963b10f67c4febfafe888bb052b77"
+  },
+  {
+    "source": "/home/shaunxiang/Documents/projects/02_hw_arm_flexible_manipulation/HW_arm/ros2_ws/install/ctl_msgs_hw/share/ctl_msgs_hw/config/controllerConfig.yaml",
+    "saved": "evidence/ros2_ws/install/ctl_msgs_hw/share/ctl_msgs_hw/config/controllerConfig.yaml",
+    "bytes": 10151,
+    "sha256": "29936f09763f0f30eccb1a1e6866d10c48651dcc0cf7ece90c849d37408a7e84"
+  },
+  {
+    "source": "/home/shaunxiang/Documents/projects/02_hw_arm_flexible_manipulation/HW_arm/ros2_ws/install/ctl_msgs_hw/share/ctl_msgs_hw/config/initialPD.yaml",
+    "saved": "evidence/ros2_ws/install/ctl_msgs_hw/share/ctl_msgs_hw/config/initialPD.yaml",
+    "bytes": 7088,
+    "sha256": "a35d54ba26554cec4f95cbb4bf62ec71c226d53317b90629c681c8f250486a3d"
+  },
+  {
+    "source": "/home/shaunxiang/.codex/attachments/32612268-e12b-4d61-a1cf-4fe5fae3fd67/已粘贴的文本.txt",
+    "saved": "arms_terminal_log.txt",
+    "bytes": 8759,
+    "sha256": "fdf21da7a5e6a95ea45cafc75cbee3924fc7ec5e07cd3973450fd74eab93d4b0"
+  },
+  {
+    "source": "/home/shaunxiang/Documents/projects/02_hw_arm_flexible_manipulation/HW_arm/ros2_ws/src/dual_arm_control_hw/src/controller/ArmInterface.cpp",
+    "saved": "evidence/ros2_ws/src/dual_arm_control_hw/src/controller/ArmInterface.cpp",
+    "bytes": 36796,
+    "sha256": "9bc4796fd1b6110f367cf39b712cd299a05b3a809c8daac9d5b44a9ccd2eaed0"
+  },
+  {
+    "source": "/home/shaunxiang/Documents/projects/02_hw_arm_flexible_manipulation/HW_arm/ros2_ws/src/dual_arm_control_hw/src/controller/ArmController.cpp",
+    "saved": "evidence/ros2_ws/src/dual_arm_control_hw/src/controller/ArmController.cpp",
+    "bytes": 64095,
+    "sha256": "656ce6e453720f0ea9946af0f6313d80994e4a49bdbf2e1587b07f9fa05093ba"
+  },
+  {
+    "source": "/home/shaunxiang/Documents/projects/02_hw_arm_flexible_manipulation/backups/HW_arm-main/ros2_ws/src/ctl_msgs_hw/config/controllerConfig.yaml",
+    "saved": "historical_20261031/ros2_ws/src/ctl_msgs_hw/config/controllerConfig.yaml",
+    "bytes": 8542,
+    "sha256": "dbd642d629102d8cf9fac2a598be9d2a4f91ec66308bb61484f4fdb2b7fb3eee"
+  },
+  {
+    "source": "/home/shaunxiang/Documents/projects/02_hw_arm_flexible_manipulation/backups/HW_arm-main/ros2_ws/install/ctl_msgs_hw/share/ctl_msgs_hw/config/controllerConfig.yaml",
+    "saved": "historical_20261031/ros2_ws/install/ctl_msgs_hw/share/ctl_msgs_hw/config/controllerConfig.yaml",
+    "bytes": 8542,
+    "sha256": "dbd642d629102d8cf9fac2a598be9d2a4f91ec66308bb61484f4fdb2b7fb3eee"
+  },
+  {
+    "source": "/home/shaunxiang/.ros/log/servo_node_16361_1793765950530.log",
+    "saved": "ros_logs/servo_node_16361_1793765950530.log",
+    "bytes": 1445314,
+    "sha256": "68d7f6da91f7108c30430af0a62d2288b4e1e58f6d7035e1b8b6a76758f8bac9"
+  },
+  {
+    "source": "/home/shaunxiang/.ros/log/dual_arm_control_node_16408_1793765961966.log",
+    "saved": "ros_logs/dual_arm_control_node_16408_1793765961966.log",
+    "bytes": 361,
+    "sha256": "720cee0821a906de8e4297e3f0a9f989b402aceb1dcfc34dc6867dca2b80e6e9"
+  },
+  {
+    "source": "/home/shaunxiang/.ros/log/robot_control_node_16454_1793765967600.log",
+    "saved": "ros_logs/robot_control_node_16454_1793765967600.log",
+    "bytes": 421,
+    "sha256": "de9c586eb65fb9b629012f27d3d013a3ae2e6eb96f5133293b61b1147f3dc11f"
+  },
+  {
+    "source": "/home/shaunxiang/.ros/log/robot_control_node_16561_1793766001395.log",
+    "saved": "ros_logs/robot_control_node_16561_1793766001395.log",
+    "bytes": 2059,
+    "sha256": "5c77dcdbaa8402d7d6f68d9737aaf857903e1d60c37fa2970738b38a2a56e149"
+  },
+  {
+    "source": "/home/shaunxiang/.ros/log/python3_16587_1793766027244.log",
+    "saved": "ros_logs/python3_16587_1793766027244.log",
+    "bytes": 4089,
+    "sha256": "77f70a8d1c88cee8561e5e1b26ce18e3f196bf9d9e2850f16fac6198b96c2bad"
+  }
+]

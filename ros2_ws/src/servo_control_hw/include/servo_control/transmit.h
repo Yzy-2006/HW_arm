@@ -19,6 +19,10 @@
 #include "sys/time.h"
 #include <pthread.h>
 #include <utility>
+#include "servo_control/armSafetyGuard.h"
+
+extern ArmSafetyGuard arm_safety;
+double arm_safety_now();
 
 #include "ros_controller/rosLoopMsgDefine.h"
 

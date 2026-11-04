@@ -163,7 +163,7 @@ getcap ros2_ws/install/servo_control_hw/lib/servo_control_hw/servo_node
 | 右夹爪编码器位置范围 | `[-34.70927483203165, 16.961438085103716]` deg |
 | 两侧 `zero_pos_deg` | `0.0` |
 | 两侧开闭运动时间 | `0.6 s`，目标以 `grippers.yaml` 的实际标定为准 |
-| 工具轴自转锁定 | `vrOrientationControl.lock_tool_twist: true` |
+| 工具轴自转锁定 | `vrOrientationControl.lock_tool_twist: false`，允许双臂工具轴自转 |
 | VR 末端位置/姿态限幅开关 | `position_enabled: false`、`orientation_enabled: false`，对应末端限幅不生效 |
 | VR 基准与方向 | `head`，`position_axis_sign: [1,1,1]`，水平校正角 `0°` |
 | 快速档平移/旋转倍率 | `fast_position_scale: 1.2`、`fast_orientation_scale: 1.5` |

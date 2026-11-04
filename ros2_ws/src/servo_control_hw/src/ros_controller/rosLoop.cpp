@@ -68,6 +68,73 @@ ServoNode::ServoNode() : Node ("servo_node"),
     LARMDOF = static_cast<int>(ctl_inteMsg_config.LARMDOF);
     RARMDOF = static_cast<int>(ctl_inteMsg_config.RARMDOF);
     SERVODOF = LARMDOF + RARMDOF;
+    const auto safety = YAML::LoadFile(controllerConfig_yamlPath)["armSafety"];
+    if (!safety || SERVODOF != 14) throw std::runtime_error("armSafety configuration required for 14 joints");
+    auto read_limit = [&](const char* key, double& value) {
+        value = safety[key].as<double>();
+        if (!std::isfinite(value) || value <= 0) throw std::runtime_error(std::string("Invalid armSafety.") + key);
+    };
+    read_limit("feedback_timeout_s", arm_safety.limits.feedback_timeout);
+    read_limit("command_timeout_s", arm_safety.limits.command_timeout);
+    read_limit("max_speed_rad_s", arm_safety.limits.max_speed);
+    read_limit("max_feedforward", arm_safety.limits.max_feedforward);
+    read_limit("max_feedforward_rate", arm_safety.limits.max_feedforward_rate);
+    read_limit("tracking_error_rad", arm_safety.limits.tracking_error);
+    read_limit("tracking_duration_s", arm_safety.limits.tracking_duration);
+    read_limit("fault_damping", arm_safety.limits.damping);
+    read_limit("feedback_position_tolerance_rad", arm_safety.limits.feedback_position_tolerance);
+    if (arm_safety.limits.damping > 50) throw std::runtime_error("Fault damping exceeds protocol range");
+    if (safety["lower"].size() != 14 || safety["upper"].size() != 14)
+        throw std::runtime_error("armSafety position limits must contain 14 values");
+    for (size_t i = 0; i < 14; ++i) {
+        const double lo = safety["lower"][i].as<double>(), hi = safety["upper"][i].as<double>();
+        if (!std::isfinite(lo) || !std::isfinite(hi) || lo >= hi)
+            throw std::runtime_error("Invalid armSafety position limits");
+        arm_safety.limits.lower[i] = lo;
+        arm_safety.limits.upper[i] = hi;
+    }
+    safety_pub_ = create_publisher<std_msgs::msg::String>("/towel/safety/state", rclcpp::QoS(1).transient_local());
+    safety_stop_ = create_subscription<std_msgs::msg::String>("/towel/safety/stop", 1,
+        [](std_msgs::msg::String::ConstSharedPtr msg) { arm_safety.trip("upstream: " + msg->data); });
+    safety_timer_ = create_wall_timer(std::chrono::milliseconds(50), [this] {
+        std_msgs::msg::String msg;
+        msg.data = arm_safety.fault.empty()
+            ? (arm_safety.ready(arm_safety_now()) ? "ready" : "waiting") : "fault:" + arm_safety.fault;
+        safety_pub_->publish(msg);
+        if (!arm_safety.fault.empty()) RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 1000,
+            "Latched arm fault: %s; damping only, no load holding guarantee", arm_safety.fault.c_str());
+    });
+    safety_reset_ = create_service<std_srvs::srv::Trigger>("/towel/safety/reset",
+        [this](std_srvs::srv::Trigger::Request::SharedPtr, std_srvs::srv::Trigger::Response::SharedPtr response) {
+            response->success = arm_safety.reset(arm_safety_now());
+            response->message = response->success ? "Fault reset; restart upstream controllers from feedback"
+                : "Stop upstream controllers for 1s; require fresh stationary feedback within limits";
+            if (response->success) {
+                ifRuninerInited = false;
+                ifRunin = false;
+                trajectory_sample_ = false;
+                ifFirstRunin = true;
+                posOutpFtr = runinOutpFtr{};
+                velOutpFtr = runinOutpFtr{};
+                TorOutpFtr = runinOutpFtr{};
+                ifGetGripperMsg = false;
+                l_gripper_pos_received = r_gripper_pos_received = false;
+                l_gripper_posTraj.clear();
+                r_gripper_posTraj.clear();
+                l_gripper_torTraj.assign(1, 0.0);
+                r_gripper_torTraj.assign(1, 0.0);
+                l_gripper_tor_get = r_gripper_tor_get = 0.0;
+                l_gripper_tor = r_gripper_tor = 0.0;
+                gripper_LastTorRec_l = gripper_LastTorRec_r = 0.0;
+                gripper_otputTimes = 0;
+                setLeftGripperCmd(gripperCmd{});
+                setRightGripperCmd(gripperCmd{});
+                for (auto& c : servo_desMsg_orig) {
+                    c.transMod = 2; c.joint_pos = c.joint_spd = c.joint_tor = c.joint_Kp = 0;
+                    c.joint_Kd = arm_safety.limits.damping;
+                }
+            }
+        });
     ZERO_POS_THRESHOLD = ctl_inteMsg_config.ZeroPos_Threshold;
     netCard_name = ctl_inteMsg_config.NetCardName;
 
@@ -85,7 +152,7 @@ ServoNode::ServoNode() : Node ("servo_node"),
     //上位机接收器初始化
     CtlData = this->create_subscription<ctl_msgs_hw::msg::CtlInformation>(
         "/dexbotCtl/ctl_data_pub",
-        200,
+        1,
         std::bind(&ServoNode::message_callback, this, std::placeholders::_1)
     );
 
@@ -165,9 +232,6 @@ void ServoNode::rosLoopVar_Init(){
         servo_retMsg_unpacked[i].joint_temperature = 0.0;
     }
 
-    ftrInitOutpTimes = 4000;
-    ftrInitOutpCount = 0;
-    ifFirstFtrInitOutp = true;
 
     //-----过程控制变量初始化-----
 
@@ -248,9 +312,6 @@ void ServoNode::rosLoopVar_Init(){
     r_gripper_limit.Init(ctl_inteMsg_config.GripperRight_Tor_Thr, ctl_inteMsg_config.GripperRight_Temp_Thr,
                          ctl_inteMsg_config.Gripper_TempRecover_Hys);
 
-    //滤波器初始化触发器变量初始化流程
-    ifInitFilter = true;
-    ifTriggered = false;
 
 }
 
@@ -671,7 +732,20 @@ void ServoNode::run(){
         }
 
         //获取本轮插补值
-        if(ifRuninerInited){    // --- 若进行了插补的操作 ---
+        if (trajectory_sample_) {
+            // Preserve the sampled trajectory's q/v pair, including on startup.
+            for (int i = 0; i < 7; ++i) {
+                auto& l = servo_desMsg_orig[i];
+                auto& r = servo_desMsg_orig[i + 7];
+                l.transMod = lArm_transMod[i]; r.transMod = rArm_transMod[i];
+                l.joint_pos = lArm_pos_receive[i]; r.joint_pos = rArm_pos_receive[i];
+                l.joint_spd = lArm_vel_receive[i]; r.joint_spd = rArm_vel_receive[i];
+                l.joint_tor = lArm_torComp_grav_receive[i] + lArm_torComp_interia_receive[i] + lArm_torComp_feedforward_receive[i];
+                r.joint_tor = rArm_torComp_grav_receive[i] + rArm_torComp_interia_receive[i] + rArm_torComp_feedforward_receive[i];
+                l.joint_Kp = lArm_Kp_receive[i]; r.joint_Kp = rArm_Kp_receive[i];
+                l.joint_Kd = lArm_Kd_receive[i]; r.joint_Kd = rArm_Kd_receive[i];
+            }
+        } else if(ifRuninerInited){    // --- 若进行了插补的操作 ---
             //-----获取初始轨迹-----
             outpTraj_process();
 
@@ -725,56 +799,6 @@ void ServoNode::run(){
 
             //摩擦补偿 -- 暂时不做
 
-            //----------初始段输出处理代码----------
-
-            if(ftrInitOutpCount < ftrInitOutpTimes){
-                if(ifFirstFtrInitOutp){
-                    std::cout << " ** 滤波器初始化中 ** " << std::endl;
-                    ifFirstFtrInitOutp = false;
-                }
-                for(int i = 0; i < LARMDOF; i++){
-                    servo_desMsg_orig[i].joint_pos = lArm_zeroPos[i];
-                    servo_desMsg_orig[i].joint_spd = 0.0;
-                    servo_desMsg_orig[i].joint_tor = 0.0;
-                }
-                for(int i = 0; i < RARMDOF; i++){
-                    servo_desMsg_orig[i + LARMDOF].joint_pos = rArm_zeroPos[i];
-                    servo_desMsg_orig[i + LARMDOF].joint_spd = 0.0;
-                    servo_desMsg_orig[i + LARMDOF].joint_tor = 0.0;
-                }
-            }else if(ftrInitOutpCount == ftrInitOutpTimes || ftrInitOutpTimes > ftrInitOutpTimes){
-                std::cout << " ** 滤波器初始化完毕 ** " << std::endl;
-            }
-
-            if(ftrInitOutpCount < 100000){
-                ftrInitOutpCount += 1;
-            }
-
-            if(ifTriggered){
-                if(ftrInitOutpCount < ftrInitOutpTimes){
-
-                    for(int i = 0; i < LARMDOF; i++){
-                        servo_desMsg_orig[i].joint_pos = lArm_zeroPos[i];
-                        servo_desMsg_orig[i].joint_spd = 0.0;
-                        servo_desMsg_orig[i].joint_tor = 0.0;
-                    }
-                    for(int i = 0; i < RARMDOF; i++){
-                        servo_desMsg_orig[i + LARMDOF].joint_pos = rArm_zeroPos[i];
-                        servo_desMsg_orig[i + LARMDOF].joint_spd = 0.0;
-                        servo_desMsg_orig[i + LARMDOF].joint_tor = 0.0;
-                    }
-                }else if(ftrInitOutpCount == ftrInitOutpTimes || ftrInitOutpTimes > ftrInitOutpTimes){
-                    std::cout << " ** 输出位姿初始化完毕 ** " << std::endl;
-                    ifTriggered = false;
-                }
-
-                if(ftrInitOutpCount < 100000){
-                    ftrInitOutpCount += 1;
-                }
-            }
-
-            //-----------------------------------
-
         }else{
             for(int i = 0; i < LARMDOF; i++){
                 servo_desMsg_orig[i].transMod = 1;
@@ -783,8 +807,8 @@ void ServoNode::run(){
                 servo_desMsg_orig[i].joint_spd = 0.0;
                 servo_desMsg_orig[i].joint_tor = 0.0;
 
-                servo_desMsg_orig[i].joint_Kp = lArm_defaultKp[i];
-                servo_desMsg_orig[i].joint_Kd = lArm_defaultKd[i];
+                servo_desMsg_orig[i].joint_Kp = 0.0;
+                servo_desMsg_orig[i].joint_Kd = arm_safety.limits.damping;
             }
 
             for(int i = 0; i < RARMDOF; i++){
@@ -794,8 +818,8 @@ void ServoNode::run(){
                 servo_desMsg_orig[i + LARMDOF].joint_spd = 0.0;
                 servo_desMsg_orig[i + LARMDOF].joint_tor = 0.0;
 
-                servo_desMsg_orig[i + LARMDOF].joint_Kp = rArm_defaultKp[i];
-                servo_desMsg_orig[i + LARMDOF].joint_Kd = rArm_defaultKd[i];
+                servo_desMsg_orig[i + LARMDOF].joint_Kp = 0.0;
+                servo_desMsg_orig[i + LARMDOF].joint_Kd = arm_safety.limits.damping;
             }
         }
 
@@ -954,18 +978,53 @@ void ServoNode::retMsg_unpack_func(){
 
 //传输信息回调函数 -- 接收消息并执行插补任务
 void ServoNode::message_callback(const ctl_msgs_hw::msg::CtlInformation::SharedPtr msg){
+    arm_safety.command_received(arm_safety_now());
+    if (!arm_safety.fault.empty()) return;
+    const auto valid = [](const auto& values) {
+        return values.size() == 7 && std::all_of(values.begin(), values.end(),
+            [](double v) { return std::isfinite(v); });
+    };
+    if (!std::isfinite(msg->temp_time) || msg->temp_time <= 0 || msg->temp_time > 0.25 ||
+        !valid(msg->base_rigidity_ctl_mode_l) || !valid(msg->base_rigidity_ctl_mode_r) ||
+        !valid(msg->l_position_at_runin_st) || !valid(msg->r_position_at_runin_st) ||
+        !valid(msg->l_position) || !valid(msg->r_position) || !valid(msg->l_speed) || !valid(msg->r_speed) ||
+        !valid(msg->l_torque_grav_comp) || !valid(msg->r_torque_grav_comp) ||
+        !valid(msg->l_torque_interia_comp) || !valid(msg->r_torque_interia_comp) ||
+        !valid(msg->l_torque_feedforward) || !valid(msg->r_torque_feedforward) ||
+        !valid(msg->l_kp) || !valid(msg->r_kp) || !valid(msg->l_kd) || !valid(msg->r_kd)) {
+        arm_safety.trip("invalid_controller_packet"); return;
+    }
+    for (size_t i = 0; i < 7; ++i) {
+        if (std::abs(msg->l_torque_grav_comp[i]) + std::abs(msg->l_torque_interia_comp[i]) +
+                std::abs(msg->l_torque_feedforward[i]) > arm_safety.limits.max_feedforward ||
+            std::abs(msg->r_torque_grav_comp[i]) + std::abs(msg->r_torque_interia_comp[i]) +
+                std::abs(msg->r_torque_feedforward[i]) > arm_safety.limits.max_feedforward) {
+            arm_safety.trip("raw_feedforward_limit"); return;
+        }
+    }
 
     //--------------------接收消息--------------------
 
     //检查时间戳是否合理（例如，延迟不超过 5ms）
     auto now = this->now();
     auto latency = now - msg->header.stamp;
+    if (latency.seconds() > 0.1 || latency.seconds() < -0.05) {
+        arm_safety.trip("controller_packet_timestamp"); return;
+    }
     if (latency.seconds() > 0.005) {
         RCLCPP_WARN(this->get_logger(), "High latency detected: %f seconds", latency.seconds());
     }
 
     //模式控制变量赋值
+    if (trajectory_sample_ != msg->trajectory_sample || msg->if_useret_to_start_runin) {
+        ifFirstRunin = true;
+        posOutpFtr = runinOutpFtr{};
+        velOutpFtr = runinOutpFtr{};
+        TorOutpFtr = runinOutpFtr{};
+    }
+    trajectory_sample_ = msg->trajectory_sample;
     tempTime_upperMonitor = msg->temp_time;
+    arm_safety.command_period = msg->temp_time;
     runin_mod = msg->runin_mod;
     if_runin_renew = msg->if_runin_renew;
     msg_get_ifUseDebugMod = msg->if_use_debugmod;
@@ -1014,12 +1073,6 @@ void ServoNode::message_callback(const ctl_msgs_hw::msg::CtlInformation::SharedP
 
     //--------------------标志位更新--------------------
 
-    if(ifInitFilter){
-        ifTriggered = true;
-        ifInitFilter = false;
-
-        ftrInitOutpCount = 0;
-    }
 
     //更新插补启动标志
     ifRunin = true;
@@ -1030,6 +1083,8 @@ void ServoNode::message_callback(const ctl_msgs_hw::msg::CtlInformation::SharedP
 
 //函数2 -- 执行插补函数
 void ServoNode::ctlMsg_runin(){
+
+    if (trajectory_sample_) { ifRunin = false; return; }
 
     if(ifRunin){
         //更新插补启动标志
@@ -1066,12 +1121,7 @@ void ServoNode::ctlMsg_runin(){
         temp_len = 0;
 
         //获取插补长度
-        time_res = this->now().seconds() + this->now().nanoseconds() * 1e-9;
-        winlen = std::round((time_res - time_last) / 0.002) + 2;
-        if(winlen > 100){
-            winlen = 100;
-        }
-        time_last = time_res;
+        winlen = std::clamp(static_cast<int>(std::round(tempTime_upperMonitor / TEMPTIME)), 1, 100);
 
         //执行插补代码 -- 这里强制采用第二种插补模式
         runin_control_core.ModelRunin(
@@ -1257,6 +1307,7 @@ void ServoNode::gripper_fdb_publish(){
 
 //夹爪目标控制量接收
 void ServoNode::gripper_desMsg_get(const ctl_msgs_hw::msg::GripperCtl::SharedPtr msg){
+    if (!arm_safety.fault.empty()) return;
     l_gripper_tor_get = std::isfinite(msg->l_arm_gripper_tor) ? msg->l_arm_gripper_tor : 0.0;
     r_gripper_tor_get = std::isfinite(msg->r_arm_gripper_tor) ? msg->r_arm_gripper_tor : 0.0;
 
