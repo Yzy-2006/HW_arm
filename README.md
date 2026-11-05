@@ -23,6 +23,7 @@ sudo 密码并配置 `servo_node`，具体见[环境与构建](environments/READ
 | 要做的事 | 使用的文档 | 常用命令 |
 |---|---|---|
 | 把当前代码迁移到另一台电脑 | [新电脑迁移与交接](docs/MIGRATION_HANDOVER.md) | 环境重建、参数核对、分阶段验收 |
+| 单独交付 Newton 仿真 | [独立交付包](newton_towel_sim/README.md) | 复制 `newton_towel_sim/` 或发送同名 `.tar.gz` |
 | 配置机器人与布料仿真环境 | [Newton 仿真环境](environments/NEWTON_SETUP.md) | `make sim-check`、`make sim-demo` |
 | 完整配置与使用双臂叠毛巾仿真、VR、自动对折及三路相机 | [双臂叠毛巾仿真完整指南](simulation/README.md) | `make sim`、`make sim-fold`、`make sim-vr` |
 | 部署已训练的 PI05 或 ACT 模型到机器人 | [机器人部署指南](docs/DEPLOYMENT.md) | `make pi05`/`make act`、`make bridge`、`make motion` |
