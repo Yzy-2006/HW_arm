@@ -21,6 +21,8 @@ bool if_reach_end
 # Continuous joint stream (ctl_trans_mod=3): capture and hold the current joint
 # feedback once. Release only when a new command with hold_position=false arrives.
 bool hold_position
+# Only the active model stream requests this; holds and replay leave it false.
+bool policy_speed_checks_disabled
 
 # Time between source targets, distinct from ROS controller loop periods.
 float64 target_period_s

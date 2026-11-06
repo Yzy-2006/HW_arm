@@ -41,6 +41,66 @@ test -d "$MODEL/step-19999/params"
 
 `step-18000` 和 `step-19999` 都可以作为 `PI05_CHECKPOINT`，默认使用后者。
 
+## 更新到平铺起始 B 模型
+
+2026-11-06 查询发布仓库，新增模型为
+[`flat-towel-B-from-pi05-base-step-50000`](https://huggingface.co/hw-arm-towel/pi05-encos-fold-towel-93/tree/main/flat-towel-B-from-pi05-base-step-50000)。
+它使用独立的 `inference_flat_towel.py` 和 `assets/encos_flat_train45/norm_stats.json`，
+与旧 `step-49999` 的归一化统计不同。不能只更换权重目录后继续使用旧推理入口。
+动作仍为 50 步、16 维绝对关节与夹爪目标，训练录制频率为 30 Hz。
+
+先停止运动 bridge，再停止旧 worker，等待 `Worker process reaped`。
+在联网的电脑上使用已有 `pi05-openpi` 环境，将新版本下载到独立目录，保留旧版本以便回退：
+
+```bash
+conda activate pi05-openpi
+python - <<'PY'
+from pathlib import Path
+from huggingface_hub import snapshot_download
+
+snapshot_download(
+    repo_id="hw-arm-towel/pi05-encos-fold-towel-93",
+    revision="08b4c7e98deca650c4080be15884ccb0062be5ef",
+    local_dir=str(Path.home() / "models/pi05-flat-towel-B-50000"),
+    allow_patterns=[
+        "flat-towel-B-from-pi05-base-step-50000/**",
+        "inference.py", "inference_flat_towel.py", "runtime/**", "tokenizer/**",
+        "requirements-inference.txt", "README.md", "LICENSE", "LICENSE_GEMMA.txt", "NOTICE",
+    ],
+)
+PY
+```
+
+固定 revision 保证权重和运行文件来自同一次提交，且只下载新 checkpoint 所需文件。
+下载失败后重跑同一命令；无需先升级或重新安装现有 JAX 环境。
+若目标电脑不联网，下载后通过 `rsync -avh --partial --info=progress2` 将整个
+`pi05-flat-towel-B-50000/` 目录传到目标电脑的 `$HOME/models/pi05-flat-towel-B-50000/`。
+
+在当前仓库根目录启动 worker：
+
+```bash
+make pi05 PI05_MODEL="$HOME/models/pi05-flat-towel-B-50000" \
+  PI05_CHECKPOINT=flat-towel-B-from-pi05-base-step-50000 \
+  PI05_ARGS="--inference-entry inference_flat_towel.py"
+```
+
+也可将 `config/pi05_deployment.yaml` 的 `worker.inference_entry` 改为
+`inference_flat_towel.py`，之后省略该 CLI 参数；切换回旧模型时改回 `inference.py`。
+`PI05_MODEL` 和 `PI05_CHECKPOINT` 仍通过 Makefile 变量指定。
+启动日志应显示新 checkpoint、`OpenPI inference entry: inference_flat_towel.py`、GPU 设备和 listening。
+在已有控制链正常运行的前提下，另一个终端先运行 `make bridge` 做 dry-run，稳定后停止 bridge，
+再运行 `make motion PI05_SLOW_FACTOR=0.1` 观察真实动作。
+
+仅测试推理速度时，停止 worker 后执行：
+
+```bash
+make pi05-bench PI05_MODEL="$HOME/models/pi05-flat-towel-B-50000" \
+  PI05_CHECKPOINT=flat-towel-B-from-pi05-base-step-50000 \
+  BENCH_ARGS="--inference-entry inference_flat_towel.py --output outputs/flat-towel-B-benchmark.json"
+```
+
+该入口选择已通过本地模拟加载测试；新权重的 GPU 推理和机器人任务效果仍需在目标机器验证。
+
 ## OpenPI 环境
 
 worker 不依赖 ROS2，因此不要在机器人 `.venv-robot` 中安装 JAX 或启动 worker：
@@ -164,9 +224,46 @@ bridge:
 
 默认使用 [minimum snap 插值](MINIMUM_SNAP.md)：保持原始 30 Hz 动作时间轴，
 将 14 个关节目标插值到 300 Hz；夹爪仍按原始帧的二值状态切换。
-新 chunk 从当前规划状态衔接，保持位置、速度、加速度和 jerk 连续。
+新 chunk 从最后一次成功发布的位置、速度、加速度和 jerk 衔接。
+规划和预检查完成后，轨迹在首次发布时才开始计时；第一条指令始终取轨迹起点，
+不会因为规划耗时跳过开头。夹爪动作使用相同的播放时间轴。
+尚未发布的新规划不会替代已发送状态；保持/暂停后重新从反馈构造静止起点。
 首次启动、超时恢复或安全裁剪后的重规划从反馈/最后实际指令重新锚定。
 插值不延长动作有效期，也不会补发推理期间已过期的动作点。
+
+当前 `bridge.motion_safety.protection_mode: speed_only` 关闭非限速保护。
+模型部署设置 `bridge.motion_safety.policy_disable_all_speed_checks: true`，关闭
+模型轨迹的速度预检查、相邻指令差分速度和解析速度检查，并随模型指令关闭
+servo 的指令速度、位置步进及实际反馈超速检查，双臂全部关节均适用。
+暂停保持、切换 VR/回放或模型源指令超过 0.25 秒未更新后，底层恢复原限速配置；
+重复转发旧指令不会延长此期限。启动回零仍按原配置限速。
+数值有效性、协议范围、显式故障和停止仍保留，开关不会清除已经锁存的故障。
+要恢复部署限速，将上述开关设为 `false`，同时将
+`bridge.motion_safety.policy_command_speed_check` 设为 `true`，再重启 `make motion`。
+若只将后者设为 `false`，仅关闭 Python 模型指令速度检查。
+本次 ROS 消息增加了字段，需重新编译并重启 servo、arms、robot 和 motion。
+关闭检查不会消除指令发布抖动或目标跳变，也不会使电机超速触发上述保护。
+`speed_only` 关闭心跳就绪/超时、反馈和相机时效/时间偏差、位置与加速度、跟踪误差和反馈相对目标偏移检查。
+仍需有初始有效反馈和图像；模型结果完成规划后从首次发布开始播放，不再因原 `max_action_age_s`
+限制被丢弃。无动作、动作序列结束或网络请求失败时仍等待/保持。
+显式停止、底层上报故障、有限数值和协议格式检查保留。
+
+以下启动稳定性和心跳超时规则仅在 `protection_mode: full` 下启用：
+`make motion` 启动时先等待安全状态 `ready`、新鲜关节/夹爪反馈和有效相机观测。
+就绪前只记录 `Waiting for startup ...`，不发送动作，也不把首次观测尚未检查
+误报为插值失败。出现 `Startup inputs ready ...` 后才请求模型动作；从 VR 恢复
+模型控制时会重新等待这些输入。
+安全心跳接收使用独立回调组，避免与控制计算互斥。首次发布控制指令前，需收到
+至少三条 `ready` 心跳并覆盖 0.2 秒，期间消息间隔不能超过 0.2 秒；启动抖动
+会重新等待稳定，不会因只收到过一次 `ready` 就切换到运行态超时处理。
+启动的初始等待期限为 5 秒，显式底层故障始终立即锁存。
+首次控制指令发布后，心跳超时阈值仍是 0.2 秒，暂停/VR 切换不会重置这一保护。
+故障日志区分从未收到心跳、心跳超时及非 ready 状态，并附带
+`servo_state`、`heartbeat_age_s`、`joint_age_s`、`gripper_age_s` 和
+`observation_check_age_s`，便于定位具体延迟来源。
+`safety_phase=startup/armed` 可区分启动等待与运行监测。
+Ctrl+C/SIGTERM 会先停止并排空回调，最后关闭 ROS 上下文，避免退出时的
+`cannot use Destroyable because destruction was requested` 异常。
 
 14 个关节动作是绝对弧度目标。bridge 在发布前使用最新关节反馈执行 URDF 限位和每周期
 步长限制；夹爪动作经过二值化后映射到 `grippers.yaml` 的开闭端点。

@@ -35,7 +35,7 @@
 #include "ctl_msgs_hw/msg/dbg_information.hpp"
 #include "ctl_msgs_hw/msg/mid_node_ctl_msg_send.hpp"
 #include "ctl_msgs_hw/msg/mid_node_ctl_msg_ret.hpp"
-#include "ctl_msgs_hw/msg/end_desc_pub.hpp"
+#include "ctl_msgs_hw/msg/fk_data_pub.hpp"
 
 #include "controller/upper_Transmit.h"
 #include "messageType/chassis_msgType.h"
@@ -226,7 +226,7 @@ class RobotCtlNode : public rclcpp::Node{
         rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr vr_override_service;
         std::chrono::steady_clock::time_point last_desc_feedback{};
         //末端笛卡尔位姿反馈订阅（回零完成后重新锚定笛卡尔遥操作基准）
-        rclcpp::Subscription<ctl_msgs_hw::msg::EndDescPub>::SharedPtr endDescPub_sub;
+        rclcpp::Subscription<ctl_msgs_hw::msg::FkDataPub>::SharedPtr endDescPub_sub;
 
         //遥操作通讯初始化
         void xr_teleComu_init();
@@ -238,7 +238,7 @@ class RobotCtlNode : public rclcpp::Node{
         void lArm_xrTele_endDelta_callback(const geometry_msgs::msg::Vector3::SharedPtr msg);
         void rArm_xrTele_endDelta_callback(const geometry_msgs::msg::Vector3::SharedPtr msg);
         void zeroReturnCmd_callback(const std_msgs::msg::Bool::SharedPtr msg);
-        void endDescPub_callback(const ctl_msgs_hw::msg::EndDescPub::SharedPtr msg);
+        void endDescPub_callback(const ctl_msgs_hw::msg::FkDataPub::SharedPtr msg);
 
         //---------------------------------
         //桥接通讯定义

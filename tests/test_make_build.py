@@ -2,11 +2,14 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_build_sets_ethercat_capabilities_after_build_succeeds(tmp_path):
+@pytest.mark.parametrize("symlink_install", [False, True])
+def test_build_sets_ethercat_capabilities_after_build_succeeds(tmp_path, symlink_install):
     """A rebuilt servo binary must receive its required EtherCAT capabilities."""
     sandbox_root = tmp_path / "robot"
     venv = sandbox_root / ".venv-robot"
@@ -26,7 +29,14 @@ def test_build_sets_ethercat_capabilities_after_build_succeeds(tmp_path):
 
     servo_node = sandbox_root / "ros2_ws/install/servo_control_hw/lib/servo_control_hw/servo_node"
     servo_node.parent.mkdir(parents=True)
-    servo_node.write_text("placeholder")
+    if symlink_install:
+        servo_binary = sandbox_root / "ros2_ws/build/servo_control_hw/servo_node"
+        servo_binary.parent.mkdir(parents=True)
+        servo_node.symlink_to(servo_binary)
+    else:
+        servo_binary = servo_node
+    servo_binary.write_text("placeholder")
+    servo_binary.chmod(0o755)
 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -66,5 +76,5 @@ def test_build_sets_ethercat_capabilities_after_build_succeeds(tmp_path):
     assert setcap_marker.read_text().split() == [
         "setcap",
         "cap_net_raw,cap_net_admin+ep",
-        str(servo_node),
+        str(servo_binary),
     ]

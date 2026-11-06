@@ -39,16 +39,11 @@ find_package(openrobots_libs_hw QUIET)
 # 查找Python和NumPy
 find_package(Python3 REQUIRED COMPONENTS Interpreter Development NumPy)
 
-# 获取 NumPy 头文件路径（cython 生成的 C 代码需要）
+# 获取 NumPy 头文件路径
 execute_process(
     COMMAND ${Python3_EXECUTABLE} -c "import numpy; print(numpy.get_include())"
     OUTPUT_VARIABLE PYTHON3_NUMPY_INCLUDE_DIR
     OUTPUT_STRIP_TRAILING_WHITESPACE)
-execute_process(
-    COMMAND ${Python3_EXECUTABLE} -c "import cython; print(cython.__version__)"
-    OUTPUT_VARIABLE CYTHON_VERSION
-    OUTPUT_STRIP_TRAILING_WHITESPACE)
-message(STATUS "Cython version: ${CYTHON_VERSION}")
 message(STATUS "NumPy include: ${PYTHON3_NUMPY_INCLUDE_DIR}")
 
 # 安装环境钩子

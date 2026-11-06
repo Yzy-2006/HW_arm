@@ -4,13 +4,17 @@ import time
 
 
 class Intervention:
-    def __init__(self, pause, resume, controller, recorder, report, *, now=time.monotonic):
+    def __init__(self, pause, resume, controller, recorder, report, *, now=time.monotonic,
+                 save_timeout_s=11.0, recorder_ready=None, startup_timeout_s=4.0):
         self.pause = pause
         self.resume = resume
         self.controller = controller
         self.recorder = recorder
         self.report = report
         self.now = now
+        self.save_timeout_s = save_timeout_s
+        self.recorder_ready = recorder_ready
+        self.startup_timeout_s = startup_timeout_s
         self.mode = "paused"
         self.pending = None
         self.deadline = 0.0
@@ -45,7 +49,7 @@ class Intervention:
     def _call(self, callback, value, stage):
         self.pending = callback(value)
         self.stage = stage
-        self.deadline = self.now() + 5.0
+        self.deadline = self.now() + (self.save_timeout_s if stage in {"saved", "fault_saved"} else 5.0)
 
     def fail(self, reason):
         if self.mode == "fault":
@@ -80,6 +84,15 @@ class Intervention:
                     self.recording = False
             return
         if self.pending is None:
+            if self.mode == "arming_vr" and self.stage == "first_frame":
+                try:
+                    if self.recorder_ready():
+                        self.mode = "vr"
+                        self.report("VR intervention recording started")
+                    elif self.now() > self.deadline:
+                        self.fail("Recorder first-frame acknowledgement timed out")
+                except Exception as exc:
+                    self.fail(exc)
             return
         if not self.pending.done():
             if self.now() > self.deadline and self.mode != "paused":
@@ -96,8 +109,12 @@ class Intervention:
                 self._call(self.recorder, True, "recording")
             elif self.stage == "recording":
                 self.recording = True
-                self.mode = "vr"
-                self.report("VR intervention recording started")
+                if self.recorder_ready is None:
+                    self.mode = "vr"
+                    self.report("VR intervention recording started")
+                else:
+                    self.stage = "first_frame"
+                    self.deadline = self.now() + self.startup_timeout_s
             elif self.stage == "controller_hold":
                 self._call(self.recorder, False, "saved")
             elif self.stage == "saved":
@@ -117,7 +134,6 @@ def attach_intervention(node):
     from ctl_msgs_hw.msg import GripperCtl
 
     controller = node.create_client(SetBool, "/dexbotCtl/vr_override")
-    recorder = node.create_client(SetBool, "/towel/record")
 
     def call(client, value):
         if not client.service_is_ready():
@@ -128,7 +144,10 @@ def attach_intervention(node):
 
     manager = Intervention(node.pause_policy, node.resume_policy,
                            lambda value: call(controller, value),
-                           lambda value: call(recorder, value), node.get_logger().info)
+                           node.recorder.request, node.get_logger().info,
+                           save_timeout_s=node.recorder.writer_finish_timeout_s + 1.0,
+                           recorder_ready=node.recorder.ready_for_capture,
+                           startup_timeout_s=node.recorder.startup_timeout_s + 1.0)
     node.intervention = manager
     publisher = node.create_publisher(String, "/towel/intervention/state", 1)
 
@@ -143,9 +162,20 @@ def attach_intervention(node):
     node.create_service(SetBool, "/towel/intervene", request)
 
     def tick():
+        try:
+            node.recorder.check_health()
+        except Exception as exc:
+            if manager.mode not in {"paused", "fault"}:
+                node.pause_policy()
+                manager.fail(exc)
         manager.tick()
-        if manager.mode == "vr" and node.recorder.episode is None:
-            manager.fail("Correction recording stopped unexpectedly; policy remains paused")
+        if manager.mode == "vr":
+            try:
+                if not node.recorder.ready_for_capture():
+                    raise RuntimeError("Correction recorder is no longer ready")
+            except Exception as exc:
+                node.pause_policy()
+                manager.fail(exc)
         publisher.publish(String(data=manager.mode))
 
     node.create_timer(0.05, tick)
@@ -155,7 +185,7 @@ def attach_intervention(node):
             return
         values = [msg.l_arm_gripper_pos, msg.r_arm_gripper_pos, msg.ctl_time]
         if np.isfinite(values).all() and 0 < msg.ctl_time <= 1:
-            node.gripper_pub.publish(msg)
+            node.safety.publish_if_ready(lambda: node.gripper_pub.publish(msg))
 
     # Policy and VR grippers pass through the same serialized publisher.
     node.create_subscription(GripperCtl, "/towel/intervention/gripper_command", gripper, 1)

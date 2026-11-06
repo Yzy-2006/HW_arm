@@ -3,6 +3,8 @@
 #include "servo_control/motor_control.h"
 #include "servo_control/transmit.h"
 #include "servo_control/queue.h"
+#include "servo_control/motorFeedbackQuery.h"
+#include <limits>
 
 #include <sys/time.h>
 #include <cinttypes>
@@ -14,6 +16,7 @@
 #include <chrono>
 
 ArmSafetyGuard arm_safety;
+MotorPositionOffsets motor_position_offsets;
 double arm_safety_now() {
     return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
@@ -52,6 +55,79 @@ CAN_JNT_numStruct CAN_and_Jnt_num;
 
 static int wkc_err_count = 0;
 static int wkc_err_iteration_count = 0;
+
+MotorBlock MotorSingleExchange(int channel, int motor_id, const MotorBlock& request, bool& valid_wkc) {
+    if (ecat_phys < 1 || ec_slave[ecat_phys].Ibytes != ETC_PDO_SIZE ||
+        ec_slave[ecat_phys].Obytes != ETC_PDO_SIZE)
+        throw std::runtime_error("Single-motor operation requires a gateway with the expected PDO layout");
+    int slot = -1, matches = 0;
+    for (const auto& board : ServoStruct.CAN_boards) {
+        if (board.channel_idx != channel) continue;
+        for (int j = 0; j < board.JntNum_onCan; ++j) {
+            if (board.can_jnt_ID.at(j) == motor_id) { slot = board.motor_slot.at(j); ++matches; }
+        }
+    }
+    if (matches != 1 || channel < 0 || channel >= CAN_CHANNELS || slot < 0 || slot >= MOTORS_PER_CH)
+        throw std::runtime_error("Single-motor operation requires exactly one configured channel/ID mapping");
+    MotorBlock tx[CAN_CHANNELS][MOTORS_PER_CH]{};
+    MotorBlock rx[CAN_CHANNELS][MOTORS_PER_CH]{};
+    tx[channel][slot] = request;
+    memcpy(ec_slave[ecat_phys].outputs, tx, ETC_PDO_SIZE);
+    const int sent = ec_send_processdata();
+    // Clear the host output buffer immediately: even an interrupted operation cannot
+    // accidentally reuse the zero-setting packet in a subsequent exchange.
+    memset(ec_slave[ecat_phys].outputs, 0, ETC_PDO_SIZE);
+    const int received_wkc = ec_receive_processdata(EC_TIMEOUTRET);
+    valid_wkc = sent > 0 && received_wkc >= expectedWKC;
+    memcpy(rx, ec_slave[ecat_phys].inputs, ETC_PDO_SIZE);
+    return rx[channel][slot];
+}
+
+void MotorFeedbackQueryStep(bool print_feedback) {
+    if (ecat_phys < 1 || ec_slave[ecat_phys].Ibytes != ETC_PDO_SIZE ||
+        ec_slave[ecat_phys].Obytes != ETC_PDO_SIZE)
+        throw std::runtime_error("Feedback query requires a gateway with the expected PDO layout");
+    static std::array<std::array<MotorFeedbackQuery, MOTORS_PER_CH>, CAN_CHANNELS> samples{};
+    static unsigned parameter = 1;
+    MotorBlock tx[CAN_CHANNELS][MOTORS_PER_CH]{};
+    MotorBlock rx[CAN_CHANNELS][MOTORS_PER_CH]{};
+    for (const auto& board : ServoStruct.CAN_boards) {
+        for (int j = 0; j < board.JntNum_onCan; ++j) {
+            const int channel = board.channel_idx, slot = board.motor_slot.at(j);
+            if (channel < 0 || channel >= CAN_CHANNELS || slot < 0 || slot >= MOTORS_PER_CH)
+                throw std::runtime_error("Invalid feedback query CAN mapping");
+            tx[channel][slot] = MotorFeedbackQuery::request(board.can_jnt_ID.at(j), parameter);
+        }
+    }
+    // Never call EtherCAT_Command_Set or consume queued control commands here.
+    memcpy(ec_slave[ecat_phys].outputs, tx, ETC_PDO_SIZE);
+    ec_send_processdata();
+    const int query_wkc = ec_receive_processdata(EC_TIMEOUTRET);
+    memcpy(rx, ec_slave[ecat_phys].inputs, ETC_PDO_SIZE);
+    const double now = arm_safety_now();
+    if (print_feedback)
+        printf("\nFeedback queries WKC=%d/%d | q=joint rad (direction + inverse offset); deg=raw motor angle; v/I=raw protocol values\n"
+               "CAN ID       q(rad)     motor(deg)         v(raw)         I(raw)   status  err\n",
+               query_wkc, expectedWKC);
+    for (const auto& board : ServoStruct.CAN_boards) {
+        for (int j = 0; j < board.JntNum_onCan; ++j) {
+            const int channel = board.channel_idx, slot = board.motor_slot[j], id = board.can_jnt_ID[j];
+            auto& sample = samples[channel][slot];
+            sample.accept(rx[channel][slot], id, query_wkc >= expectedWKC, now);
+            if (!print_feedback) continue;
+            const auto value = [&](size_t field) {
+                return sample.fresh(field, now) ? double(sample.value[field]) : std::numeric_limits<double>::quiet_NaN();
+            };
+            const bool complete = sample.fresh(0, now) && sample.fresh(1, now) && sample.fresh(2, now);
+            printf("%3d %2d  %12.6f  %12.6f  %13.6f  %13.6f   %s  %02x\n", channel, id,
+                   motor_position_offsets.from_motor(channel, id, board.can_jnt_direComp[j], value(0) * M_PI / 180.0),
+                   value(0), value(1), value(2),
+                   complete ? "recent" : "missing/stale", sample.error[0] | sample.error[1] | sample.error[2]);
+        }
+    }
+    if (print_feedback) fflush(stdout);
+    parameter = parameter % 3 + 1;
+}
 
 void EtherCAT_Data_Get();
 
@@ -571,7 +647,9 @@ void EtherCAT_direGetFdback(){
             }
             int rv_ID = ServoStruct.CAN_boards[ch].can_jnt_ID[joint] - 1;
 
-            ServoStruct.CAN_boards[ch].can_jnt_ret_msg[joint].joint_posRet = ServoStruct.CAN_boards[ch].can_jnt_direComp[joint] * rv_motor_msg[rv_ID].angle_actual_float / 180 * M_PI;
+            ServoStruct.CAN_boards[ch].can_jnt_ret_msg[joint].joint_posRet = motor_position_offsets.from_motor(
+                channel, ServoStruct.CAN_boards[ch].can_jnt_ID[joint], ServoStruct.CAN_boards[ch].can_jnt_direComp[joint],
+                rv_motor_msg[rv_ID].angle_actual_float / 180 * M_PI);
             ServoStruct.CAN_boards[ch].can_jnt_ret_msg[joint].joint_spdRet = ServoStruct.CAN_boards[ch].can_jnt_direComp[joint] * rv_motor_msg[rv_ID].speed_actual_float / 180 * M_PI;
             ServoStruct.CAN_boards[ch].can_jnt_ret_msg[joint].joint_currentRet = rv_motor_msg[rv_ID].current_actual_float;
             ServoStruct.CAN_boards[ch].can_jnt_ret_msg[joint].joint_temperature = (rv_motor_msg[rv_ID].temperature - 50.0)/2.0;
@@ -693,7 +771,8 @@ void EtherCAT_Data_Get()
             int rv_ID = ServoStruct.CAN_boards[ch].can_jnt_ID[j] - 1;
 
             int motor_id = ServoStruct.CAN_boards[ch].can_jnt_ID[j];
-            ServoStruct.CAN_boards[ch].can_jnt_ret_msg[j].joint_posRet = ServoStruct.CAN_boards[ch].can_jnt_direComp[j] * rv_motor_msg[rv_ID].angle_actual_rad;
+            ServoStruct.CAN_boards[ch].can_jnt_ret_msg[j].joint_posRet = motor_position_offsets.from_motor(
+                channel, motor_id, ServoStruct.CAN_boards[ch].can_jnt_direComp[j], rv_motor_msg[rv_ID].angle_actual_rad);
             ServoStruct.CAN_boards[ch].can_jnt_ret_msg[j].joint_spdRet = ServoStruct.CAN_boards[ch].can_jnt_direComp[j] * rv_motor_msg[rv_ID].speed_actual_rad;
             ServoStruct.CAN_boards[ch].can_jnt_ret_msg[j].joint_currentRet = rv_motor_msg[rv_ID].current_actual_float;
             ServoStruct.CAN_boards[ch].can_jnt_ret_msg[j].joint_temperature = (rv_motor_msg[rv_ID].temperature - 50.0)/2.0;
@@ -760,6 +839,12 @@ void EtherCAT_Command_Set()
             const auto& c = board.can_jnt_des_msg[j];
             arm_safety.check_command(safety_index++,
                 {c.joint_pos, c.joint_spd, c.joint_tor, c.joint_Kp, c.joint_Kd}, safety_now);
+            const double raw_position = motor_position_offsets.to_motor(
+                board.channel_idx, board.can_jnt_ID[j], board.can_jnt_direComp[j], c.joint_pos);
+            if (c.transMod != 4 && c.transMod != 5 &&
+                (!std::isfinite(raw_position) || raw_position < POS_MIN || raw_position > POS_MAX))
+                arm_safety.trip("motor_position_protocol_range_channel_" + std::to_string(board.channel_idx) +
+                    "_id_" + std::to_string(board.can_jnt_ID[j]) + " rad=" + std::to_string(raw_position));
         }
     }
     if (safety_index != 14) arm_safety.trip("invalid_joint_mapping");
@@ -789,7 +874,7 @@ void EtherCAT_Command_Set()
         for(int j = 0; j < ServoStruct.CAN_boards[ch].JntNum_onCan; j++){
             int slot = motor_slot[j];
             int motor_id = jointId[j];
-            double pos = jnt_direComp[j] * joint_des_msg[j].joint_pos;
+            double pos = motor_position_offsets.to_motor(channel, motor_id, jnt_direComp[j], joint_des_msg[j].joint_pos);
             double spd = jnt_direComp[j] * joint_des_msg[j].joint_spd;
             double tor = jnt_direComp[j] * joint_des_msg[j].joint_tor;
 

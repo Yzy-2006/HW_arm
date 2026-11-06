@@ -38,22 +38,40 @@ vrJointReturn:
 #============================================
 # 重力补偿配置
 #============================================
+motorPositionOffsets:
+  # CAN 0 ID 2 only. motor_q = direction * joint_q + offset; feedback uses inverse.
+  # Temporary software coordinate offset, degrees. Set 0 to disable; restart servo.
+  left_shoulder_roll_deg: 0.0
+
 armSafety:
+  protection_mode: speed_only  # full restores configured non-speed guards; restart servo.
   # Conservative software trip thresholds, not certified hardware limits.
+  check_command_position_limits: false  # Servo and homing target position bounds.
+  check_feedback_position_limits: false  # Position bounds only; freshness, speed and error checks remain enabled.
   feedback_timeout_s: 0.1
   command_timeout_s: 0.25
-  max_speed_rad_s: 1.5
+  max_speed_rad_s: 5.0
+  speed_limit_enabled_per_arm: [true, true, true, true, false, false, false]
+  feedback_speed_trip_samples: 3  # Per joint; normal feedback clears the streak. Restart servo.
   max_feedforward: 5.0
   max_feedforward_rate: 200.0
   tracking_error_rad: 0.3
   tracking_duration_s: 0.1
-  fault_damping: 12.0
+  fault_damping: 15.0
   feedback_position_tolerance_rad: 0.02
   # Left J1-J7, right J1-J7, matching the installed URDF.
   lower: [-3.1416, 0.0, -2.3562, -2.6180, -2.3562, -1.5708, -1.5708,
           -1.5708, -1.5708, -2.3562, 0.0, -2.3562, -1.5708, -1.5708]
   upper: [1.5708, 1.5708, 2.3562, 0.0, 2.3562, 1.5708, 1.5708,
           3.1416, 0.0, 2.3562, 2.6180, 2.3562, 1.5708, 1.5708]
+
+homingHandoff:
+  # Startup and upper-controller/mode handoffs; restart servo after changes.
+  max_speed_rad_s: 5.0
+  max_acceleration_rad_s2: 1.0
+  kp_rate_per_s: 20.0
+  kd_rate_per_s: 10.0
+  feedforward_rate_per_s: 1.0
 
 gravComp:
 

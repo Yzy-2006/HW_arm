@@ -32,6 +32,7 @@ def test_worker_reads_yaml_inference_settings_and_cli_overrides(tmp_path):
 @pytest.mark.parametrize("settings", [
     {"num_steps": 0}, {"num_steps": 1.5}, {"num_steps": True},
     {"action_horizon": -1}, {"action_horizon": 1001},
+    {"inference_entry": "unknown.py"},
 ])
 def test_worker_rejects_invalid_yaml_inference_settings(tmp_path, settings):
     config = tmp_path / "deployment.yaml"
@@ -54,7 +55,7 @@ def test_yaml_integration_steps_reach_openpi_loader_and_horizon_is_checked(tmp_p
 
     monkeypatch.setitem(sys.modules, "jax", SimpleNamespace(devices=lambda: [SimpleNamespace(platform="gpu")]))
     monkeypatch.setattr(pi05_worker, "_load_openpi_inference_module",
-                        lambda path: SimpleNamespace(load_policy=load_policy))
+                        lambda path, entry: SimpleNamespace(load_policy=load_policy))
     config = tmp_path / "deployment.yaml"
     config.write_text(yaml.safe_dump({"worker": {"num_steps": 7, "action_horizon": 50}}))
     args = parse_args(["--config", str(config), "--model", str(tmp_path), "--checkpoint", "step-49999"])
@@ -64,6 +65,35 @@ def test_yaml_integration_steps_reach_openpi_loader_and_horizon_is_checked(tmp_p
     assert calls == [{"checkpoint": str(tmp_path / "step-49999"), "num_steps": 7}]
     with pytest.raises(ValueError, match="model produces 50 steps"):
         PolicyRunner(str(tmp_path), "cuda", False, {}, "step-49999", 7, 25)
+
+
+def test_flat_towel_entry_imports_sibling_and_reaches_policy_loader(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setitem(sys.modules, "inference", None)
+    monkeypatch.delitem(sys.modules, "inference", raising=False)
+    monkeypatch.setitem(sys.modules, "downloaded_pi05_inference", None)
+    monkeypatch.delitem(sys.modules, "downloaded_pi05_inference", raising=False)
+    monkeypatch.setitem(sys.modules, "jax", SimpleNamespace(devices=lambda: [SimpleNamespace(platform="gpu")]))
+    (tmp_path / "inference.py").write_text("STATS = 'encos_flat_train45'\n")
+    (tmp_path / "inference_flat_towel.py").write_text(
+        "def load_policy(checkpoint, num_steps):\n"
+        "    from inference import STATS\n"
+        "    from types import SimpleNamespace\n"
+        "    return SimpleNamespace(stats=STATS, steps=num_steps, checkpoint=checkpoint,\n"
+        "                           _model=SimpleNamespace(action_horizon=50))\n"
+    )
+    (tmp_path / "flat-model/params").mkdir(parents=True)
+    config = tmp_path / "deployment.yaml"
+    config.write_text(yaml.safe_dump({"worker": {"inference_entry": "inference_flat_towel.py"}}))
+    args = parse_args(["--config", str(config), "--model", str(tmp_path), "--checkpoint", "flat-model"])
+    runner = PolicyRunner(args.model, args.device, args.allow_cpu, {}, args.checkpoint,
+                          args.num_steps, args.action_horizon, args.inference_entry)
+    assert runner.policy.stats == "encos_flat_train45"
+    assert runner.policy.steps == 10
+    assert runner.policy.checkpoint == str(tmp_path / "flat-model")
+    override = parse_args(["--config", str(config), "--model", str(tmp_path),
+                           "--inference-entry", "inference.py"])
+    assert override.inference_entry == "inference.py"
 
 
 def test_pi05_protocol_round_trip():
@@ -166,6 +196,65 @@ class FakePool:
         pass
 
 
+@pytest.mark.parametrize("bridge", [{"motion_safety": {
+    "protection_mode": "speed_only", "policy_command_speed_check": True,
+    "policy_disable_all_speed_checks": True, "max_velocity_rad_s": 5.,
+}}], indirect=True)
+def test_all_policy_speed_override_is_scoped_to_non_hold_packets(bridge):
+    node, clock, feedback = bridge
+    assert np.isposinf(node.command_safety.velocity_limits).all()
+    node.step()
+    complete(node, .01)
+    clock[0] += .04
+    feedback()
+    node.step()
+    msg = node.command_pub.messages[-1]
+    assert msg.policy_speed_checks_disabled and msg.header.frame_id == "pi05_policy"
+    node.pause_policy()
+    hold = node.command_pub.messages[-1]
+    assert hold.hold_position and not hold.policy_speed_checks_disabled
+    node.safety.receive("fault:operator_stop")
+    count = len(node.command_pub.messages)
+    node.step()
+    assert len(node.command_pub.messages) == count
+
+
+@pytest.mark.parametrize("bridge", [{"motion_safety": {
+    "protection_mode": "speed_only", "policy_command_speed_check": False,
+    "max_velocity_rad_s": 5.,
+    "speed_limit_enabled_per_arm": [True, True, True, True, False, False, False],
+}}], indirect=True)
+def test_policy_speed_override_covers_preflight_and_commands_without_disabling_replay(bridge):
+    from motion_safety import CommandSafety, MotionFault
+    from minimum_snap import MinimumSnapTrajectory
+    node, clock, feedback = bridge
+    guard = node.command_safety
+    assert np.isposinf(guard.velocity_limits).all()
+    initial = np.zeros(16)
+    initial[0] = .405627698
+    guard.check(initial, initial, .01)
+    clock[0] += .001363885
+    target = initial.copy()
+    target[0] = .419478705
+    guard.check(target, initial, .01, np.full(14, 10.))
+    positions = np.zeros((2, 14))
+    positions[1, 0] = .1
+    trajectory = MinimumSnapTrajectory([0, .01], positions)
+    trajectory.validate_limits(guard.lower, guard.upper, guard.velocity_limits, guard.max_acceleration)
+    cfg = yaml.safe_load((ROOT / "config/pi05_deployment.yaml").read_text())["bridge"]
+    replay_guard = CommandSafety(cfg, [-3.] * 14, [3.] * 14)
+    assert replay_guard.velocity_limits[0] == 5
+    with pytest.raises(MotionFault, match="derivative 1"):
+        trajectory.validate_limits(replay_guard.lower, replay_guard.upper,
+                                   replay_guard.velocity_limits, replay_guard.max_acceleration)
+    guard.reset()
+    target[0] = np.nan
+    with pytest.raises(MotionFault, match="Non-finite"):
+        guard.check(target, initial, .01)
+    node.safety.receive("fault:feedback_speed_joint_0")
+    assert not node.safety.ready()
+
+
 @pytest.fixture
 def bridge(monkeypatch, tmp_path, request):
     import pi05_bridge as module
@@ -176,6 +265,7 @@ def bridge(monkeypatch, tmp_path, request):
         def __init__(self):
             self.header = SimpleNamespace(stamp=None)
             self.hold_position = False
+            self.policy_speed_checks_disabled = False
 
     class Node:
         def __init__(self, name):
@@ -201,6 +291,7 @@ def bridge(monkeypatch, tmp_path, request):
     class Cameras:
         def __init__(self, config):
             self.error = False
+            self.config = config
 
         def snapshot(self, now):
             if self.error:
@@ -222,9 +313,19 @@ def bridge(monkeypatch, tmp_path, request):
     monkeypatch.setattr(module, "ThreadPoolExecutor", FakePool)
     monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
     from motion_safety import SafetyState
-    def safety(node, on_fault):
-        state = SafetyState(on_fault, now=lambda: clock[0])
-        state.ready = lambda: not state.fault
+    def safety(node, on_fault, **kwargs):
+        node.safety_attach_options = kwargs
+        state = SafetyState(lambda reason: on_fault(f"{reason}; {kwargs['diagnostics']()}"),
+                            now=lambda: clock[0], defer_receive_fault=True,
+                            arm_on_publish=kwargs.get("arm_on_publish", False),
+                            startup_settle_s=kwargs.get("startup_settle_s", 0.),
+                            monitor_heartbeat=kwargs.get("monitor_heartbeat", True))
+        if getattr(request, "param", {}).get("real_safety", False):
+            for _ in range(6):
+                state.receive("ready")
+                clock[0] += .05
+        else:
+            state.ready = lambda: not state.fault
         return state
     monkeypatch.setattr(module, "attach_safety", safety)
     config = yaml.safe_load((ROOT / "config/pi05_deployment.yaml").read_text())
@@ -234,11 +335,33 @@ def bridge(monkeypatch, tmp_path, request):
     config["bridge"]["replan_interval_s"] = 0.25
     # These tests isolate inference/handoff timing, not physical motion limits.
     config["bridge"]["motion_safety"] = {"max_velocity_rad_s": 100, "max_acceleration_rad_s2": 100000}
-    config["bridge"].update(getattr(request, "param", {}))
+    options = dict(getattr(request, "param", {}))
+    independent_recorder = options.pop("independent_recorder", False)
+    config["bridge"].update(options)
     config_path = tmp_path / "deployment.yaml"
     config_path.write_text(yaml.safe_dump(config))
     args = SimpleNamespace(config=config_path, worker_host=None,
                            worker_port=None, token=None, slow_factor=None, motion=True)
+    if independent_recorder:
+        class FakeRecorder:
+            def __init__(self, config):
+                self.config = config
+                self.cameras = Cameras(config)
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        def local_camera_forbidden(config):
+            raise AssertionError("Bridge must not open cameras in intervention mode")
+
+        monkeypatch.setitem(sys.modules, "record", SimpleNamespace(Cameras=local_camera_forbidden))
+        monkeypatch.setitem(sys.modules, "recorder_process", SimpleNamespace(RecorderProcess=FakeRecorder))
+        import intervention
+        monkeypatch.setattr(intervention, "attach_intervention",
+                            lambda node: setattr(node, "intervention", SimpleNamespace(mode="paused")))
+        args.intervention = True
+        args.intervention_dir = str(tmp_path / "corrections")
     node = create_bridge_node(args)
 
     def feedback(value=0.0):
@@ -249,6 +372,17 @@ def bridge(monkeypatch, tmp_path, request):
     feedback()
     yield node, clock, feedback
     node.close()
+
+
+@pytest.mark.parametrize("bridge", [{"independent_recorder": True}], indirect=True)
+def test_bridge_delegates_camera_ownership_to_recorder_process(bridge):
+    node, _, _ = bridge
+    assert node.cameras is node.recorder.cameras
+    assert node.recorder.config["min_joint_delta_rad"] == 0.
+    assert node.recorder.config["episode_metadata"]["source"] == "policy_intervention"
+    assert node.intervention.mode == "paused"
+    node.close()
+    assert node.recorder.closed
 
 
 def complete(node, value=1.0):
@@ -308,10 +442,13 @@ def test_continuous_mode_and_latest_feedback_limit(bridge):
     msg = node.command_pub.messages[-1]
     assert msg.ctl_trans_mod == 3
     assert not msg.hold_position
+    assert not msg.policy_speed_checks_disabled
     assert msg.if_init_use_ret == 1
     assert msg.l_arm_des_msg[0] == pytest.approx(0.22)
     assert msg.r_arm_des_msg[0] == pytest.approx(0.22)
     assert all(s["callback_group"] is node.feedback_group for s in node.subscriptions)
+    assert node.safety_attach_options["receive_callback_group"] is node.safety_receive_group
+    assert node.safety_receive_group is not node.feedback_group
     clock[0] += 0.04
     feedback(0.3)
     node.step()
@@ -490,6 +627,196 @@ def test_interpolated_bridge_publishes_between_source_ticks_and_holds(bridge):
     assert node.chunk is None
 
 
+@pytest.mark.parametrize("bridge", [{"interpolation": {"enabled": True, "publish_rate_hz": 300}}], indirect=True)
+def test_startup_waits_without_invalidating_or_publishing(bridge):
+    node, clock, feedback = bridge
+    generation = node.generation
+    node.joints = None
+    for _ in range(4):
+        node.publish_step()
+        node.step()
+        clock[0] += .01
+    assert not node.startup_ready and node.pending is None
+    feedback()
+    node.cameras.error = True
+    node.step()
+    node.publish_step()
+    assert not node.startup_ready and node.pending is None
+    assert node.generation == generation
+    assert not node.command_pub.messages and not node.gripper_pub.messages
+    assert not any("interpolation failed" in message for message in node.logs)
+    node.cameras.error = False
+    node.step()
+    assert node.startup_ready and node.pending is not None
+    node.publish_step()
+    assert node.generation == generation and not node.command_pub.messages
+    complete(node, .01)
+    clock[0] += .04
+    feedback()
+    node.step()
+    node.publish_step()
+    assert node.command_pub.messages and not node.safety.fault
+
+
+@pytest.mark.parametrize("bridge", [{"real_safety": True}], indirect=True)
+def test_heartbeat_timeout_diagnostics_include_feedback_ages(bridge):
+    node, clock, feedback = bridge
+    node.step()
+    complete(node, .01)
+    clock[0] += .04
+    feedback()
+    node.safety.receive("ready")
+    node.step()
+    assert node.safety.was_ready
+    sent = len(node.command_pub.messages)
+    clock[0] += .21
+    feedback()
+    node.step()
+    assert "heartbeat expired" in node.safety.fault
+    message = next(m for m in node.logs if "Motion fault latched" in m)
+    for field in ("servo_state='ready'", "heartbeat_age_s=0.210", "joint_age_s=0.000",
+                  "gripper_age_s=0.000", "observation_check_age_s=0.210"):
+        assert field in message
+    assert len(node.command_pub.messages) == sent
+
+
+@pytest.mark.parametrize("bridge", [{"real_safety": True,
+    "interpolation": {"enabled": True, "publish_rate_hz": 300}}], indirect=True)
+def test_startup_440ms_gap_waits_for_recovery_without_sending_stop(bridge):
+    node, clock, feedback = bridge
+    node.publish_step()  # Seeing ready before the first observation must not arm.
+    assert not node.safety.was_ready and not node.startup_ready
+    clock[0] += .44
+    node._gripper_callback(SimpleNamespace(data=[0.] * 8))
+    node.publish_step()
+    node.step()
+    assert not node.safety.fault and not node.startup_ready
+    assert node.pending is None and not node.command_pub.messages
+    for _ in range(6):
+        node.safety.receive("ready")
+        feedback()
+        node.step()
+        node.publish_step()
+        clock[0] += .05
+    assert node.startup_ready and node.pending is not None
+    assert not node.safety.was_ready and not node.command_pub.messages
+    complete(node, .01)
+    feedback()
+    node.safety.receive("ready")
+    node.step()
+    node.publish_step()
+    assert node.command_pub.messages and node.safety.was_ready
+
+
+@pytest.mark.parametrize("bridge", [{"real_safety": True,
+    "interpolation": {"enabled": True, "publish_rate_hz": 300},
+    "motion_safety": {"protection_mode": "speed_only", "max_velocity_rad_s": 5.,
+                      "speed_limit_enabled_per_arm": [True, True, True, True, False, False, False]}}], indirect=True)
+def test_speed_only_bridge_ignores_heartbeat_and_feedback_age_and_accepts_late_model_result(bridge):
+    node, clock, feedback = bridge
+    assert not node.safety.monitor_heartbeat
+    assert node.cameras.config["camera_timing_checks_enabled"] is False
+    assert np.isfinite(node.cameras.config["max_camera_age_s"])
+    assert np.isfinite(node.cameras.config["max_camera_skew_s"])
+    import json
+    json.dumps(node.cameras.config, allow_nan=False)
+    node.step()
+    clock[0] += 10  # Neither heartbeat nor arm/gripper feedback is refreshed.
+    complete(node, .01)
+    node.step()
+    assert node.chunk is not None and node.chunk.observed_at == clock[0]
+    node.publish_step()
+    assert node.command_pub.messages and not node.safety.fault
+    sent = len(node.command_pub.messages)
+    node.safety.receive("fault:feedback_speed_joint_0")
+    node.publish_step()
+    assert len(node.command_pub.messages) == sent and node.safety.fault
+
+
+@pytest.mark.parametrize("signal_name", ["SIGINT", "SIGTERM"])
+def test_bridge_signal_shutdown_waits_for_active_ros_callbacks(tmp_path, monkeypatch, signal_name):
+    import subprocess
+    monkeypatch.setenv("ROS_LOG_DIR", str(tmp_path / "ros_logs"))
+    script = '''
+import os
+import signal
+import sys
+import threading
+import time
+import rclpy
+from rclpy.node import Node
+from pi05_bridge import run_bridge
+
+class TestNode(Node):
+    def __init__(self):
+        super().__init__("bridge_shutdown_test")
+        self.recorder = None
+        self.active = False
+        self.finished = False
+        self.timer = self.create_timer(.01, self.callback)
+    def callback(self):
+        self.timer.cancel()
+        self.active = True
+        threading.Timer(.01, lambda: os.kill(os.getpid(), getattr(signal, sys.argv[1]))).start()
+        time.sleep(.1)
+        assert rclpy.ok()
+        self.get_clock().now()
+        self.active = False
+        self.finished = True
+    def close(self):
+        assert self.finished and not self.active and rclpy.ok()
+        self.get_clock().now()
+
+assert run_bridge(TestNode) == 0
+assert not rclpy.ok()
+print("shutdown_clean")
+'''
+    result = subprocess.run([sys.executable, "-c", script, signal_name], cwd=ROOT / "deployment",
+                            capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "shutdown_clean" in result.stdout
+    assert "Destroyable" not in result.stderr and "never retrieved" not in result.stderr
+
+
+@pytest.mark.parametrize("bridge", [{"real_safety": True}], indirect=True)
+@pytest.mark.parametrize("fault", [False, True])
+def test_heartbeat_can_arrive_during_blocked_control_without_concurrent_cleanup(bridge, fault):
+    node, clock, feedback = bridge
+    node.step()
+    complete(node, .01)
+    entered, release = Event(), Event()
+    original = node.cameras.snapshot
+
+    def snapshot(now):
+        entered.set()
+        assert release.wait(2)
+        return original(now)
+
+    node.cameras.snapshot = snapshot
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        work = pool.submit(node.step)
+        try:
+            assert entered.wait(1)
+            generation = node.generation
+            for _ in range(5):
+                clock[0] += .05
+                feedback()
+                node.safety.receive("ready")
+            if fault:
+                node.safety.receive("fault:test_stop")
+                assert node.safety.fault == "fault:test_stop"
+            assert node.generation == generation
+        finally:
+            release.set()
+        work.result(timeout=2)
+    if fault:
+        assert not node.command_pub.messages and not node.gripper_pub.messages
+        assert node.generation > generation and node.last_command is None
+    else:
+        assert node.safety.ready() and not node.safety.fault
+        assert node.command_pub.messages
+
+
 @pytest.mark.parametrize("bridge", [{"interpolation": {"enabled": True}}], indirect=True)
 def test_interpolated_bridge_replans_continuously_and_dry_run_never_publishes(bridge):
     node, clock, feedback = bridge
@@ -502,16 +829,92 @@ def test_interpolated_bridge_replans_continuously_and_dry_run_never_publishes(br
     node.publish_step()
     clock[0] += 0.2
     feedback()
+    node.publish_step()
+    emitted = node.last_command.copy()
+    derivatives = node.last_sample_derivatives.copy()
     node.step()
-    old = node.interpolator
     complete(node, value=-0.001)
     clock[0] += 0.01
     node.step()
-    for derivative in range(4):
+    np.testing.assert_allclose(node.interpolator.trajectory.at(0), emitted[np.r_[0:7, 8:15]], atol=1e-8)
+    assert node.interpolator.started_at is None
+    for derivative in range(1, 4):
         np.testing.assert_allclose(
             node.interpolator.trajectory.at(0, derivative),
-            old.trajectory.at(clock[0] - old.started_at, derivative), atol=1e-6,
+            derivatives[derivative - 1], atol=1e-6,
         )
     node.publish_step()
     assert not node.command_pub.messages
     assert not node.gripper_pub.messages
+
+
+@pytest.mark.parametrize("bridge", [{"interpolation": {"enabled": True, "publish_rate_hz": 300},
+    "motion_safety": {"protection_mode": "speed_only", "max_velocity_rad_s": 5.}}], indirect=True)
+def test_planning_delay_does_not_skip_first_sample_or_replan_from_unpublished_state(bridge, monkeypatch):
+    from minimum_snap import MinimumSnapTrajectory
+    node, clock, feedback = bridge
+    original = MinimumSnapTrajectory.validate_limits
+
+    def slow_validation(self, *args):
+        result = original(self, *args)
+        clock[0] += .3
+        return result
+
+    monkeypatch.setattr(MinimumSnapTrajectory, "validate_limits", slow_validation)
+    actions = np.zeros((50, 16))
+    actions[:, 0] = np.arange(50) * .005
+    actions[5:, 7] = 1
+    node.step()
+    node.pending.set_result({"actions": actions.tolist()})
+    node.step()
+    assert node.interpolator.started_at is None and node.last_command is None
+    clock[0] += .25  # Delay the publication timer as well as planning.
+    feedback()
+    node.publish_step()
+    started = clock[0]
+    assert node.interpolator.started_at == started
+    assert node.command_pub.messages[-1].l_arm_des_msg[0] == pytest.approx(0, abs=1e-10)
+    assert node.last_command[7] == 0
+    for d in node.last_sample_derivatives:
+        np.testing.assert_allclose(d, 0, atol=1e-8)
+    clock[0] += .2
+    feedback()
+    node.publish_step()
+    assert node.last_command[7] == 1
+    emitted = node.last_command.copy()
+    derivatives = node.last_sample_derivatives.copy()
+    assert emitted[0] > .01 and abs(derivatives[0, 0]) > .01
+    node.step()  # Request replacement chunk.
+    assert node.pending is not None
+    node.pending.set_result({"actions": actions.tolist()})
+    clock[0] += .02
+    node.step()  # Another .3 seconds of planning, without publication.
+    assert node.interpolator.started_at is None
+    np.testing.assert_allclose(node.interpolator.trajectory.at(0), emitted[np.r_[0:7, 8:15]], atol=1e-9)
+    for order in range(1, 4):
+        np.testing.assert_allclose(node.interpolator.trajectory.at(0, order), derivatives[order - 1], atol=1e-7)
+    clock[0] += .1
+    feedback()
+    node.publish_step()
+    np.testing.assert_allclose(node.last_command[np.r_[0:7, 8:15]], emitted[np.r_[0:7, 8:15]], atol=1e-9)
+    np.testing.assert_allclose(node.last_sample_derivatives, derivatives, atol=1e-7)
+    assert not node.safety.fault
+
+
+@pytest.mark.parametrize("bridge", [{"real_safety": True, "interpolation": {"enabled": True},
+    "motion_safety": {"protection_mode": "speed_only", "max_velocity_rad_s": 5.}}], indirect=True)
+def test_failed_publication_does_not_replace_last_emitted_state(bridge):
+    node, clock, feedback = bridge
+    node.step()
+    complete(node, .001)
+    node.step()
+    node.publish_step()
+    last = node.last_command.copy()
+    derivatives = node.last_sample_derivatives.copy()
+    count = len(node.command_pub.messages)
+    clock[0] += .02
+    node.safety.publish_if_ready = lambda callback: False
+    node.publish_step()
+    np.testing.assert_array_equal(node.last_command, last)
+    np.testing.assert_array_equal(node.last_sample_derivatives, derivatives)
+    assert len(node.command_pub.messages) == count

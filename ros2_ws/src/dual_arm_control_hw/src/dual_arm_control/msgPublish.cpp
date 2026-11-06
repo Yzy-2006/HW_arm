@@ -294,7 +294,7 @@ ArmCtlNode::ArmCtlNode() : Node("dual_arm_control_node") ,
     upperMonitorMsg_get = this->create_subscription<ctl_msgs_hw::msg::MidNodeCtlMsgSend>(
         "/dexbotCtl/upperMonitor_msg_send",
         10,
-        std::bind(&ArmCtlNode::upperMonitor_msg_callback, this, std::placeholders::_1)
+        std::bind(&ArmCtlNode::upperMonitor_msg_callback, this, std::placeholders::_1, std::placeholders::_2)
     );
     upperMonitorMsg_send = this->create_publisher<ctl_msgs_hw::msg::MidNodeCtlMsgRet>(
         "/dexbotCtl/midMonitor_msg_send",
@@ -349,6 +349,11 @@ void ArmCtlNode::msg_publish()
 
     tempCtlData_pub.temp_time = TEMPTIME;   //发送迭代时间
     tempCtlData_pub.trajectory_sample = stream_sample_ && stream_sample_->derivatives_valid;
+    tempCtlData_pub.handoff_epoch = control_handoff_.value();
+    if (stream_sample_) tempCtlData_pub.trajectory_header = stream_sample_->trajectory_header;
+    tempCtlData_pub.policy_speed_checks_disabled = stream_sample_ &&
+        stream_sample_->policy_speed_checks_disabled &&
+        stream_sample_->trajectory_header.frame_id == "pi05_policy" && modCtlMsg_get.transMod == 3;
 
     //发送控制量
     tempCtlData_pub.runin_mod = runin_mod;
@@ -1720,8 +1725,12 @@ void ArmCtlNode::message_callback(const ctl_msgs_hw::msg::RetInformation::Shared
 }
 
 //从上位机获取的控制数据
-void ArmCtlNode::upperMonitor_msg_callback(const ctl_msgs_hw::msg::MidNodeCtlMsgSend::SharedPtr msg)
+void ArmCtlNode::upperMonitor_msg_callback(const ctl_msgs_hw::msg::MidNodeCtlMsgSend::SharedPtr msg,
+                                          const rclcpp::MessageInfo& info)
 {
+    const auto& gid = info.get_rmw_message_info().publisher_gid.data;
+    const ControlSource source{{std::begin(gid), std::end(gid)}, msg->ctl_trans_mod, msg->runin_mod,
+        msg->bridge_joint_stream, msg->derivatives_valid, msg->rigidity_ctl_mod_l, msg->rigidity_ctl_mod_r};
     if (msg->bridge_joint_stream) {
         const auto valid = [](const auto& values) {
             return values.size() == 7 && std::all_of(values.begin(), values.end(),
@@ -1735,7 +1744,8 @@ void ArmCtlNode::upperMonitor_msg_callback(const ctl_msgs_hw::msg::MidNodeCtlMsg
             RCLCPP_ERROR(get_logger(), "Rejected malformed bridge trajectory sample");
             return;
         }
-        if (stream_sample_ && stream_sample_->trajectory_header.stamp == msg->trajectory_header.stamp) return;
+        if (!control_handoff_.changed(source) && stream_sample_ &&
+            stream_sample_->trajectory_header.stamp == msg->trajectory_header.stamp) return;
         stream_sample_ = msg;
     } else {
         stream_sample_.reset();
@@ -1885,6 +1895,11 @@ void ArmCtlNode::upperMonitor_msg_callback(const ctl_msgs_hw::msg::MidNodeCtlMsg
         rArm_desVel_MDP_JntSpace[i] = msg->r_arm_des_vel_jntspace[i];
     }
 
+    if (control_handoff_.observe(source)) {
+        ifFirstTemp = true;
+        RCLCPP_INFO(get_logger(), "Upper controller handoff epoch=%llu mode=%d runin=%d; servo transition requested",
+                    static_cast<unsigned long long>(control_handoff_.value()), msg->ctl_trans_mod, msg->runin_mod);
+    }
     has_received_upperMonitor_command_ = true;
 }
 

@@ -226,20 +226,23 @@ metadata:
     assert 'raw_episodes' not in schema
 
 
-def test_recorder_callbacks_and_episode_boundaries(tmp_path,monkeypatch):
+@pytest.mark.parametrize('diagnostic_failure', [False, True])
+def test_recorder_callbacks_and_episode_boundaries(tmp_path,monkeypatch,diagnostic_failure):
     # Use the freshly generated real ROS message definitions, but a fake Node:
     # this exercises callback fields and service state without DDS or hardware.
     node_module=pytest.importorskip('rclpy.node')
     pytest.importorskip('ctl_msgs_hw.msg')
     from types import SimpleNamespace as NS
+    from rclpy.impl.rcutils_logger import RcutilsLogger
+    logger = RcutilsLogger(name='test_recorder_callbacks')
     class FakeNode:
         def __init__(self,name): self.callbacks={}
         def create_publisher(self,*args): return NS(publish=lambda msg:None)
         def create_timer(self,*args): pass
         def create_service(self,*args): pass
-        def create_subscription(self,typ,topic,callback,qos): self.callbacks[topic]=(typ,callback)
+        def create_subscription(self,typ,topic,callback,qos,**kwargs): self.callbacks[topic]=(typ,callback)
         def get_clock(self):return NS(now=lambda:NS(nanoseconds=1000000000))
-        def get_logger(self):return NS(info=lambda *a:None,warning=lambda *a:None,error=lambda *a:None)
+        def get_logger(self):return logger
         def destroy_node(self):pass
     monkeypatch.setattr(node_module,'Node',FakeNode)
     import record
@@ -248,14 +251,20 @@ def test_recorder_callbacks_and_episode_boundaries(tmp_path,monkeypatch):
     cfg.update(dataset_root=str(tmp_path),min_episode_frames=1,width=4,height=3)
     class Camera:
         def __init__(self): self.index=0;self.broken=False
+        def frame_metadata(self):
+            if self.broken and diagnostic_failure:
+                raise ValueError('camera diagnostics failed')
+            return {}
         def snapshot(self,now):
             if self.broken:raise ValueError('disconnected')
             self.index+=1
             return ({key:np.zeros((3,4,3),np.uint8) for key in cfg['cameras']},
-                    {key:{'frame_number':self.index} for key in cfg['cameras']})
+                    {key:{'frame_number':self.index, 'receive_monotonic_s':now} for key in cfg['cameras']})
     camera=Camera(); node=record.make_node(cfg,camera)
     reply=node.record(NS(data=True),NS())
-    assert not reply.success
+    assert reply.success
+    node.sample()
+    assert node.episode.frames == 0 and node.start_time is None
     values=sample()
     def deliver(topic,**fields):
         typ,callback=node.callbacks[topic]
@@ -275,6 +284,10 @@ def test_recorder_callbacks_and_episode_boundaries(tmp_path,monkeypatch):
     assert node.record(NS(data=True),NS()).success
     node.sample()
     assert node.episode.frames==1
+    # Real rclpy logger: INFO -> WARN -> INFO must use distinct call sites.
+    node.log_diagnostics(force=True)
+    node.log_diagnostics(force=True, failure=True)
+    node.log_diagnostics(force=True)
     assert node.record(NS(data=False),NS()).success
     assert node.episode is None
     saved=[p for p in tmp_path.glob('episode_*') if not p.name.endswith('.partial')]
@@ -282,9 +295,13 @@ def test_recorder_callbacks_and_episode_boundaries(tmp_path,monkeypatch):
     _,rows=load_episode(saved[0])
     assert rows[0]['joint_target']==values['joint_target']
     feed(); assert node.record(NS(data=True),NS()).success
+    feed()
     node.sample(); assert node.discard(None,NS()).success
     feed(); assert node.record(NS(data=True),NS()).success
+    feed(); node.sample()
     camera.broken=True;node.sample()
     assert node.episode is None
     assert len(list(tmp_path.glob('*.partial')))==1
     node.close()
+    aborted = json.loads(next(tmp_path.glob('*.partial/episode.json')).read_text())
+    assert aborted['status'] == 'aborted' and aborted['reason'] == 'disconnected'

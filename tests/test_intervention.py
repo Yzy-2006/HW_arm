@@ -114,3 +114,41 @@ def test_missing_controller_still_pauses_immediately(handoff):
     assert not manager.request(True)[0]
     assert calls == [("pause",)]
     assert manager.mode == "paused"
+
+
+def test_save_waits_for_writer_ack_beyond_controller_timeout(handoff):
+    manager, calls, clock = handoff
+    manager.mode = 'vr'
+    manager.recording = True
+    manager.request(False)
+    ack(manager, calls)
+    assert manager.stage == 'saved'
+    clock[0] = 6.
+    manager.tick()
+    assert manager.mode == 'saving' and ('resume',) not in calls
+    ack(manager, calls)
+    assert manager.mode == 'policy' and calls[-1] == ('resume',)
+
+
+@pytest.mark.parametrize('outcome', ['ready', 'failed', 'timeout'])
+def test_vr_waits_for_first_captured_frame(handoff, outcome):
+    manager, calls, clock = handoff
+    ready = [False]
+    manager.recorder_ready = lambda: ready[0]
+    manager.request(True)
+    ack(manager, calls)
+    ack(manager, calls)
+    manager.tick()
+    assert manager.mode == 'arming_vr' and manager.pending is None
+    assert not manager.request(False)[0]
+    if outcome == 'ready':
+        ready[0] = True
+    elif outcome == 'failed':
+        manager.recorder_ready = lambda: (_ for _ in ()).throw(RuntimeError('Missing streams: tcp'))
+    else:
+        clock[0] += manager.startup_timeout_s + .1
+    manager.tick()
+    assert manager.mode == ('vr' if outcome == 'ready' else 'paused')
+    if outcome == 'failed':
+        assert 'tcp' in manager.error
+    assert ('resume',) not in calls

@@ -37,8 +37,10 @@
 #include "JntController/JntTestCtl.h"
 #include "JntController/ForceComp.h"
 #include "JntController/retZeroControl.h"
+#include "servo_control/homingHandoff.h"
 
 #include "ctl_msgs_hw/msg/ctl_information.hpp"
+#include "ctl_msgs_hw/msg/handoff_status.hpp"
 #include "ctl_msgs_hw/msg/ret_information.hpp"
 #include "ctl_msgs_hw/msg/jnt_comp_res_visu.hpp"
 #include "ctl_msgs_hw/msg/dbg_information.hpp"
@@ -157,6 +159,8 @@ class ServoNode : public rclcpp::Node {
 
     private:
         rclcpp::Publisher<std_msgs::msg::String>::SharedPtr safety_pub_;
+        rclcpp::Publisher<ctl_msgs_hw::msg::HandoffStatus>::SharedPtr handoff_pub_;
+        std_msgs::msg::Header last_source_header_;
         rclcpp::Subscription<std_msgs::msg::String>::SharedPtr safety_stop_;
         rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr safety_reset_;
         rclcpp::TimerBase::SharedPtr safety_timer_;
@@ -184,6 +188,8 @@ class ServoNode : public rclcpp::Node {
         bool has_received_command_;     //当该标志位为false -- 非使能状态； 当标志位为true -- 使能状态
         bool ifFirstTemp;
         bool trajectory_sample_ = false;
+        HomingHandoff homing_handoff_;
+        bool startup_homing_ = true;
 
         // Arm zero calibration is an explicit, isolated mode.  It must never
         // fall through to the normal homing or upper-controller path.
@@ -192,6 +198,8 @@ class ServoNode : public rclcpp::Node {
         bool right_arm_zero_calibration_ = false;
         bool both_arm_zero_calibration_ = false;
         bool can_channel_scan_ = false;
+        bool feedback_only_ = false;
+        std::string motor_zero_joint_;
         std::vector<double> left_arm_calibration_hold_positions_;
         std::vector<double> right_arm_calibration_hold_positions_;
         void apply_arm_zero_calibration_commands(
@@ -345,7 +353,6 @@ class ServoNode : public rclcpp::Node {
         int gripper_otputTimes;
         void gripperTorOutp();
 
-        bool ifShallInit = true;
 
         //-----夹爪限幅-----
 

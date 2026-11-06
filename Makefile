@@ -14,6 +14,7 @@ RATE ?= 3
 TARGET ?= both
 DATASET_ROOT ?= $(ROOT)/data/raw/fold_towel
 EXPORT_CONFIG ?= $(ROOT)/config/export_lerobot.yaml
+MIN_JOINT_DELTA_RAD ?= 0.02
 PI05_CONFIG ?= $(ROOT)/config/pi05_deployment.yaml
 PI05_MODEL ?= $(HOME)/models/pi05-encos-fold-towel-93
 PI05_ENV ?= pi05-openpi
@@ -42,7 +43,7 @@ export TOWEL_OPENROBOTS_PREFIX="$(OPENROBOTS_PREFIX)"
 source "$(ROOT)/scripts/env.sh"
 endef
 
-.PHONY: help env check check-control check-record check-visualize build test launch visualize sim-check sim-demo sim teleop experiment teleop-watch preview camera-list servo arms robot vr vr-opencv vr-debug record record-opencv record-rviz watch watch-arm calibrate calibrate-arm-zero scan-arm-can save-arm-zero validate-data export-data pi05 pi05-bench act bridge motion replay clean-build
+.PHONY: help env check check-control check-record check-visualize build test launch visualize sim-check sim-demo sim teleop experiment teleop-watch preview camera-list servo arms robot vr vr-opencv vr-debug record record-opencv record-rviz watch watch-arm calibrate calibrate-arm-zero scan-arm-can save-arm-zero validate-data export-data filter-data pi05 pi05-bench act bridge motion replay clean-build
 
 help:
 	@echo "Towel task commands"
@@ -53,6 +54,8 @@ help:
 	@echo "  make watch                  Observe /towel/gripper_state (override WATCH_TOPIC=... )"
 	@echo "  make watch-arm SIDE=both RATE=3  Print one or both arms' joint angles at a controlled rate"
 	@echo "  make servo                  Start only the servo node"
+	@echo "  make read-motors            Query all configured motors; no homing or motion commands"
+	@echo "  make zero-motor SIDE=left JOINT=2  Set ONE arm motor's internal zero at its current pose"
 	@echo "  make camera-list            List connected RealSense serial numbers"
 	@echo "  make preview                Show three OpenCV camera windows without recording"
 	@echo "  make record                 Recorder plus three OpenCV camera windows"
@@ -71,6 +74,7 @@ help:
 	@echo "  make save-arm-zero SIDE=left|right|both [TARGET=joint|cartesian|both|preset]  Save zero poses or right-B preset (default: both zero files)"
 	@echo "  make validate-data          Validate completed raw episodes"
 	@echo "  make export-data OUTPUT=/absolute/output [EXPORT_CONFIG=...]  Export with the training environment"
+	@echo "  make filter-data DATASET=/path/to/lerobot OUTPUT=/new/path MIN_JOINT_DELTA_RAD=0.02  Offline motion filtering (training environment; ARGS=--dry-run for counts only)"
 	@echo "  make pi05                         Start the OpenPI PI05 worker"
 	@echo "  make pi05-bench                   Benchmark PI05 inference without robot hardware"
 	@echo "  make act                          Start the LeRobot ACT worker"
@@ -106,9 +110,11 @@ check-visualize:
 build:
 	@$(ROBOT_ENV)
 	@bash "$(ROOT)/scripts/build.sh" || exit $$?
-	@echo "Granting EtherCAT network capabilities to $(SERVO_NODE) ..."
-	@sudo setcap cap_net_raw,cap_net_admin+ep "$(SERVO_NODE)" || exit $$?
-	@getcap "$(SERVO_NODE)"
+	@servo_binary="$$(readlink -f -- "$(SERVO_NODE)")" || exit $$?
+	@if [[ ! -f "$$servo_binary" || ! -x "$$servo_binary" ]]; then echo "Servo executable not found: $(SERVO_NODE)" >&2; exit 2; fi
+	@echo "Granting EtherCAT network capabilities to $$servo_binary ..."
+	@sudo setcap cap_net_raw,cap_net_admin+ep "$$servo_binary" || exit $$?
+	@getcap "$$servo_binary"
 
 test:
 	@$(ROBOT_ENV)
@@ -161,6 +167,25 @@ teleop-watch: watch
 servo:
 	@$(ROBOT_ENV)
 	@bash "$(ROOT)/scripts/run.sh" servo $(ARGS)
+
+.PHONY: read-motors
+read-motors:
+	@$(MAKE) --no-print-directory servo ARGS="--ros-args -p feedback_only:=true"
+
+.PHONY: zero-motor
+zero-motor:
+	@if [[ "$(SIDE)" != "left" && "$(SIDE)" != "right" ]]; then echo "Usage: make zero-motor SIDE={left|right} JOINT={1..7}" >&2; exit 2; fi
+	@case "$(JOINT)" in
+	  1) joint_name=shoulder_pitch;;
+	  2) joint_name=shoulder_roll;;
+	  3) joint_name=shoulder_yaw;;
+	  4) joint_name=elbow;;
+	  5) joint_name=wrist_roll;;
+	  6) joint_name=wrist_pitch;;
+	  7) joint_name=wrist_yaw;;
+	  *) echo "JOINT must be exactly one integer from 1 to 7" >&2; exit 2;;
+	 esac
+	@$(MAKE) --no-print-directory servo ARGS="--ros-args -p motor_zero_joint:=$(SIDE)_$${joint_name}_joint"
 
 calibrate-arm-zero:
 	@if [[ "$(SIDE)" != "left" && "$(SIDE)" != "right" && "$(SIDE)" != "both" ]]; then echo "Usage: make calibrate-arm-zero SIDE={left|right|both}"; exit 2; fi
@@ -225,6 +250,10 @@ validate-data:
 export-data:
 	@if [[ -z "$(OUTPUT)" ]]; then echo "Usage: make export-data OUTPUT=/absolute/path (run in towel-pi05 environment)"; exit 2; fi
 	@python3 "$(ROOT)/collection/export_lerobot.py" --root "$(DATASET_ROOT)" --output "$(OUTPUT)" --repo-id local/fold_towel --config "$(EXPORT_CONFIG)"
+
+filter-data:
+	@if [[ -z "$(DATASET)" ]]; then echo "Usage: make filter-data DATASET=/path/to/lerobot OUTPUT=/new/path MIN_JOINT_DELTA_RAD=0.02 [ARGS=--dry-run] (run in the LeRobot environment)"; exit 2; fi
+	@python3 "$(ROOT)/collection/filter_lerobot.py" --dataset "$(DATASET)" --min-joint-delta-rad "$(MIN_JOINT_DELTA_RAD)" $(if $(OUTPUT),--output "$(OUTPUT)") $(ARGS)
 
 pi05:
 	set -e

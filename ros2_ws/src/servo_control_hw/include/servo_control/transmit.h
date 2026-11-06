@@ -20,9 +20,12 @@
 #include <pthread.h>
 #include <utility>
 #include "servo_control/armSafetyGuard.h"
+#include "servo_control/motorPositionOffsets.h"
 
 extern ArmSafetyGuard arm_safety;
+extern MotorPositionOffsets motor_position_offsets;
 double arm_safety_now();
+void MotorFeedbackQueryStep(bool print_feedback);
 
 #include "ros_controller/rosLoopMsgDefine.h"
 
@@ -39,6 +42,7 @@ extern "C" {
 #endif
 
 #define feedbackANAMOD (1)      //回传信息解析模式选择：类型1
+MotorBlock MotorSingleExchange(int channel, int motor_id, const MotorBlock& request, bool& valid_wkc);
 
 /*      by 霜云喵
 -----------------------

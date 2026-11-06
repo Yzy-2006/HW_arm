@@ -172,6 +172,79 @@ make replay ARGS="--dataset /home/yanziyu/datasets/fold-towel-93 --episode 0 --s
 make replay ARGS="--dataset /home/yanziyu/datasets/fold-towel-93 --episode 0 --start-frame 300 --max-frames 60 --slow-factor 0.1 --motion"
 ```
 
+## 独立的首帧接近段
+
+当前 `bridge.motion_safety.protection_mode: speed_only` 关闭非限速保护：
+回放不等待安全心跳，不检查缓存反馈年龄、跟踪误差或反馈相对目标偏移；
+接近段结束后直接开始数据回放，不执行下文的首帧接管/反馈到位确认。
+首次有效关节/夹爪反馈、有限数值与协议检查、显式停止和底层故障锁存仍保留。
+接近轨迹及底层接管的平滑规划继续执行。下文的到位等待规则可通过将模式设为 `full` 恢复。
+
+真机回放先从新鲜的关节反馈位置接近所选片段的首帧，再开始数据回放计时。
+接近段与数据段分别规划、检查，不再要求机械臂在一个数据帧间隔内赶到首帧。
+接近段采用首尾速度、加速度、jerk 均为零的两点 minimum-snap 曲线；时长根据
+14 个关节中的最大位移及速度、加速度限制计算，保留 5% 的时间余量。
+
+`config/pi05_deployment.yaml` 中的默认参数为：
+
+```yaml
+bridge:
+  replay_approach:
+    max_velocity_rad_s: 5.0
+    max_acceleration_rad_s2: 1.0
+    min_duration_s: 1.0
+    position_tolerance_rad: 0.1
+    velocity_tolerance_rad_s: 0.05
+    settle_time_s: 0.2
+    settle_timeout_s: 10.0
+```
+
+实际接近限制还会取回放 `motion_safety` 和底层 `homingHandoff` 对应限制中的较小值。
+当前 `bridge.motion_safety.speed_limit_enabled_per_arm` 和底层 `armSafety` 的同名配置
+均为 `[true, true, true, true, false, false, false]`，分别应用于左右臂的 J1-J7。
+只有每臂前四个关节启用软件限速；后三个腕关节不参与速度预检查、指令差分限速、
+反馈超速保护和接近/接管速度上限。接近段的加速度平滑仍应用于全部关节。
+首帧等待仍要求所有关节反馈速度不超过 0.05 rad/s；这是开始播放的稳定条件。
+修改限速范围时需同步两处配置，重启 servo 和回放/部署进程。
+当前 `bridge.motion_safety.max_acceleration_rad_s2: null` 关闭回放和模型部署的
+加速度保护检查（轨迹预检查、相邻指令差分、解析加速度），速度检查仍启用。
+该设置不取消接近段和底层衔接段用于平滑规划的加速度参数；其他保护保持原配置。
+将 `null` 改成正数可恢复加速度检查，重启回放/部署进程生效，无需编译。
+当前 `bridge.motion_safety.check_position_limits: false` 也关闭 Python 回放/部署的
+绝对关节位置检查：接近段与数据段预检查、反馈越界检查，以及目标的 URDF 限位裁剪。
+速度检查、有限数值检查、反馈时效、跟踪误差和反馈相对目标偏移限制仍保留。
+设为 `true` 可恢复绝对位置检查；该项缺省为 `true`，不修改 URDF 或电机硬件限位。
+例如最大位移为 0.2 rad 时，当前接近时长约 1.29 秒；0.5 rad 时约 2.04 秒。
+接近和到位等待期间夹爪保持起始反馈对应的开闭状态，不提前执行数据集首帧的夹爪动作。
+
+日志先输出 `Approach planned` 及计算时长，随后输出
+`Approach trajectory finished; waiting for servo handoff and first-frame arrival`。
+这时继续以原发布频率发送首帧静止目标（不切换 `hold_position` 或重置控制模式），
+数据帧和回放时钟均暂停。只有以下条件持续满足 0.2 秒，才开始回放：
+
+- 收到新鲜的 `/towel/control/handoff`，确认底层接管完成且输出已对齐首帧。
+- 状态中的原始指令时间戳不早于本次等待阶段发出的首帧指令，防止误用上次接管结果。
+- 14 个关节的新鲜反馈均距首帧不超过 0.1 rad，反馈速度绝对值不超过 0.05 rad/s。
+
+随后打印 `First frame confirmed and servo handoff complete; starting dataset replay`。
+等待超过 10 秒会锁存故障，日志说明是接管未完成、反馈未到位还是状态缺失；不会强行播放。
+`check_position_limits: false` 关闭的是绝对位置限位，不关闭这项首帧相对到位条件。
+`--speed` 只调整数据段帧间隔，接近时长独立计算。关闭数据段插值时也保留接近段；
+dry-run/RViz 没有真机起始反馈，从数据集首帧直接开始预览。
+
+接近段和 minimum-snap 数据段会在首次运动发布前完成预检查。数据段自身超限仍会
+报错，不自动放宽限制或改变 `--speed`。两段以首帧静止边界衔接，可能改变数据段
+开头的加速度峰值，因此需要重新检查所选速度。
+
+CSV 增加 `phase` 列：接近段为 `approach`、`dataset_frame=-1`、`source_knot=0`；
+等待到位为 `settling`，同样不占用数据帧、不标记原始点；
+数据段为 `replay`，从实际选择的 `--start-frame` 开始标记原始点。接近期间的
+`dataset_*` 列是待接近的首帧目标，不表示已播放该帧。
+
+此流程需要新增的 `HandoffStatus` 消息和底层状态发布器，首次升级后须重建消息及三个
+控制节点，并一起重启 `make servo`、`make arms`、`make robot`。旧版伺服没有该状态话题，
+会导致等待超时；不要在缺少状态确认时绕过等待直接播放。
+
 ## 速度和安全限制
 
 脚本使用 `config/pi05_deployment.yaml` 中的：

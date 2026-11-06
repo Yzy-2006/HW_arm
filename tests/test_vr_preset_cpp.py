@@ -74,3 +74,19 @@ def test_vr_handoff_reanchors_feedback_clears_deltas_and_never_returns_home(pres
     (config / "controllerConfig.yaml").write_text(yaml.safe_dump(control))
     subprocess.run([str(preset_executable), str(tmp_path), "handoff"],
                    check=True, capture_output=True, text=True)
+
+
+def test_vr_handoff_reports_arm_axis_value_and_limits(preset_executable, tmp_path):
+    config = tmp_path / "config"
+    config.mkdir()
+    control = yaml.safe_load((CONFIG / "controllerConfig.yaml").read_text())
+    limits = control["vrTeleoperationLimit"]
+    limits["position_enabled"] = limits["orientation_enabled"] = True
+    for side in ("left_arm", "right_arm"):
+        limits[side] = {
+            "position_min": [-1.] * 3, "position_max": [1.] * 3,
+            "rpy_min": [-1.] * 3, "rpy_max": [1.] * 3,
+        }
+    (config / "controllerConfig.yaml").write_text(yaml.safe_dump(control))
+    subprocess.run([str(preset_executable), str(tmp_path), "handoff_limits"],
+                   check=True, capture_output=True, text=True)

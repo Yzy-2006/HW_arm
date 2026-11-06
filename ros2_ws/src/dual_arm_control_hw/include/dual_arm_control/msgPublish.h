@@ -14,6 +14,7 @@
 #include "rclcpp/rclcpp/rclcpp.hpp"
 
 #include"controller/ArmInterface.h"
+#include "controller/controlHandoffEpoch.h"
 
 #include <std_msgs/msg/string.hpp>
 #include <tf2_ros/transform_broadcaster.h>
@@ -392,6 +393,7 @@ class ArmCtlNode : public rclcpp::Node{
         //----------通讯变量----------
         ctl_msgs_hw::msg::MidNodeCtlMsgSend::SharedPtr stream_sample_;
         std::vector<double> stream_acceleration_;
+        ControlHandoffEpoch control_handoff_;
 
         std::string ifname_;
         rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr set_joint_service_;
@@ -565,7 +567,8 @@ class ArmCtlNode : public rclcpp::Node{
         void message_callback(const ctl_msgs_hw::msg::RetInformation::SharedPtr msg);
 
         //上位机发送消息回调函数
-        void upperMonitor_msg_callback(const ctl_msgs_hw::msg::MidNodeCtlMsgSend::SharedPtr msg);
+        void upperMonitor_msg_callback(const ctl_msgs_hw::msg::MidNodeCtlMsgSend::SharedPtr msg,
+                                       const rclcpp::MessageInfo& info);
 };
 
 //============================================================

@@ -24,8 +24,9 @@ import numpy as np
 import yaml
 
 from pi05_bridge import _as_vector, limit_action, load_joint_limits, load_pd
-from motion_safety import MotionFault, CommandSafety, attach_safety
+from motion_safety import MotionFault, CommandSafety, attach_safety, configured_position_limits, speed_limit_mask, speed_only_mode
 from minimum_snap import JOINT_INDICES, MinimumSnapTrajectory, interpolation_settings, validate_controller_rate
+from replay_start import ReplayStartGate, stamp_ns
 
 
 LOG = logging.getLogger("replay_dataset")
@@ -138,7 +139,7 @@ class ReplayRecorder:
                feedback: np.ndarray | None,
                *, gripper_feedback: np.ndarray | None = None,
                interpolated: np.ndarray | None = None,
-               source_knot: bool = False) -> None:
+               source_knot: bool = False, phase: str = "replay") -> None:
         dataset_action = np.asarray(dataset_action, dtype=np.float64).reshape(-1)
         if dataset_action.shape != (14,) or not np.isfinite(dataset_action).all():
             raise ValueError("Dataset action angles must contain 14 finite values")
@@ -165,6 +166,7 @@ class ReplayRecorder:
             "dataset_frame": int(frame),
             "elapsed_s": time.monotonic() - self.started_at,
             "source_knot": int(bool(source_knot)),
+            "phase": phase,
         }
         for label, value in zip(JOINT_LABELS, dataset_action):
             row[f"dataset_{label}"] = float(value)
@@ -182,7 +184,7 @@ class ReplayRecorder:
     def fields(self) -> list[str]:
         return [
             "sample", "dataset_frame", "elapsed_s",
-            "source_knot",
+            "source_knot", "phase",
             *(f"dataset_{label}" for label in JOINT_LABELS),
             *(f"command_{label}" for label in JOINT_LABELS),
             *(f"interpolated_{label}" for label in JOINT_LABELS),
@@ -443,7 +445,7 @@ def create_replay_node(args, actions: np.ndarray, fps: float, recorder: ReplayRe
     import rclpy
     from rclpy.node import Node
     from rclpy.qos import qos_profile_sensor_data
-    from ctl_msgs_hw.msg import BridgeCtlMsg, GripperCtl, MidNodeCtlMsgRet
+    from ctl_msgs_hw.msg import BridgeCtlMsg, GripperCtl, MidNodeCtlMsgRet, HandoffStatus
     from std_msgs.msg import Float64MultiArray
     JointState = None
     if getattr(args, "rviz", False):
@@ -452,12 +454,14 @@ def create_replay_node(args, actions: np.ndarray, fps: float, recorder: ReplayRe
     config_path = Path(args.config).expanduser().resolve()
     config = _read_yaml(config_path)
     bridge_cfg = config.get("bridge", {})
+    speed_only = speed_only_mode(bridge_cfg)
     slow_factor = _resolve_slow_factor(args.slow_factor, bridge_cfg)
     gripper_cfg = _read_yaml((ROOT / config.get("gripper_config", "teleop/VR_controller/config/grippers.yaml")).resolve())
     controller_cfg = _read_yaml((ROOT / config.get("controller_config", "ros2_ws/src/ctl_msgs_hw/config/controllerConfig.yaml")).resolve())
     urdf_path = (ROOT / config.get("urdf", "ros2_ws/src/dual_arm_hw/urdf/dual_arm.urdf")).resolve()
     pd_path = (ROOT / config.get("pd_config", "ros2_ws/src/ctl_msgs_hw/config/initialPD.yaml")).resolve()
     lower, upper = load_joint_limits(urdf_path)
+    lower, upper = configured_position_limits(bridge_cfg, lower, upper)
     pd_level = str(bridge_cfg.get("pd_level", "mid")).strip().lower()
     rigidity_by_level = {"low": 1, "mid": 2, "high": 3, "superhigh": 7}
     if pd_level not in rigidity_by_level:
@@ -470,6 +474,8 @@ def create_replay_node(args, actions: np.ndarray, fps: float, recorder: ReplayRe
     if np.any(max_step <= 0):
         raise ValueError("max_joint_step_rad must be positive")
     max_step *= slow_factor
+    if speed_only:
+        max_step.fill(np.inf)
     from pi05_bridge import GripperState
     gripper = GripperState(gripper_cfg)
     controller_grippers = controller_cfg.get("gripperControl", {})
@@ -492,6 +498,7 @@ def create_replay_node(args, actions: np.ndarray, fps: float, recorder: ReplayRe
             self.actions = actions
             self.index = 0
             self.joints = None
+            self.joint_velocity = None
             self.joint_received_at = 0.0
             self.gripper_feedback = None
             self.gripper_feedback_at = 0.0
@@ -502,7 +509,10 @@ def create_replay_node(args, actions: np.ndarray, fps: float, recorder: ReplayRe
             self.safety = None
             self.command_safety = CommandSafety(bridge_cfg, lower, upper, now=time.monotonic)
             self.trajectory = None
+            self.approach = None
             self.trajectory_started_at = None
+            self.dataset_started_at = None
+            self.start_gate = ReplayStartGate(bridge_cfg.get("replay_approach", {}), state_timeout)
             self.trajectory_start_index = 0
             self.last_log_at = -float("inf")
             self.initial_grippers = None
@@ -518,9 +528,12 @@ def create_replay_node(args, actions: np.ndarray, fps: float, recorder: ReplayRe
                                          qos_profile_sensor_data)
                 self.create_subscription(Float64MultiArray, "/gripper/fdb", self._gripper_callback,
                                          qos_profile_sensor_data)
+                self.create_subscription(HandoffStatus, "/towel/control/handoff", self._handoff_callback, 1)
             self.timer = self.create_timer(1.0 / publish_rate_hz, self.step)
             if self.motion:
-                self.safety = attach_safety(self, self._fault)
+                self.safety = attach_safety(self, self._fault, monitor_heartbeat=not speed_only)
+                if speed_only:
+                    self.get_logger().warning("Speed-only protection: heartbeat, feedback age, tracking, position and first-frame arrival checks disabled; explicit faults/stops remain active")
             self.get_logger().warning(
                 f"dataset replay {'MOTION' if self.motion else 'DRY-RUN'}: "
                 f"frames={len(actions)} rate={fps * args.speed:g}Hz slow_factor={slow_factor:g} "
@@ -534,6 +547,12 @@ def create_replay_node(args, actions: np.ndarray, fps: float, recorder: ReplayRe
             if left.shape == (7,) and right.shape == (7,) and np.isfinite(np.r_[left, right]).all():
                 self.joints = np.r_[left, right]
                 self.joint_received_at = time.monotonic()
+                velocity = np.r_[getattr(msg, "l_arm_spd_fdback", []), getattr(msg, "r_arm_spd_fdback", [])]
+                self.joint_velocity = velocity if velocity.shape == (14,) and np.isfinite(velocity).all() else None
+
+        def _handoff_callback(self, msg):
+            self.start_gate.observe(stamp_ns(msg.source_header.stamp), msg.complete,
+                                    msg.commanded_position, time.monotonic())
 
         def _gripper_callback(self, msg):
             values = np.asarray(msg.data, dtype=np.float64)
@@ -592,13 +611,17 @@ def create_replay_node(args, actions: np.ndarray, fps: float, recorder: ReplayRe
                 return
             now = time.monotonic()
             if self.motion:
-                if (self.joints is None or now - self.joint_received_at > state_timeout
-                        or now - self.gripper_feedback_at > state_timeout):
+                if (self.joints is None or self.gripper_feedback is None
+                        or not np.isfinite(self.gripper_feedback[[0, 4]]).all()
+                        or (not speed_only and (now - self.joint_received_at > state_timeout
+                            or now - self.gripper_feedback_at > state_timeout))):
                     if self.last_command is not None:
                         raise MotionFault("Joint or gripper feedback lost during replay")
                     self._publish_hold()
                     self.reanchor = True
                     self.trajectory = None
+                    self.trajectory_started_at = None
+                    self.dataset_started_at = None
                     if now - self.last_log_at >= 1.0:
                         self.last_log_at = now
                         self.get_logger().warning(
@@ -610,44 +633,109 @@ def create_replay_node(args, actions: np.ndarray, fps: float, recorder: ReplayRe
                 state = self.actions[self.index].copy()
             finished = False
             velocity = acceleration = None
-            if interpolate:
-                if self.trajectory is None:
-                    remaining = self.actions[self.index:]
+            if self.trajectory_started_at is None:
+                remaining = self.actions[self.index:]
+                if interpolate:
+                    # A single-frame replay holds that frame for one source period.
+                    points = remaining[:, JOINT_INDICES]
+                    if len(points) == 1:
+                        points = np.repeat(points, 2, axis=0)
                     self.trajectory = MinimumSnapTrajectory(
-                        np.arange(len(remaining) + 1) * period,
-                        np.vstack([state[JOINT_INDICES], remaining[:, JOINT_INDICES]]),
+                        np.arange(len(points)) * period, points,
                     )
                     if self.motion:
-                        self.trajectory.validate_limits(lower, upper, self.command_safety.max_velocity,
-                                                        self.command_safety.max_acceleration)
-                    self.trajectory_start_index = self.index
-                    self.trajectory_started_at = time.monotonic()
-                    self.initial_grippers = gripper.update(self.gripper_feedback) if self.motion else state[[7, 15]]
-                elapsed = max(0.0, time.monotonic() - self.trajectory_started_at)
+                        try:
+                            self.trajectory.validate_limits(lower, upper, self.command_safety.velocity_limits,
+                                                            self.command_safety.max_acceleration)
+                        except MotionFault as exc:
+                            raise MotionFault(f"Dataset replay segment: {exc}") from exc
+                if self.motion:
+                    settings = bridge_cfg.get("replay_approach", {})
+                    handoff = controller_cfg.get("homingHandoff", {})
+                    v = float(settings.get("max_velocity_rad_s", 0.3))
+                    a = float(settings.get("max_acceleration_rad_s2", 0.5))
+                    min_duration = float(settings.get("min_duration_s", 1.0))
+                    handoff_v = float(handoff.get("max_speed_rad_s", 0.3))
+                    handoff_a = float(handoff.get("max_acceleration_rad_s2", 0.5))
+                    if not np.isfinite([v, a, min_duration, handoff_v, handoff_a]).all() or min(
+                            v, a, min_duration, handoff_v, handoff_a) <= 0:
+                        raise ValueError("Invalid replay_approach or homingHandoff limits")
+                    replay_mask = speed_limit_mask(bridge_cfg.get("motion_safety", {}))
+                    servo_mask = speed_limit_mask(controller_cfg.get("armSafety", {}))
+                    velocity_limits = np.minimum(
+                        np.where(replay_mask, v, np.inf),
+                        np.where(servo_mask, handoff_v, np.inf))
+                    velocity_limits = np.minimum(velocity_limits, self.command_safety.velocity_limits)
+                    a = min(a, handoff_a)
+                    if self.command_safety.max_acceleration is not None:
+                        a = min(a, self.command_safety.max_acceleration)
+                    self.approach = MinimumSnapTrajectory.rest_to_rest(
+                        state[JOINT_INDICES], remaining[0, JOINT_INDICES], velocity_limits, a, min_duration,
+                    )
+                    try:
+                        self.approach.validate_limits(lower, upper, velocity_limits, a)
+                    except MotionFault as exc:
+                        raise MotionFault(f"Approach to first frame: {exc}") from exc
+                    self.get_logger().info(
+                        f"Approach planned: duration={self.approach.duration:.3f}s "
+                        f"max_distance={np.max(np.abs(state[JOINT_INDICES] - remaining[0, JOINT_INDICES])):.6f}rad "
+                        f"speed_limits_rad_s={velocity_limits.tolist()} acceleration_limit={a:g}rad/s^2"
+                    )
+                self.trajectory_start_index = self.index
+                self.initial_grippers = gripper.update(self.gripper_feedback) if self.motion else state[[7, 15]]
+                self.trajectory_started_at = time.monotonic()
+                self.dataset_started_at = None if self.motion else self.trajectory_started_at
+            sample_time = time.monotonic()
+            approaching = self.dataset_started_at is None
+            settling = False
+            if approaching and sample_time - self.trajectory_started_at >= self.approach.duration:
+                if speed_only:
+                    self.dataset_started_at = sample_time
+                    approaching = False
+                    self.get_logger().info("Approach finished; first-frame arrival checks disabled (speed_only); starting dataset replay")
+                elif self.start_gate.started is None:
+                    self.get_logger().info("Approach trajectory finished; waiting for servo handoff and first-frame arrival")
+                target_joints = self.actions[self.trajectory_start_index, JOINT_INDICES]
+                if not speed_only and self.start_gate.update(sample_time, target_joints, self.joints, self.joint_velocity,
+                                          self.joint_received_at):
+                    # Start at frame zero only after this command is acknowledged
+                    # and physical feedback has remained settled.
+                    self.dataset_started_at = sample_time
+                    approaching = False
+                    self.get_logger().info("First frame confirmed and servo handoff complete; starting dataset replay")
+                elif not speed_only:
+                    settling = True
+            if approaching:
+                elapsed = max(0.0, sample_time - self.trajectory_started_at)
+                raw = self.actions[self.index]
+                target = raw.copy()
+                target[JOINT_INDICES] = self.approach.at(elapsed)
+                target[[7, 15]] = self.initial_grippers
+                velocity = self.approach.at(elapsed, 1)
+                acceleration = self.approach.at(elapsed, 2)
+            elif interpolate:
+                elapsed = max(0.0, sample_time - self.dataset_started_at)
                 finished = elapsed >= self.trajectory.duration - 1e-9
                 if finished:
                     elapsed = self.trajectory.duration
-                # The initial interval joins feedback to frame zero. Grippers
-                # stay discrete and advance only when their source frame is due.
-                offset = max(0, int(np.floor(elapsed / period + 1e-9)) - 1)
+                # Grippers advance only when their dataset frame is due.
+                offset = max(0, int(np.floor(elapsed / period + 1e-9)))
                 self.index = min(self.trajectory_start_index + offset, len(self.actions) - 1)
                 raw = self.actions[self.index]
                 target = raw.copy()
                 target[JOINT_INDICES] = self.trajectory.at(elapsed)
                 velocity = self.trajectory.at(elapsed, 1)
                 acceleration = self.trajectory.at(elapsed, 2)
-                if elapsed < period:
-                    target[[7, 15]] = self.initial_grippers
             else:
                 raw = self.actions[self.index]
                 target = raw.copy()
-            source_knot = self.index != self.last_recorded_frame
-            if self.motion and (time.monotonic() - self.joint_received_at > state_timeout
+            source_knot = not approaching and self.index != self.last_recorded_frame
+            if self.motion and not speed_only and (time.monotonic() - self.joint_received_at > state_timeout
                                 or time.monotonic() - self.gripper_feedback_at > state_timeout):
                 raise MotionFault("Feedback expired before replay publication")
             action = limit_action(target, state, lower, upper, max_step) if self.motion else target
             if self.motion:
-                if interpolate and not np.allclose(action[JOINT_INDICES], target[JOINT_INDICES], atol=1e-9, rtol=0):
+                if (interpolate or approaching) and not np.allclose(action[JOINT_INDICES], target[JOINT_INDICES], atol=1e-9, rtol=0):
                     raise MotionFault("Trajectory exceeds feedback allowance; refusing to distort derivatives")
                 self.command_safety.check(action, state, 1.0 / publish_rate_hz, velocity, acceleration)
             self.last_command = action
@@ -656,29 +744,39 @@ def create_replay_node(args, actions: np.ndarray, fps: float, recorder: ReplayRe
                 self.command_pub.publish(_make_bridge_message(
                     BridgeCtlMsg, stamp, action, kp_l, kd_l, kp_r, kd_r,
                     hold=False, reanchor=self.reanchor, rigidity_mode=rigidity_mode,
-                    target_period=1.0 / publish_rate_hz, velocity=velocity, acceleration=acceleration,
+                    target_period=1.0 / publish_rate_hz,
+                    velocity=velocity if interpolate else None,
+                    acceleration=acceleration if interpolate else None,
                 ))
+                if settling:
+                    self.start_gate.command_sent(stamp_ns(stamp))
                 self.gripper_pub.publish(_make_gripper_message(GripperCtl, action, gripper, zero_deg,
                                                                 publish_rate_hz))
                 self.reanchor = False
             self._publish_rviz(target)
             if recorder is not None:
                 recorder.record(
-                    args.start_frame + self.index,
+                    -1 if approaching else args.start_frame + self.index,
                     np.r_[raw[:7], raw[8:15]],
                     np.r_[action[:7], action[8:15]],
                     self.joints,
                     gripper_feedback=self.gripper_feedback,
                     interpolated=np.r_[target[:7], target[8:15]],
                     source_knot=source_knot,
+                    phase="settling" if settling else ("approach" if approaching else "replay"),
                 )
-            self.last_recorded_frame = self.index
+            if not approaching:
+                self.last_recorded_frame = self.index
             if now - self.last_log_at >= 1.0:
                 self.last_log_at = now
                 self.get_logger().info(
-                    f"replay frame {self.index + 1}/{len(self.actions)} "
+                    (f"waiting at first frame: {self.start_gate.reason} " if settling else
+                     f"approach {elapsed:.2f}/{self.approach.duration:.2f}s " if approaching else
+                     f"replay frame {self.index + 1}/{len(self.actions)} ") +
                     f"action={np.array2string(action, precision=3, suppress_small=True)}"
                 )
+            if approaching:
+                return
             if not interpolate:
                 self.index += 1
             elif finished:

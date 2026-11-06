@@ -92,7 +92,26 @@ TrajResult JointPos_Init::dPos_queue_stabTime_dot(float mposDes, float mTrajTime
 }
 
 //插补函数
-void JointPos_Init::retZero_runin(std::vector<double> lArm_stPos, std::vector<double> rArm_stPos){
+std::string JointPos_Init::retZero_runin(std::vector<double> lArm_stPos, std::vector<double> rArm_stPos,
+                                       const ArmSafetyGuard& safety){
+    if (LARMDOF != 7 || RARMDOF != 7 || lArm_stPos.size() != 7 || rArm_stPos.size() != 7 ||
+        lArm_zeroPos.size() != 7 || rArm_zeroPos.size() != 7 ||
+        lArm_defaultKp.size() != 7 || rArm_defaultKp.size() != 7 ||
+        lArm_defaultKd.size() != 7 || rArm_defaultKd.size() != 7)
+        return "homing_invalid_joint_dimensions";
+    if (!std::isfinite(TEMPTIME) || TEMPTIME <= 0 || TEMPTIME > 0.02)
+        return "homing_invalid_control_period";
+    for (size_t i = 0; i < 14; ++i) {
+        const size_t j = i % 7;
+        const double start = i < 7 ? lArm_stPos[j] : rArm_stPos[j];
+        const double goal = i < 7 ? lArm_zeroPos[j] : rArm_zeroPos[j];
+        const double kp = i < 7 ? lArm_defaultKp[j] : rArm_defaultKp[j];
+        const double kd = i < 7 ? lArm_defaultKd[j] : rArm_defaultKd[j];
+        const auto start_error = safety.command_violation(i, {start, 0, 0, kp, kd});
+        if (!start_error.empty()) return "homing_start_rejected: " + start_error;
+        const auto goal_error = safety.command_violation(i, {goal, 0, 0, kp, kd});
+        if (!goal_error.empty()) return "homing_goal_rejected: " + goal_error;
+    }
     //初始化初始位置
 
     // 修复：control_T 成员默认初始化器在 ServoNode 构造前执行，此时 TEMPTIME=0，
@@ -154,6 +173,23 @@ void JointPos_Init::retZero_runin(std::vector<double> lArm_stPos, std::vector<do
         }
     }
     temp_times = temp_times + 50;
+    // Check every sample before allowing the first position command onto the bus.
+    for (size_t i = 0; i < 14; ++i) {
+        const size_t j = i % 7;
+        const auto& trajectory = i < 7 ? lArm_JntTraj[j] : rArm_JntTraj[j];
+        double previous = i < 7 ? lArm_stPos[j] : rArm_stPos[j];
+        for (size_t n = 0; n <= trajectory.positionIncrements.size(); ++n) {
+            const bool endpoint = n == trajectory.positionIncrements.size();
+            const double q = endpoint ? (i < 7 ? lArm_zeroPos[j] : rArm_zeroPos[j])
+                                      : trajectory.positionIncrements[n];
+            const double v = endpoint ? 0 : trajectory.VelocityTraj[n];
+            auto error = safety.command_violation(i, {q, v, 0, 0, 0});
+            if (error.empty()) error = safety.command_violation(i, {q, (q - previous) / control_T, 0, 0, 0});
+            if (!error.empty()) return "homing_sample_" + std::to_string(n) + "_rejected: " + error;
+            previous = q;
+        }
+    }
+    return {};
 }
 
 //输出函数

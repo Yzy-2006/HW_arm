@@ -1,4 +1,5 @@
 #include "robot_control/msgPublisher.h"
+#include "robot_control/startupPose.h"
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <limits>
 
@@ -593,12 +594,8 @@ void RobotCtlNode::run()
                 ifInitTemp = false;
             }else{
                 double threshold_ang = 0.2;
-                // 使用std::any_of检查是否有任何元素满足条件
-                bool leftExceeded = std::any_of(lArm_pos_fdback.begin(), lArm_pos_fdback.end(),
-                    [threshold_ang](double value) { return std::abs(value) >= threshold_ang; });
-
-                bool rightExceeded = std::any_of(rArm_pos_fdback.begin(), rArm_pos_fdback.end(),
-                    [threshold_ang](double value) { return std::abs(value) >= threshold_ang; });
+                const bool leftExceeded = outside_home_pose(lArm_pos_fdback, lArm_zeroPos, threshold_ang);
+                const bool rightExceeded = outside_home_pose(rArm_pos_fdback, rArm_zeroPos, threshold_ang);
                 //特征值：是否强制进入归零模式
                 ifForceToRetZero = leftExceeded || rightExceeded;
 

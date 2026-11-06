@@ -14,6 +14,7 @@ find_package(ament_cmake REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 set(ctl_msgs
+  "msg/HandoffStatus.msg"
   "msg/CtlInformation.msg"
   "msg/RetInformation.msg"
   "msg/DbgInformation.msg"
@@ -34,6 +35,7 @@ set(ctl_msgs
 )
 
 rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/HandoffStatus.msg"
   "msg/CtlInformation.msg"
   "msg/RetInformation.msg"
   "msg/DbgInformation.msg"

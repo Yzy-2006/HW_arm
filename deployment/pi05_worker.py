@@ -48,8 +48,14 @@ def _is_openpi_checkpoint(model_path: Path) -> bool:
     return (model_path / "inference.py").is_file() and not (model_path / "config.json").is_file()
 
 
-def _load_openpi_inference_module(model_path: Path):
-    inference_path = model_path / "inference.py"
+def _load_openpi_inference_module(model_path: Path, entry: str = "inference.py"):
+    if entry not in {"inference.py", "inference_flat_towel.py"}:
+        raise ValueError(f"Unsupported OpenPI inference entry: {entry}")
+    inference_path = model_path / entry
+    if not inference_path.is_file():
+        raise FileNotFoundError(f"OpenPI inference entry not found: {inference_path}")
+    # The flat-towel entry imports helpers from its sibling inference.py.
+    sys.path.insert(0, str(model_path.resolve()))
     spec = importlib.util.spec_from_file_location("downloaded_pi05_inference", inference_path)
     if spec is None or spec.loader is None:
         raise ImportError(f"Could not load OpenPI inference module: {inference_path}")
@@ -69,6 +75,7 @@ class PolicyRunner:
         checkpoint: str,
         num_steps: int,
         action_horizon: int = 50,
+        inference_entry: str = "inference.py",
     ):
         model_path = str(Path(model_path).expanduser())
         model_dir = Path(model_path)
@@ -80,7 +87,7 @@ class PolicyRunner:
         self.backend = "openpi" if _is_openpi_checkpoint(model_dir) else "lerobot"
 
         if self.backend == "openpi":
-            self._init_openpi(model_dir, device, allow_cpu, checkpoint, num_steps)
+            self._init_openpi(model_dir, device, allow_cpu, checkpoint, num_steps, inference_entry)
             return
 
         import torch
@@ -128,6 +135,7 @@ class PolicyRunner:
         allow_cpu: bool,
         checkpoint: str,
         num_steps: int,
+        inference_entry: str,
     ) -> None:
         try:
             import jax
@@ -149,7 +157,8 @@ class PolicyRunner:
         if not (checkpoint_path / "params").is_dir():
             raise FileNotFoundError(f"OpenPI checkpoint has no params directory: {checkpoint_path}")
         LOG.info("Loading OpenPI/JAX PI05 policy from %s", checkpoint_path)
-        module = _load_openpi_inference_module(model_dir)
+        LOG.info("OpenPI inference entry: %s", inference_entry)
+        module = _load_openpi_inference_module(model_dir, inference_entry)
         self.policy = module.load_policy(checkpoint=str(checkpoint_path), num_steps=num_steps)
         native_horizon = getattr(getattr(self.policy, "_model", None), "action_horizon", None)
         if native_horizon is not None and native_horizon != self.action_horizon:
@@ -319,6 +328,8 @@ def parse_args(argv=None):
     )
     parser.add_argument("--num-steps", type=int, help="Override worker.num_steps (default: 10)")
     parser.add_argument("--action-horizon", type=int, help="Override expected OpenPI action count (default: 50)")
+    parser.add_argument("--inference-entry", choices=("inference.py", "inference_flat_towel.py"),
+                        help="OpenPI entry filename inside --model; overrides worker.inference_entry")
     parser.add_argument(
         "--camera-map",
         default="{}",
@@ -337,6 +348,10 @@ def parse_args(argv=None):
         if not isinstance(config, dict) or not isinstance(config.get("worker", {}), dict):
             parser.error("Deployment config and its worker section must be mappings")
         worker_cfg = config.get("worker", {})
+    if args.inference_entry is None:
+        args.inference_entry = worker_cfg.get("inference_entry", "inference.py")
+    if args.inference_entry not in ("inference.py", "inference_flat_towel.py"):
+        parser.error("worker.inference_entry must be inference.py or inference_flat_towel.py")
     for name, default in (("num_steps", 10), ("action_horizon", 50)):
         value = getattr(args, name)
         if value is None:
@@ -370,6 +385,7 @@ def main() -> int:
                     args.checkpoint,
                     args.num_steps,
                     args.action_horizon,
+                    args.inference_entry,
                 )
             except Exception:
                 LOG.exception("Could not load policy")

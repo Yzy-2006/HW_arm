@@ -7,6 +7,7 @@
 
 #include "ros_controller/rosLoopMsgDefine.h"
 #include "servo_control/zero_pos_config.h"
+#include "servo_control/armSafetyGuard.h"
 
 /*插补轨迹结果参数*/
 struct TrajResult {
@@ -47,7 +48,8 @@ class JointPos_Init{
         int temp_times = 0;
     public:
         //插补函数
-        void retZero_runin(std::vector<double> lArm_stPos, std::vector<double> rArm_stPos);
+        std::string retZero_runin(std::vector<double> lArm_stPos, std::vector<double> rArm_stPos,
+                                 const ArmSafetyGuard& safety);
 
         //输出函数
         TrajCtlOutp retZero_trajOutp();

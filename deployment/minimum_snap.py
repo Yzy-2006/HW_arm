@@ -66,14 +66,40 @@ class MinimumSnapTrajectory:
         value = self.spline(np.clip(elapsed / self.duration, 0.0, 1.0), nu=derivative)
         return value / self.duration ** derivative
 
+    @classmethod
+    def rest_to_rest(cls, start, target, max_velocity, max_acceleration, min_duration=1.0):
+        """Time a standalone two-point segment using its exact derivative peaks."""
+        positions = np.asarray([start, target], dtype=float)
+        limits = np.asarray([max_acceleration, min_duration], dtype=float)
+        if (positions.ndim != 2 or positions.shape[1] == 0 or not np.isfinite(positions).all()
+                or not np.isfinite(limits).all() or np.any(limits <= 0)):
+            raise ValueError("Invalid approach positions or limits")
+        speeds = np.broadcast_to(np.asarray(max_velocity, dtype=float), positions.shape[1:])
+        if np.isnan(speeds).any() or np.any(speeds <= 0):
+            raise ValueError("Invalid approach speed limits")
+        distances = np.abs(positions[1] - positions[0])
+        distance = float(np.max(distances))
+        # q(u) = 35u^4 - 84u^5 + 70u^6 - 20u^7 has peak |q'|=35/16
+        # and peak |q''|=84*sqrt(5)/25 on [0,1]. Leave 5% timing margin.
+        duration = max(float(min_duration), 1.05 * max(
+            (35 / 16) * float(np.max(distances / speeds)),
+            np.sqrt((84 * np.sqrt(5) / 25) * distance / max_acceleration),
+        ))
+        return cls([0, duration], positions)
+
     def validate_limits(self, lower, upper, max_velocity, max_acceleration):
         """Check every polynomial interval, including extrema between waypoints."""
         from motion_safety import MotionFault
+        # None disables the acceleration bound, but not finite-value validation.
+        acceleration_limit = np.inf if max_acceleration is None else max_acceleration
+        speed_limits = np.broadcast_to(np.asarray(max_velocity, dtype=float), (self.spline.c.shape[1],))
+        if np.isnan(speed_limits).any() or np.any(speed_limits <= 0):
+            raise ValueError("Invalid trajectory speed limits")
         for joint in range(self.spline.c.shape[1]):
             polynomial = PPoly.from_spline((self.spline.t, self.spline.c[:, joint], self.spline.k))
             for order, lo, hi in ((0, lower[joint], upper[joint]),
-                                  (1, -max_velocity, max_velocity),
-                                  (2, -max_acceleration, max_acceleration)):
+                                  (1, -speed_limits[joint], speed_limits[joint]),
+                                  (2, -acceleration_limit, acceleration_limit)):
                 derivative = polynomial.derivative(order)
                 roots = derivative.derivative().roots(extrapolate=False)
                 points = np.r_[0., 1., roots[np.isfinite(roots) & (roots >= 0) & (roots <= 1)]]
@@ -84,15 +110,10 @@ class MinimumSnapTrajectory:
 
 
 class ChunkInterpolator:
-    """Join a timestamped action chunk to the current commanded trajectory."""
+    """Plan from the last emitted state; start playback on first publication."""
 
-    def __init__(self, chunk, now: float, current, previous=None):
+    def __init__(self, chunk, now: float, current, initial_derivatives=None):
         initial = np.asarray(current, dtype=float)[JOINT_INDICES]
-        derivatives = None
-        if previous is not None:
-            elapsed = now - previous.started_at
-            initial = previous.trajectory.at(elapsed)
-            derivatives = np.array([previous.trajectory.at(elapsed, d) for d in range(1, 4)])
         period = 1.0 / chunk.rate_hz
         if len(chunk.actions) == 1:
             times = np.array([period])
@@ -103,12 +124,24 @@ class ChunkInterpolator:
             times, actions = times[keep], chunk.actions[keep]
             if not len(times):
                 times, actions = np.array([period]), chunk.actions[-1:]
-        self.started_at = now
+        self.planned_at = now
+        self.started_at = None
         self.trajectory = MinimumSnapTrajectory(
-            np.r_[0.0, times], np.vstack([initial, actions[:, JOINT_INDICES]]), derivatives,
+            np.r_[0.0, times], np.vstack([initial, actions[:, JOINT_INDICES]]), initial_derivatives,
         )
 
+    def start(self, now: float):
+        if self.started_at is None:
+            self.started_at = now
+
+    def source_action(self, chunk, now: float):
+        elapsed = 0.0 if self.started_at is None else now - self.started_at
+        # Shift playback (including grippers), but preserve actual observation age.
+        return chunk.at(now, timeline_time=self.planned_at + elapsed)
+
     def at(self, now: float, raw_action) -> np.ndarray:
+        if self.started_at is None:
+            raise ValueError("Chunk playback has not started")
         action = np.array(raw_action, dtype=float, copy=True)
         action[JOINT_INDICES] = self.trajectory.at(now - self.started_at)
         return action

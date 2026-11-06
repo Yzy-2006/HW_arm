@@ -6,13 +6,14 @@ import json
 import os
 import threading
 import time
+from time import thread_time
 from pathlib import Path
 
 import cv2
 import numpy as np
 import yaml
 
-from core import EpisodeWriter, StreamCache
+from core import AsyncEpisodeWriter, StreamCache
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -38,6 +39,26 @@ class RecordingDiagnostics:
         self.previous_ids = {}
         self.duplicate_skips = 0
         self.motion_skips = 0
+        self.exec_count = self.exec_total = self.exec_max = self.exec_last = 0
+        self.cpu_total = self.cpu_max = self.cpu_last = 0
+        self.body_last = 0.
+
+    def finished(self, wall, cpu):
+        self.exec_count += 1
+        self.exec_last, self.cpu_last = wall, cpu
+        self.exec_total += wall
+        self.cpu_total += cpu
+        self.exec_max = max(self.exec_max, wall)
+        self.cpu_max = max(self.cpu_max, cpu)
+
+    def summary(self):
+        return dict(callback_interval_max_ms=self.tick_max * 1000,
+                    sample_body_last_ms=self.body_last * 1000,
+                    callback_exec_last_ms=self.exec_last * 1000,
+                    callback_exec_max_ms=self.exec_max * 1000,
+                    callback_thread_cpu_last_ms=self.cpu_last * 1000,
+                    frame_gap_max_ms=self.frame_gap_max * 1000,
+                    duplicate_skips=self.duplicate_skips, cameras=self.camera_meta)
 
     def tick(self, now, last_frame_time):
         if self.last_tick is not None:
@@ -67,16 +88,25 @@ class RecordingDiagnostics:
             received = meta.get('receive_monotonic_s')
             observed_at = self.camera_observed_at if self.camera_observed_at is not None else now
             age = f"{(observed_at - received) * 1000:.1f}" if received is not None else 'n/a'
+            arrival = meta.get('arrival_interval_ms')
+            arrival_text = (f", arrival_ms(last/max)={arrival:.1f}/{meta['arrival_interval_max_ms']:.1f}"
+                            f", device_interval_ms={meta['device_interval_ms']:.1f}"
+                            f", receiver_frame_gaps={meta['receiver_frame_gaps']}" if arrival is not None else '')
             camera_details.append(f"{name}(frame={frame}, previous_saved={previous}, "
-                                  f"step={step}, age_ms={age})")
+                                  f"step={step}, age_ms={age}{arrival_text})")
         per_camera = ', '.join(f"{name}={elapsed * 1000:.1f}"
                                for name, elapsed in sorted(self.camera_write_s.items()))
         duration = now - self.started_at
         return (
             f"Capture diagnostics: frames={frames}, fps={frames / duration if duration > 0 else 0:.1f}, "
-            f"callback_ms(avg/max)={self.tick_total / max(1, self.tick_count) * 1000:.1f}/"
+            f"callback_interval_ms(avg/max)={self.tick_total / max(1, self.tick_count) * 1000:.1f}/"
             f"{self.tick_max * 1000:.1f}, frame_gap_ms(current/max)={self.frame_gap * 1000:.1f}/"
             f"{self.frame_gap_max * 1000:.1f}, "
+            f"sample_body_ms={self.body_last * 1000:.1f}, "
+            f"callback_exec_ms(last/avg/max)={self.exec_last * 1000:.1f}/"
+            f"{self.exec_total / max(1, self.exec_count) * 1000:.1f}/{self.exec_max * 1000:.1f}, "
+            f"callback_thread_cpu_ms(last/avg/max)={self.cpu_last * 1000:.1f}/"
+            f"{self.cpu_total / max(1, self.exec_count) * 1000:.1f}/{self.cpu_max * 1000:.1f}, "
             f"write_ms(last/avg/max)={self.last_write * 1000:.1f}/"
             f"{self.write_total / max(1, self.write_count) * 1000:.1f}/{self.write_max * 1000:.1f}, "
             f"jpeg_write_ms=[{per_camera}], duplicate_skips={self.duplicate_skips}, "
@@ -161,6 +191,9 @@ class Cameras:
             raise
     # 不断接收图像并保存帧数、时间等信息
     def _receive(self, name, pipeline):
+        previous = None
+        arrival_max = 0.
+        frame_gaps = 0
         try:
             while not self.stop.is_set():
                 frames = pipeline.wait_for_frames(1000)
@@ -168,12 +201,21 @@ class Cameras:
                 if not color:
                     continue
                 received = time.monotonic()
-                entry = (np.asanyarray(color.get_data()).copy(), {
+                metadata = {
                     "frame_number": color.get_frame_number(),
                     "device_timestamp_ms": color.get_timestamp(),
                     "timestamp_domain": str(color.get_frame_timestamp_domain()),
                     "receive_monotonic_s": received,
-                })
+                }
+                if previous is not None:
+                    arrival = (received - previous['receive_monotonic_s']) * 1000
+                    arrival_max = max(arrival_max, arrival)
+                    frame_gaps += max(0, metadata['frame_number'] - previous['frame_number'] - 1)
+                    metadata.update(arrival_interval_ms=arrival, arrival_interval_max_ms=arrival_max,
+                                    device_interval_ms=metadata['device_timestamp_ms'] - previous['device_timestamp_ms'],
+                                    receiver_frame_gaps=frame_gaps)
+                previous = metadata
+                entry = (np.asanyarray(color.get_data()).copy(), metadata)
                 with self.lock:
                     self.latest[name] = entry
         except Exception as exc:
@@ -193,10 +235,11 @@ class Cameras:
         if set(latest) != set(self.pipelines):
             raise ValueError("Waiting for all cameras")
         stamps = [entry[1]["receive_monotonic_s"] for entry in latest.values()]
-        if any(now - stamp > self.config["max_camera_age_s"] for stamp in stamps):
-            raise ValueError("Camera frame is stale")
-        if max(stamps) - min(stamps) > self.config["max_camera_skew_s"]:
-            raise ValueError("Camera receive-time skew exceeds limit")
+        if self.config.get("camera_timing_checks_enabled", True):
+            if any(now - stamp > self.config["max_camera_age_s"] for stamp in stamps):
+                raise ValueError("Camera frame is stale")
+            if max(stamps) - min(stamps) > self.config["max_camera_skew_s"]:
+                raise ValueError("Camera receive-time skew exceeds limit")
         return ({name: entry[0] for name, entry in latest.items()},
                 {name: entry[1] for name, entry in latest.items()})
     # 退出接口
@@ -208,9 +251,10 @@ class Cameras:
             pipeline.stop()
 
 # 用于处理与ROS的交互，将各个topic的信息整合为一帧
-def make_node(config, cameras, *, show_opencv=False):
+def make_node(config, cameras, *, show_opencv=False, status_callback=None):
     import rclpy
     from rclpy.node import Node
+    from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
     from rclpy.qos import qos_profile_sensor_data
     from ctl_msgs_hw.msg import CtlInformation, FkDataPub, MidNodeCtlMsgRet, MidNodeCtlMsgSend
     from std_msgs.msg import Int8MultiArray, Bool
@@ -221,6 +265,16 @@ def make_node(config, cameras, *, show_opencv=False):
         def __init__(self):
             super().__init__("towel_recorder")
             self.cache, self.episode = StreamCache(), None
+            self.retiring_episode = None
+            self.writer_finish_timeout_s = float(config.get("writer_finish_timeout_s", 10.0))
+            self.startup_timeout_s = float(config.get("startup_timeout_s", 3.0))
+            if not np.isfinite(self.startup_timeout_s) or self.startup_timeout_s <= 0:
+                raise ValueError("startup_timeout_s must be finite and positive")
+            self.feedback_group = MutuallyExclusiveCallbackGroup()
+            self.prepared_at = None
+            self.startup_wait_reason = "Waiting for first capture"
+            self.last_startup_log = -float("inf")
+            self.last_recording_error = ""
             self.start_time, self.last_frame_time = None, None
             self.last_saved_q = None
             self.last_saved_gripper_state = None
@@ -253,7 +307,8 @@ def make_node(config, cameras, *, show_opencv=False):
                 (Int8MultiArray, "/towel/gripper_state", lambda m: self.put("gripper_state", m.data, m)),
             ]
             for typ, topic, callback in subs:
-                self.create_subscription(typ, topic, callback, qos_profile_sensor_data)
+                self.create_subscription(typ, topic, callback, qos_profile_sensor_data,
+                                         callback_group=self.feedback_group)
             self.create_service(SetBool, "/towel/record", self.record)
             self.create_service(Trigger, "/towel/discard", self.discard)
             self.create_timer(1.0 / config["fps"], self.sample)
@@ -265,6 +320,19 @@ def make_node(config, cameras, *, show_opencv=False):
             msg = Bool()
             msg.data = self.episode is not None
             self.status.publish(msg)
+            if status_callback is not None:
+                status_callback(self.recording_status())
+
+        def recording_status(self):
+            episode = self.episode or self.retiring_episode
+            return {
+                "session": episode.path.name if episode is not None else None,
+                "active": self.episode is not None,
+                "ready": self.episode is not None and self.start_time is not None,
+                "error": self.last_recording_error,
+                "frames": episode.frames if episode is not None else 0,
+                "diagnostics": self.diagnostics.summary() if self.diagnostics is not None else None,
+            }
 
         def put(self, key, values, msg):
             stamp = getattr(getattr(msg, "header", None), "stamp", None)
@@ -275,19 +343,32 @@ def make_node(config, cameras, *, show_opencv=False):
                 self.get_logger().warning(f"Invalid {key}: {exc}")
 
         def joints(self, msg):
-            self.put("q", list(msg.l_arm_pos_fdback) + list(msg.r_arm_pos_fdback), msg)
-            self.put("dq", list(msg.l_arm_spd_fdback) + list(msg.r_arm_spd_fdback), msg)
+            with self.cache.lock:
+                self.put("q", list(msg.l_arm_pos_fdback) + list(msg.r_arm_pos_fdback), msg)
+                self.put("dq", list(msg.l_arm_spd_fdback) + list(msg.r_arm_spd_fdback), msg)
 
-        def snapshot(self):
-            now = time.monotonic()
-            sample = self.cache.snapshot(now, config["max_stream_age_s"], config["max_stream_skew_s"])
+        def snapshot(self, *, received_after=None):
+            # Read time and cache atomically relative to feedback callbacks.
+            with self.cache.lock:
+                now = time.monotonic()
+                sample = self.cache.snapshot(now, config["max_stream_age_s"], config["max_stream_skew_s"],
+                                             received_after=received_after)
             images, camera_meta = cameras.snapshot(now)
+            if received_after is not None:
+                pending = [name for name in config["cameras"]
+                           if camera_meta.get(name, {}).get("receive_monotonic_s", -float("inf")) <= received_after]
+                if pending:
+                    raise ValueError(f"Waiting for post-startup camera frames: {pending}")
             return now, sample, images, camera_meta
 
         def record(self, request, response):
             try:
                 if request.data and self.episode is None:
-                    now, _, _, _ = self.snapshot()  # Refuse an empty/unready episode.
+                    if self.retiring_episode is not None and not self.retiring_episode.done.is_set():
+                        raise RuntimeError("Previous episode writer is still stopping")
+                    self.retiring_episode = None
+                    requested_at = time.monotonic()
+                    requested_wall_time_ns = time.time_ns()
                     calibration = {}
                     for folder in (ROOT / "ros2_ws/src/ctl_msgs_hw/config", ROOT / "teleop/VR_controller/config"):
                         for path in folder.glob("*.yaml"):
@@ -295,21 +376,28 @@ def make_node(config, cameras, *, show_opencv=False):
                                 "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                                 "content": path.read_text(),
                             }
-                    self.episode = EpisodeWriter(config["dataset_root"], {
+                    self.episode = AsyncEpisodeWriter(config["dataset_root"], {
                         **config.get("episode_metadata", {}),
                         "config": config, "calibration": calibration,
-                        "start_wall_time_ns": time.time_ns(), "start_monotonic_s": now,
-                    }, self.write_image)
-                    self.start_time, self.last_frame_time = now, now
+                        "requested_wall_time_ns": requested_wall_time_ns, "requested_monotonic_s": requested_at,
+                        "start_wall_time_ns": None, "start_monotonic_s": None,
+                    }, self.write_image, capacity=config.get("writer_queue_frames", 16),
+                        finish_timeout=self.writer_finish_timeout_s)
+                    self.prepared_at = time.monotonic()
+                    self.start_time = self.last_frame_time = None
+                    self.startup_wait_reason = "Waiting for post-startup feedback and cameras"
+                    self.last_startup_log = -float("inf")
+                    self.last_recording_error = ""
                     self.last_saved_q = None
                     self.last_saved_gripper_state = None
                     self.motion_skip_pending = False
                     self.camera_ids = {}
-                    self.diagnostics = RecordingDiagnostics(now)
-                    response.message = "recording"
+                    self.diagnostics = RecordingDiagnostics(self.prepared_at)
+                    response.message = "preparing; waiting for first fresh capture"
                 elif not request.data and self.episode is not None:
                     self.log_diagnostics(force=True)
                     episode, self.episode = self.episode, None
+                    self.retiring_episode = episode
                     path = episode.finish(config["min_episode_frames"])
                     response.message = f"Saved {path}" if path else "Too short; kept as .partial, excluded from export"
                 else:
@@ -325,8 +413,12 @@ def make_node(config, cameras, *, show_opencv=False):
             response.success = self.episode is not None
             response.message = "discarded" if response.success else "not recording"
             if self.episode:
-                self.episode.discard()
-                self.episode = None
+                episode, self.episode = self.episode, None
+                self.retiring_episode = episode
+                try:
+                    episode.discard()
+                except Exception as exc:
+                    response.success, response.message = False, str(exc)
             self.publish_status()
             return response
 
@@ -372,23 +464,53 @@ def make_node(config, cameras, *, show_opencv=False):
                     self.get_logger().warning(f"OpenCV camera preview unavailable: {detail}")
 
         def write_image(self, path, image):
-            start = time.monotonic()
-            try:
-                return cv2.imwrite(path, image, [cv2.IMWRITE_JPEG_QUALITY, 90])
-            finally:
-                self.diagnostics.camera_write_s[Path(path).parent.name] = time.monotonic() - start
+            return cv2.imwrite(path, image, [cv2.IMWRITE_JPEG_QUALITY, 90])
 
         def log_diagnostics(self, *, force=False, failure=False):
+            episode = self.episode or self.retiring_episode
+            stats = episode.stats()
+            self.diagnostics.write_count = stats["written"]
+            self.diagnostics.last_write = stats["write_last"]
+            self.diagnostics.write_total = stats["write_total"]
+            self.diagnostics.write_max = stats["write_max"]
+            self.diagnostics.camera_write_s = stats["camera_times"]
             if failure and hasattr(cameras, 'frame_metadata'):
                 self.diagnostics.camera_meta = cameras.frame_metadata()
                 self.diagnostics.camera_observed_at = time.monotonic()
-            detail = self.diagnostics.report(time.monotonic(), self.episode.frames, force=force)
+            detail = self.diagnostics.report(time.monotonic(), episode.frames, force=force)
             if detail:
+                detail += (f", written_frames={stats['written']}, writer_queue={stats['queued']}/{stats['capacity']}, "
+                           f"writer_queue_high_water={stats['high_water']}")
                 logger = self.get_logger()
-                (logger.warning if failure else logger.info)(detail)
+                # rclpy binds severity to the call site, so these must be separate calls.
+                if failure:
+                    logger.warning(detail)
+                else:
+                    logger.info(detail)
 
         def sample(self):
-            if self.episode is not None:
+            active = self.episode is not None
+            started, cpu_started = time.monotonic(), thread_time()
+            self._capture_failure = None
+            try:
+                self._sample()
+            finally:
+                if active:
+                    self.diagnostics.body_last = time.monotonic() - started
+                    failure = self._capture_failure
+                    try:
+                        try:
+                            self.log_diagnostics(force=bool(failure), failure=bool(failure))
+                        except Exception as diagnostic_error:
+                            self.get_logger().warning(f"Capture diagnostics unavailable: {diagnostic_error}")
+                        if failure:
+                            self.get_logger().error(f"Recording aborted; retained .partial: {failure}")
+                    finally:
+                        # Completed callback statistics include diagnostic/log output.
+                        self.diagnostics.finished(time.monotonic() - started, thread_time() - cpu_started)
+
+        def _sample(self):
+            if self.episode is not None and self.last_frame_time is not None:
                 self.diagnostics.tick(time.monotonic(), self.last_frame_time)
                 self.diagnostics.previous_ids = dict(self.camera_ids)
             if self.publish_rviz:
@@ -397,10 +519,24 @@ def make_node(config, cameras, *, show_opencv=False):
             if self.episode is None:
                 return
             try:
-                now, sample, images, camera_meta = self.snapshot()
+                self.episode.check_error()
+                first_frame = self.start_time is None
+                if first_frame and time.monotonic() - self.prepared_at >= self.startup_timeout_s:
+                    raise TimeoutError(f"Capture startup timed out after {self.startup_timeout_s:g}s: {self.startup_wait_reason}")
+                try:
+                    now, sample, images, camera_meta = self.snapshot(
+                        received_after=self.prepared_at if first_frame else None)
+                except ValueError as startup_error:
+                    if not first_frame:
+                        raise
+                    self.startup_wait_reason = str(startup_error)
+                    if time.monotonic() - self.last_startup_log >= 1.0:
+                        self.last_startup_log = time.monotonic()
+                        self.get_logger().info(f"Capture preparing: {self.startup_wait_reason}")
+                    return
                 self.diagnostics.camera_meta = camera_meta
                 self.diagnostics.camera_observed_at = now
-                gap = now - self.last_frame_time
+                gap = 0.0 if first_frame else now - self.last_frame_time
                 self.diagnostics.frame_gap = gap
                 self.diagnostics.frame_gap_max = max(self.diagnostics.frame_gap_max, gap)
                 if not self.motion_skip_pending and gap > config["max_frame_gap_s"]:
@@ -411,7 +547,6 @@ def make_node(config, cameras, *, show_opencv=False):
                 ids = {name: meta["frame_number"] for name, meta in camera_meta.items()}
                 if any(self.camera_ids.get(name) == value for name, value in ids.items()):
                     self.diagnostics.duplicate_skips += 1
-                    self.log_diagnostics()
                     return  # Never label the same camera exposure as a fresh image.
                 min_joint_delta = float(config.get("min_joint_delta_rad", 0.0))
                 if min_joint_delta < 0:
@@ -428,35 +563,39 @@ def make_node(config, cameras, *, show_opencv=False):
                         and joint_delta < min_joint_delta and not gripper_changed):
                     self.diagnostics.motion_skips += 1
                     self.motion_skip_pending = True
-                    self.log_diagnostics()
                     return  # Keep sampling until the next meaningful motion.
-                sample.update(timestamp_s=now-self.start_time, monotonic_s=now,
+                sample.update(timestamp_s=0.0 if first_frame else now-self.start_time, monotonic_s=now,
                               ros_time_s=self.get_clock().now().nanoseconds * 1e-9,
                               camera_timestamps=camera_meta)
-                write_start = time.monotonic()
-                self.diagnostics.camera_write_s = {}
-                try:
-                    self.episode.add(sample, images)
-                finally:
-                    self.diagnostics.wrote(time.monotonic() - write_start)
+                self.episode.add(sample, images, start_metadata=(
+                    {"start_monotonic_s": now, "start_wall_time_ns": time.time_ns()}
+                    if first_frame else None))
+                if first_frame:
+                    self.start_time = now
+                    self.diagnostics = RecordingDiagnostics(now)
+                    self.get_logger().info("Capture started: first fresh frame queued; recording clock started")
+                    self.publish_status()
                 self.last_frame_time, self.camera_ids = now, ids
                 self.last_saved_q = list(sample["q"])
                 self.last_saved_gripper_state = list(sample["gripper_state"])
                 self.motion_skip_pending = False
-                self.log_diagnostics()
             except Exception as exc:
-                self.log_diagnostics(force=True, failure=True)
+                self.last_recording_error = str(exc)
+                self._capture_failure = str(exc)
                 self.episode.abort(exc)
+                self.retiring_episode = self.episode
                 self.episode = None
                 self.publish_status()
-                self.get_logger().error(f"Recording aborted; retained .partial: {exc}")
 
         def close(self):
             if self.opencv_preview is not None:
                 self.opencv_preview.close()
             if self.episode:
                 self.episode.abort("Recorder stopped without explicit save")
+                self.retiring_episode = self.episode
                 self.episode = None
+            if self.retiring_episode and not self.retiring_episode.done.wait(self.writer_finish_timeout_s):
+                self.get_logger().error("Episode writer is still blocked; .partial retained")
             self.destroy_node()
 
     return Recorder()

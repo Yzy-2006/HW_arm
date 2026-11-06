@@ -71,3 +71,50 @@ def test_controller_bottleneck_is_rejected():
         validate_controller_rate(config, 300)
     config["TransLoopCtlInte"]["dual_arm_ctl_node_loop_ctl"]["TempTime"] = 1 / 300
     validate_controller_rate(config, 300)
+
+
+@pytest.mark.parametrize("distance", [0., .001, .2, 1., -2.])
+def test_rest_to_rest_approach_has_bounded_exact_extrema(distance):
+    start = np.array([.1, -.1])
+    goal = start + [distance, -distance / 2]
+    segment = MinimumSnapTrajectory.rest_to_rest(start, goal, .3, .5)
+    assert segment.duration >= 1
+    segment.validate_limits([-5, -5], [5, 5], .3, .5)
+    np.testing.assert_allclose(segment.at(0), start, atol=1e-10)
+    np.testing.assert_allclose(segment.at(segment.duration), goal, atol=1e-10)
+    for derivative in (1, 2, 3):
+        np.testing.assert_allclose(segment.at(0, derivative), 0, atol=1e-10)
+        np.testing.assert_allclose(segment.at(segment.duration, derivative), 0, atol=1e-10)
+
+
+@pytest.mark.parametrize("limits", [(0, .5, 1), (.3, -1, 1), (.3, .5, float("nan"))])
+def test_approach_rejects_invalid_limits(limits):
+    with pytest.raises(ValueError, match="Invalid approach"):
+        MinimumSnapTrajectory.rest_to_rest([0], [1], *limits)
+
+
+def test_per_joint_speed_limits_apply_to_approach_timing_and_extrema():
+    from motion_safety import MotionFault
+    speeds = [.1, np.inf]
+    approach = MinimumSnapTrajectory.rest_to_rest([0, 0], [.01, 1], speeds, 100, .01)
+    bounded = MinimumSnapTrajectory.rest_to_rest([0, 0], [.01, 1], .1, 100, .01)
+    assert approach.duration < 1 < bounded.duration
+    approach.validate_limits([-3, -3], [3, 3], speeds, 100)
+    with pytest.raises(MotionFault, match="joint 2 derivative 1"):
+        approach.validate_limits([-3, -3], [3, 3], .1, 100)
+    shoulder = MinimumSnapTrajectory([0, 1], [[0, 0], [1, 0]])
+    with pytest.raises(MotionFault, match="joint 1 derivative 1"):
+        shoulder.validate_limits([-3, -3], [3, 3], speeds, None)
+
+
+def test_deferred_playback_does_not_extend_action_observation_expiry():
+    from minimum_snap import ChunkInterpolator
+    from pi05_bridge import ActionChunk
+    chunk = ActionChunk(np.zeros((50, 16)), 10., 30., 1.)
+    interpolation = ChunkInterpolator(chunk, 10., np.zeros(16))
+    assert interpolation.started_at is None
+    interpolation.start(10.3)
+    interpolation.start(10.6)
+    assert interpolation.started_at == 10.3
+    assert interpolation.source_action(chunk, 10.9) is not None
+    assert interpolation.source_action(chunk, 11.01) is None

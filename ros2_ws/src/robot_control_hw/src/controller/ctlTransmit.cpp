@@ -251,11 +251,13 @@ void CtlTransmit::bridge_msg_callback(const ctl_msgs_hw::msg::BridgeCtlMsg::Shar
 }
 
 void CtlTransmit::fill_stream_metadata(ctl_msgs_hw::msg::MidNodeCtlMsgSend& msg) const {
+    msg.policy_speed_checks_disabled = false;
     if (!bridge_active_ || !joint_stream_mode_ || !stream_message_) return;
     const auto& sample = *stream_message_;
     const double age = (node_ptr_->now() - sample.header.stamp).seconds();
     if (sample.hold_position || age < 0 || age > JointStreamGuard::timeout_s) return;
     msg.bridge_joint_stream = true;
+    msg.policy_speed_checks_disabled = sample.policy_speed_checks_disabled && sample.header.frame_id == "pi05_policy";
     msg.trajectory_header = sample.header;
     msg.upper_monitor_time = sample.target_period_s;
     msg.derivatives_valid = sample.derivatives_valid;

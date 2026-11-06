@@ -15,6 +15,16 @@ from replay_dataset import (  # noqa: E402
 )
 
 
+def report_handoff(node, complete=True):
+    if not node.command_pub.messages:
+        return
+    command = node.command_pub.messages[-1]
+    node._handoff_callback(types.SimpleNamespace(
+        source_header=command.header, complete=complete,
+        commanded_position=command.l_arm_des_msg + command.r_arm_des_msg,
+    ))
+
+
 def test_replay_slow_factor_uses_yaml_unless_overridden():
     assert _resolve_slow_factor(None, {"slow_factor": 0.4}) == 0.4
     assert _resolve_slow_factor(0.1, {"slow_factor": 0.4}) == 0.1
@@ -203,7 +213,7 @@ def test_rviz_waits_before_resetting_playback_timer(monkeypatch):
 
 
 @pytest.fixture
-def replay(monkeypatch, tmp_path):
+def replay(monkeypatch, tmp_path, request):
     import replay_dataset as module
 
     clock = [10.0]
@@ -227,7 +237,8 @@ def replay(monkeypatch, tmp_path):
             return types.SimpleNamespace(period=period, cancel=lambda: None)
 
         def get_clock(self):
-            return types.SimpleNamespace(now=lambda: types.SimpleNamespace(to_msg=lambda: clock[0]))
+            return types.SimpleNamespace(now=lambda: types.SimpleNamespace(to_msg=lambda:
+                types.SimpleNamespace(sec=int(clock[0]), nanosec=int((clock[0] % 1) * 1e9))))
 
         def get_logger(self):
             return types.SimpleNamespace(warning=lambda msg: None, info=lambda msg: None, error=lambda msg: None)
@@ -236,56 +247,95 @@ def replay(monkeypatch, tmp_path):
         "rclpy": types.ModuleType("rclpy"),
         "rclpy.node": types.SimpleNamespace(Node=Node),
         "rclpy.qos": types.SimpleNamespace(qos_profile_sensor_data=object()),
-        "ctl_msgs_hw.msg": types.SimpleNamespace(BridgeCtlMsg=Message, GripperCtl=Message, MidNodeCtlMsgRet=Message),
+        "ctl_msgs_hw.msg": types.SimpleNamespace(BridgeCtlMsg=Message, GripperCtl=Message,
+                                                MidNodeCtlMsgRet=Message, HandoffStatus=Message),
         "std_msgs.msg": types.SimpleNamespace(Float64MultiArray=Message),
     }.items():
         monkeypatch.setitem(sys.modules, name, value)
     monkeypatch.setattr(module, "time", types.SimpleNamespace(monotonic=lambda: clock[0]))
     # Timing tests supply a healthy servo; fault/heartbeat behavior is tested separately.
     from motion_safety import SafetyState
-    def safety(node, on_fault):
-        state = SafetyState(on_fault, now=lambda: clock[0])
-        state.ready = lambda: not state.fault
+    def safety(node, on_fault, **kwargs):
+        state = SafetyState(on_fault, now=lambda: clock[0], **kwargs)
+        if kwargs.get("monitor_heartbeat", True):
+            state.ready = lambda: not state.fault
         return state
     monkeypatch.setattr(module, "attach_safety", safety)
     config = yaml.safe_load((ROOT / "config/pi05_deployment.yaml").read_text())
+    # Timing tests use 300 Hz independently of the operator's publication rate.
+    config["bridge"]["interpolation"] = {"enabled": True, "publish_rate_hz": 300}
     config["bridge"]["motion_safety"] = {"max_acceleration_rad_s2": 100.0}
+    config["bridge"]["motion_safety"].update(getattr(request, "param", {}))
+    config["bridge"]["replay_approach"] = {
+        "max_velocity_rad_s": .3, "max_acceleration_rad_s2": .5, "min_duration_s": 1.,
+    }
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump(config))
     args = types.SimpleNamespace(config=path, slow_factor=None, speed=1.0, motion=True, start_frame=0)
     actions = np.zeros((4, 16))
     actions[:, 0] = np.arange(1, 5) * 0.002
     actions[1:, [7, 15]] = 1
-    node = create_replay_node(args, actions, 30)
+    recorder = ReplayRecorder(tmp_path / "logs", 0, 0, make_plot=False)
+    node = create_replay_node(args, actions, 30, recorder)
 
-    def feedback():
-        node._joint_callback(types.SimpleNamespace(l_arm_pos_fdback=[0.0] * 7, r_arm_pos_fdback=[0.0] * 7))
+    def feedback(joints=None):
+        joints = np.zeros(14) if joints is None else joints
+        node._joint_callback(types.SimpleNamespace(l_arm_pos_fdback=joints[:7], r_arm_pos_fdback=joints[7:],
+                                                  l_arm_spd_fdback=[0.] * 7, r_arm_spd_fdback=[0.] * 7))
         node._gripper_callback(types.SimpleNamespace(data=[0.0] * 8))
+        report_handoff(node)
 
     feedback()
-    return node, clock, feedback, actions
+    return node, clock, feedback, actions, recorder
+
+
+@pytest.mark.parametrize("replay", [{"protection_mode": "speed_only", "max_velocity_rad_s": 5.}], indirect=True)
+def test_speed_only_replay_skips_feedback_age_and_first_frame_arrival_gate(replay):
+    node, clock, feedback, actions, recorder = replay
+    assert not node.safety.monitor_heartbeat and node.start_gate.status_at is None
+    clock[0] += 10
+    node.step()
+    assert node.approach is not None and not node.failed
+    duration = node.approach.duration
+    for _ in range(int(duration * 300) + 2):
+        clock[0] += 1 / 300
+        node.step()  # No feedback, velocity or native-handoff updates.
+    assert node.dataset_started_at is not None and not node.failed
+    assert node.start_gate.started is None
+    assert any(row["phase"] == "replay" for row in recorder.rows)
 
 
 def test_replay_interpolates_at_300hz_and_visits_all_30hz_knots(replay):
-    node, clock, feedback, actions = replay
+    node, clock, feedback, actions, recorder = replay
     assert node.timer.period == pytest.approx(1 / 300)
-    for tick in range(41):
+    for tick in range(600):
         clock[0] = 10 + tick / 300
         feedback()
         node.step()
         command = node.command_pub.messages[-1]
-        if tick and tick % 10 == 0:
-            assert command.l_arm_des_msg[0] == pytest.approx(actions[tick // 10 - 1, 0])
+        if node.dataset_started_at is not None:
+            replay_tick = round((clock[0] - node.dataset_started_at) * 300)
+            if replay_tick % 10 == 0:
+                assert command.l_arm_des_msg[0] == pytest.approx(actions[replay_tick // 10, 0])
+        if tick < 300:
+            assert node.index == 0
+            assert recorder.rows[-1]["phase"] == "approach"
+            assert recorder.rows[-1]["dataset_frame"] == -1
+            assert not recorder.rows[-1]["source_knot"]
         assert not command.hold_position
         assert command.if_init_use_ret == int(tick == 0)
-    assert len(node.command_pub.messages) == 41
+        if node.index == len(actions):
+            break
+    assert node.dataset_started_at >= 11.2
+    assert any(row["phase"] == "settling" for row in recorder.rows)
+    assert [row["dataset_frame"] for row in recorder.rows if row["source_knot"]] == [0, 1, 2, 3]
     node.step()
     assert node.done
     assert node.command_pub.messages[-1].hold_position
 
 
 def test_replay_feedback_gap_latches_fault_without_automatic_resume(replay):
-    node, clock, feedback, actions = replay
+    node, clock, feedback, actions, _ = replay
     node.step()
     clock[0] += 0.07
     feedback()
@@ -303,7 +353,7 @@ def test_replay_feedback_gap_latches_fault_without_automatic_resume(replay):
 
 
 def test_replay_dry_run_does_not_publish(replay):
-    node, clock, feedback, actions = replay
+    node, clock, feedback, actions, recorder = replay
     node.motion = False
     node.step()
     clock[0] += 1
@@ -312,3 +362,204 @@ def test_replay_dry_run_does_not_publish(replay):
     assert node.done
     assert not node.command_pub.messages
     assert not node.gripper_pub.messages
+    assert all(row["phase"] == "replay" for row in recorder.rows)
+
+
+def test_large_start_gap_gets_independent_duration_and_preserves_dataset_timing(replay):
+    node, clock, feedback, actions, recorder = replay
+    actual = np.zeros(14)
+    actual[0] = .5
+    feedback(actual)
+    node.step()
+    assert not node.failed
+    assert node.approach.duration > 3
+    assert node.trajectory.duration == pytest.approx((len(actions) - 1) / 30)
+    start = clock[0]
+    for tick in range(1, int(np.ceil(node.approach.duration * 300)) + 1):
+        clock[0] = start + tick / 300
+        feedback(np.r_[node.last_command[:7], node.last_command[8:15]])
+        node.step()
+        assert not node.failed
+    assert node.dataset_started_at is None
+    assert recorder.rows[-1]["phase"] == "settling"
+    for _ in range(90):
+        clock[0] += 1 / 300
+        feedback(np.r_[node.last_command[:7], node.last_command[8:15]])
+        node.step()
+        assert not node.failed
+        if node.dataset_started_at is not None:
+            break
+    assert node.dataset_started_at == clock[0]
+    assert node.index == 0
+    assert node.last_command[0] == pytest.approx(actions[0, 0])
+    assert recorder.rows[-1]["phase"] == "replay"
+    assert recorder.rows[-1]["source_knot"]
+    for derivative in (1, 2, 3):
+        np.testing.assert_allclose(node.approach.at(node.approach.duration, derivative),
+                                   node.trajectory.at(0, derivative), atol=1e-7)
+
+
+def test_invalid_dataset_segment_is_rejected_before_approach_motion(replay):
+    node, clock, feedback, actions, recorder = replay
+    actions[1, 0] = .5
+    node.step()
+    assert node.failed.startswith("Dataset replay segment:")
+    assert not node.command_pub.messages
+    assert not node.gripper_pub.messages
+    assert not recorder.rows
+
+
+def test_single_frame_replay_holds_grippers_during_approach(replay):
+    node, clock, feedback, actions, recorder = replay
+    node.actions = actions[:1].copy()
+    node.actions[0, [7, 15]] = 1
+    for tick in range(600):
+        clock[0] = 10 + tick / 300
+        feedback()
+        node.step()
+        assert not node.failed
+        if node.dataset_started_at is None:
+            np.testing.assert_array_equal(node.last_command[[7, 15]], node.initial_grippers)
+        else:
+            np.testing.assert_array_equal(node.last_command[[7, 15]], [1, 1])
+        if node.index == 1:
+            break
+    node.step()
+    assert node.done
+    assert [row["dataset_frame"] for row in recorder.rows if row["source_knot"]] == [0]
+
+
+def test_noninterpolated_replay_also_approaches_before_consuming_frames(replay, monkeypatch, tmp_path):
+    import replay_dataset as module
+    _, clock, _, actions, _ = replay
+    monkeypatch.setattr(module, "interpolation_settings", lambda config, rate: (False, rate))
+    args = types.SimpleNamespace(config=tmp_path / "config.yaml", slow_factor=None,
+                                 speed=1., motion=True, start_frame=12)
+    actions = np.repeat(actions[:1], 2, axis=0)
+    recorder = ReplayRecorder(tmp_path / "raw_logs", 0, 12, make_plot=False)
+    node = create_replay_node(args, actions, 30, recorder)
+    for tick in range(100):
+        clock[0] = 10 + tick / 30
+        node._joint_callback(types.SimpleNamespace(l_arm_pos_fdback=[0.] * 7, r_arm_pos_fdback=[0.] * 7,
+                                                  l_arm_spd_fdback=[0.] * 7, r_arm_spd_fdback=[0.] * 7))
+        node._gripper_callback(types.SimpleNamespace(data=[0.] * 8))
+        report_handoff(node)
+        node.step()
+        assert not node.failed
+        if tick < 30:
+            assert node.index == 0
+            assert not node.command_pub.messages[-1].derivatives_valid
+        if node.index == 2:
+            break
+    node.step()
+    assert node.done
+    assert [row["dataset_frame"] for row in recorder.rows if row["source_knot"]] == [12, 13]
+
+
+def test_zero_approach_limit_is_rejected_before_publication(replay, tmp_path):
+    _, clock, _, actions, _ = replay
+    path = tmp_path / "config.yaml"
+    config = yaml.safe_load(path.read_text())
+    config["bridge"]["replay_approach"]["max_velocity_rad_s"] = 0
+    path.write_text(yaml.safe_dump(config))
+    args = types.SimpleNamespace(config=path, slow_factor=None, speed=1., motion=True, start_frame=0)
+    node = create_replay_node(args, actions, 30)
+    node._joint_callback(types.SimpleNamespace(l_arm_pos_fdback=[0.] * 7, r_arm_pos_fdback=[0.] * 7))
+    node._gripper_callback(types.SimpleNamespace(data=[0.] * 8))
+    node.step()
+    assert "Invalid replay_approach" in node.failed
+    assert not node.command_pub.messages
+
+
+def test_approach_out_of_bounds_feedback_does_not_move(replay):
+    node, clock, feedback, _, recorder = replay
+    initial = np.zeros(14)
+    initial[0] = 10
+    feedback(initial)
+    node.step()
+    assert node.failed.startswith("Approach to first frame:")
+    assert not node.command_pub.messages
+    assert not recorder.rows
+
+
+def test_disabled_acceleration_trip_preserves_approach_planning(replay, tmp_path):
+    _, _, _, actions, _ = replay
+    path = tmp_path / "config.yaml"
+    config = yaml.safe_load(path.read_text())
+    config["bridge"]["motion_safety"]["max_acceleration_rad_s2"] = None
+    path.write_text(yaml.safe_dump(config))
+    args = types.SimpleNamespace(config=path, slow_factor=None, speed=1., motion=True, start_frame=0)
+    node = create_replay_node(args, actions, 30)
+    node._joint_callback(types.SimpleNamespace(l_arm_pos_fdback=[0.] * 7, r_arm_pos_fdback=[0.] * 7))
+    node._gripper_callback(types.SimpleNamespace(data=[0.] * 8))
+    node.step()
+    assert not node.failed
+    assert node.command_safety.max_acceleration is None
+    assert node.command_pub.messages
+    node.approach.validate_limits(np.full(14, -3), np.full(14, 3), .3, .5)
+
+
+def test_disabled_position_limits_allow_approach_from_negative_left_j2(replay, tmp_path):
+    _, _, _, actions, _ = replay
+    path = tmp_path / "config.yaml"
+    config = yaml.safe_load(path.read_text())
+    config["bridge"]["motion_safety"]["check_position_limits"] = False
+    path.write_text(yaml.safe_dump(config))
+    actions[:, 1] = -.15
+    args = types.SimpleNamespace(config=path, slow_factor=None, speed=1., motion=True, start_frame=0)
+    node = create_replay_node(args, actions, 30)
+    node._joint_callback(types.SimpleNamespace(l_arm_pos_fdback=[0., -.1, 0., 0., 0., 0., 0.],
+                                              r_arm_pos_fdback=[0.] * 7))
+    node._gripper_callback(types.SimpleNamespace(data=[0.] * 8))
+    node.step()
+    assert not node.failed
+    assert node.command_pub.messages[-1].l_arm_des_msg[1] == pytest.approx(-.1)
+    assert node.approach.at(node.approach.duration)[1] == pytest.approx(-.15)
+
+
+def test_replay_waits_for_handoff_and_physical_arrival_then_starts_at_frame_zero(replay):
+    node, clock, feedback, actions, recorder = replay
+    node.step()
+    for tick in range(1, 700):
+        clock[0] = 10 + tick / 300
+        feedback()
+        if tick < 450:
+            report_handoff(node, complete=False)
+        elif tick < 550:
+            node.joints[0] = .08  # Complete command handoff alone is insufficient.
+        elif tick < 600:
+            node.joint_velocity[0] = .1  # Near the target but still moving.
+        node.step()
+        assert not node.failed
+        if tick < 660:
+            assert node.dataset_started_at is None
+            assert node.index == 0
+            assert not any(row["source_knot"] for row in recorder.rows)
+        if node.dataset_started_at is not None:
+            assert node.dataset_started_at == clock[0]
+            np.testing.assert_allclose(node.last_command[[0, 1, 2]], actions[0, [0, 1, 2]], atol=1e-9)
+            assert recorder.rows[-1]["source_knot"]
+            assert recorder.rows[-1]["phase"] == "replay"
+            break
+    else:
+        pytest.fail("Did not start after fresh handoff and settled physical feedback")
+
+
+def test_replay_missing_handoff_times_out_without_consuming_frames(replay):
+    node, clock, feedback, _, recorder = replay
+    node.start_gate.timeout = .5
+    for tick in range(500):
+        clock[0] = 10 + tick / 300
+        feedback()
+        node.start_gate.status_at = None
+        node.step()
+        if node.failed:
+            break
+    assert "First-frame settle timeout" in node.failed
+    assert node.dataset_started_at is None and node.index == 0
+    assert recorder.status == "fault"
+    assert not any(row["source_knot"] for row in recorder.rows)
+    count = len(node.command_pub.messages)
+    feedback()
+    node.step()
+    assert len(node.command_pub.messages) == count

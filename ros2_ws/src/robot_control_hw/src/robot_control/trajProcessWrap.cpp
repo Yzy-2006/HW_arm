@@ -1,4 +1,6 @@
 #include "robot_control/msgPublisher.h"
+#include <iomanip>
+#include <sstream>
 
 /*
         by 霜云喵
@@ -173,9 +175,10 @@ void RobotCtlNode::xr_teleComu_init(){
         std::bind(&RobotCtlNode::zeroReturnCmd_callback, this, std::placeholders::_1)
     );
 
-    endDescPub_sub = this->create_subscription<ctl_msgs_hw::msg::EndDescPub>(
-        "/feedback_get/end_desc_traj_pub",
-        10,
+    // Use the live FK feedback stream also consumed by the recorder.
+    endDescPub_sub = this->create_subscription<ctl_msgs_hw::msg::FkDataPub>(
+        "/dexbotCtl/DescPub/Fk_ret_data_pub",
+        rclcpp::QoS(rclcpp::KeepLast(1)),
         std::bind(&RobotCtlNode::endDescPub_callback, this, std::placeholders::_1)
     );
 
@@ -197,10 +200,23 @@ void RobotCtlNode::xr_teleComu_init(){
             }
             const double age = std::chrono::duration<double>(
                 std::chrono::steady_clock::now() - last_desc_feedback).count();
-            if(request->data && (age > 0.25 || !xrTeleComuCtl.reanchor_from_feedback())){
-                response->success = false;
-                response->message = "VR handoff requires fresh finite FK feedback within VR limits";
-                return;
+            if(request->data){
+                std::string reason;
+                const bool received = last_desc_feedback != std::chrono::steady_clock::time_point{};
+                if(!received) reason = "fk_feedback_missing: no six-element pose received";
+                else if(age > 0.25) reason = "fk_feedback_stale";
+                else xrTeleComuCtl.reanchor_from_feedback(&reason);
+                if(!reason.empty()){
+                    std::ostringstream diagnostic;
+                    diagnostic << "VR handoff rejected: " << reason << " feedback_age_s=";
+                    if(received) diagnostic << std::setprecision(6) << age;
+                    else diagnostic << "missing";
+                    diagnostic << " max_feedback_age_s=0.25 topic=/dexbotCtl/DescPub/Fk_ret_data_pub";
+                    response->success = false;
+                    response->message = diagnostic.str();
+                    RCLCPP_WARN(get_logger(), "%s", response->message.c_str());
+                    return;
+                }
             }
             bridge_transmit.set_vr_override(request->data);
             response->success = true;
@@ -258,14 +274,10 @@ void RobotCtlNode::zeroReturnCmd_callback(const std_msgs::msg::Bool::SharedPtr m
 }
 
 //末端笛卡尔位姿反馈回调：缓存当前末端位姿（用于回零完成后重新锚定）
-void RobotCtlNode::endDescPub_callback(const ctl_msgs_hw::msg::EndDescPub::SharedPtr msg){
-    if(msg->l_desc_pos_ret.size() != 6 || msg->r_desc_pos_ret.size() != 6) return;
-    std::vector<double> l_desc_ret(6, 0.0), r_desc_ret(6, 0.0);
-    for(int i = 0; i < 6; i++){
-        l_desc_ret[i] = msg->l_desc_pos_ret[i];
-        r_desc_ret[i] = msg->r_desc_pos_ret[i];
-    }
-    xrTeleComuCtl.update_desc_ret(l_desc_ret, r_desc_ret);
+void RobotCtlNode::endDescPub_callback(const ctl_msgs_hw::msg::FkDataPub::SharedPtr msg){
+    xrTeleComuCtl.update_desc_ret(
+        {msg->x_l, msg->y_l, msg->z_l, msg->roll_l, msg->pitch_l, msg->yaw_l},
+        {msg->x_r, msg->y_r, msg->z_r, msg->roll_r, msg->pitch_r, msg->yaw_r});
     last_desc_feedback = std::chrono::steady_clock::now();
 }
 

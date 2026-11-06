@@ -28,6 +28,7 @@ sudo 密码并配置 `servo_node`，具体见[环境与构建](environments/READ
 | 完整配置与使用双臂叠毛巾仿真、VR、自动对折及三路相机 | [双臂叠毛巾仿真完整指南](simulation/README.md) | `make sim`、`make sim-fold`、`make sim-vr` |
 | 部署已训练的 PI05 或 ACT 模型到机器人 | [机器人部署指南](docs/DEPLOYMENT.md) | `make pi05`/`make act`、`make bridge`、`make motion` |
 | 将 LeRobot 数据集动作通过控制链回放 | [数据集动作回放流程](docs/DATASET_REPLAY_WORKFLOW.md) | `make replay ARGS="--episode 0"`（默认 dry-run） |
+| 增大关节变化阈值，离线筛选已导出的数据 | [已导出数据的离线筛选](docs/DATASET.md#已导出数据的离线筛选) | `make filter-data DATASET=/path/to/lerobot MIN_JOINT_DELTA_RAD=0.02 ARGS="--dry-run"` |
 | 按正确顺序启动并采集真机数据 | [真机数据采集流程](docs/DATA_COLLECTION_WORKFLOW.md) | 分终端：`make servo` → `make arms` → `make robot` → `make record` → `make vr` |
 | 填写并核对三台 RealSense 的序列号和画面 | [相机序列号配置](docs/CAMERA_CONFIGURATION.md) | `make preview` |
 | 记录单臂或双臂新的安全初始姿态 | [机械臂零位标定](docs/ARM_ZERO_CALIBRATION.md) | `make calibrate-arm-zero SIDE=both` |

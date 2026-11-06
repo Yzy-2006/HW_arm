@@ -87,13 +87,16 @@ int main(int argc, char** argv){
     if(std::string(argv[2]) == "handoff"){
         xr_telepercation_ctl ctl;
         ctl.init();
-        assert(!ctl.reanchor_from_feedback());
+        std::string reason;
+        assert(!ctl.reanchor_from_feedback(&reason));
+        assert(reason.find("fk_feedback_missing") != std::string::npos);
         const std::vector<double> left{0.2, 0.1, -0.3, 0.1, -0.2, 0.3};
         const std::vector<double> right{0.2, -0.1, -0.3, -0.1, 0.2, -0.3};
         ctl.update_desc_ret(left, right);
         ctl.l_arm_end_delta[0] = 50.0;
         ctl.trigger_joint_return();
-        assert(ctl.reanchor_from_feedback());
+        assert(ctl.reanchor_from_feedback(&reason));
+        assert(reason.empty());
         auto first = ctl.trans_and_outp();
         assert(first.ctl_transMod == 4 && first.ifUseRet == 1);
         assert(ctl.accepts_vr_input());
@@ -111,7 +114,43 @@ int main(int argc, char** argv){
         auto invalid = left;
         invalid[0] = std::numeric_limits<double>::quiet_NaN();
         ctl.update_desc_ret(invalid, right);
-        assert(!ctl.reanchor_from_feedback());
+        assert(!ctl.reanchor_from_feedback(&reason));
+        assert(reason.find("fk_feedback_nonfinite arm=left axis=x") != std::string::npos);
+        assert(reason.find("unit=m") != std::string::npos);
+        invalid = right;
+        invalid[5] = std::numeric_limits<double>::infinity();
+        ctl.update_desc_ret(left, invalid);
+        assert(!ctl.reanchor_from_feedback(&reason));
+        assert(reason.find("arm=right axis=yaw") != std::string::npos);
+        assert(reason.find("unit=rad") != std::string::npos);
+        return 0;
+    }
+    if(std::string(argv[2]) == "handoff_limits"){
+        xr_telepercation_ctl ctl;
+        ctl.init();
+        const std::vector<double> origin(6, 0.0);
+        for(int side = 0; side < 2; ++side){
+            for(int axis = 0; axis < 6; ++axis){
+                for(double value : {-1.25, 1.25}){
+                    auto pose = origin;
+                    pose[axis] = value;
+                    ctl.update_desc_ret(side == 0 ? pose : origin, side == 1 ? pose : origin);
+                    ctl.l_arm_end_delta[0] = 0.123;
+                    std::string reason;
+                    assert(!ctl.reanchor_from_feedback(&reason));
+                    const char* axes[] = {"x", "y", "z", "roll", "pitch", "yaw"};
+                    assert(reason.find(axis < 3 ? "vr_position_limit" : "vr_orientation_limit") != std::string::npos);
+                    assert(reason.find(side == 0 ? "arm=left" : "arm=right") != std::string::npos);
+                    assert(reason.find(std::string("axis=") + axes[axis]) != std::string::npos);
+                    assert(reason.find(value < 0 ? "value=-1.25" : "value=1.25") != std::string::npos);
+                    assert(reason.find("bounds=[-1,1]") != std::string::npos);
+                    assert(ctl.l_arm_end_delta[0] == 0.123);
+                }
+            }
+        }
+        ctl.update_desc_ret(origin, origin);
+        std::string reason = "old error";
+        assert(ctl.reanchor_from_feedback(&reason) && reason.empty());
         return 0;
     }
     if(std::string(argv[2]) == "lock_enabled" || std::string(argv[2]) == "lock_disabled"){

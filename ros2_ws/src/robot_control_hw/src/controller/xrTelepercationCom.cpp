@@ -4,6 +4,8 @@
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <yaml-cpp/yaml.h>
 #include <Eigen/Geometry>
+#include <iomanip>
+#include <sstream>
 
 namespace {
 
@@ -647,19 +649,42 @@ void xr_telepercation_ctl::trigger_joint_return(){
     returnRequested = true;
 }
 
-bool xr_telepercation_ctl::reanchor_from_feedback(){
-    if(!desc_ret_valid) return false;
+bool xr_telepercation_ctl::reanchor_from_feedback(std::string* rejection_reason){
+    if(rejection_reason) rejection_reason->clear();
+    const auto reject = [rejection_reason](const std::string& reason){
+        if(rejection_reason) *rejection_reason = reason;
+        return false;
+    };
+    if(!desc_ret_valid) return reject("fk_feedback_missing: no valid six-element pose received");
+    static constexpr const char* axes[] = {"x", "y", "z", "roll", "pitch", "yaw"};
+    const auto detail = [](const char* reason, const char* side, int axis, double value){
+        std::ostringstream out;
+        out << std::setprecision(10) << reason << " arm=" << side
+            << " axis=" << axes[axis] << " value=" << value
+            << " unit=" << (axis < 3 ? "m" : "rad");
+        return out.str();
+    };
     for(int i = 0; i < 6; ++i){
-        if(!std::isfinite(l_desc_ret_cache[i]) || !std::isfinite(r_desc_ret_cache[i])) return false;
+        if(!std::isfinite(l_desc_ret_cache[i]))
+            return reject(detail("fk_feedback_nonfinite", "left", i, l_desc_ret_cache[i]));
+        if(!std::isfinite(r_desc_ret_cache[i]))
+            return reject(detail("fk_feedback_nonfinite", "right", i, r_desc_ret_cache[i]));
     }
     // Refuse a handoff that would clamp the measured pose to a distant VR limit.
+    const auto check_bound = [&](const char* side, int axis, double value, double lower, double upper){
+        if(value >= lower && value <= upper) return true;
+        std::ostringstream out;
+        out << detail(axis < 3 ? "vr_position_limit" : "vr_orientation_limit", side, axis, value)
+            << std::setprecision(10) << " bounds=[" << lower << "," << upper << "]";
+        return reject(out.str());
+    };
     for(int i = 0; i < 3; ++i){
-        if(position_limit_enabled && (l_desc_ret_cache[i] < l_pos_min[i] ||
-            l_desc_ret_cache[i] > l_pos_max[i] || r_desc_ret_cache[i] < r_pos_min[i] ||
-            r_desc_ret_cache[i] > r_pos_max[i])) return false;
-        if(orientation_limit_enabled && (l_desc_ret_cache[i+3] < l_rpy_min[i] ||
-            l_desc_ret_cache[i+3] > l_rpy_max[i] || r_desc_ret_cache[i+3] < r_rpy_min[i] ||
-            r_desc_ret_cache[i+3] > r_rpy_max[i])) return false;
+        if(position_limit_enabled &&
+            (!check_bound("left", i, l_desc_ret_cache[i], l_pos_min[i], l_pos_max[i]) ||
+             !check_bound("right", i, r_desc_ret_cache[i], r_pos_min[i], r_pos_max[i]))) return false;
+        if(orientation_limit_enabled &&
+            (!check_bound("left", i+3, l_desc_ret_cache[i+3], l_rpy_min[i], l_rpy_max[i]) ||
+             !check_bound("right", i+3, r_desc_ret_cache[i+3], r_rpy_min[i], r_rpy_max[i]))) return false;
     }
     for(int i = 0; i < 3; ++i){
         st_pos_l[i] = l_desc_ret_cache[i];

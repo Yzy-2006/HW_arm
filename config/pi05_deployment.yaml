@@ -11,6 +11,8 @@ pd_config: ros2_ws/src/ctl_msgs_hw/config/initialPD.yaml
 urdf: ros2_ws/src/dual_arm_hw/urdf/dual_arm.urdf
 
 worker:
+  # New flat-towel B model uses inference_flat_towel.py instead.
+  inference_entry: inference.py
   host: 127.0.0.1
   port: 8765
   token: ""
@@ -28,22 +30,38 @@ bridge:
   action_rate_hz: 30
   interpolation:
     enabled: true
-    publish_rate_hz: 300
+    publish_rate_hz: 100
+  # Standalone feedback-to-first-frame segment for dataset replay only.
+  # Also capped by motion_safety and the servo homingHandoff settings.
+  # Arrival tolerances/settling below are bypassed in speed_only protection mode.
+  replay_approach:
+    max_velocity_rad_s: 5.0
+    max_acceleration_rad_s2: 1.0
+    min_duration_s: 1.0
+    position_tolerance_rad: 0.1
+    velocity_tolerance_rad_s: 0.05
+    settle_time_s: 0.2
+    settle_timeout_s: 10.0
   motion_safety:
-    max_velocity_rad_s: 1.0
-    max_acceleration_rad_s2: 5.0
+    policy_disable_all_speed_checks: true  # Model stream only, including servo command/feedback checks.
+    policy_command_speed_check: false  # Model bridge only; replay and servo limits remain configured separately.
+    protection_mode: speed_only  # Disable non-speed software trips; explicit faults/stops remain latched.
+    speed_limit_enabled_per_arm: [true, true, true, true, false, false, false]
+    check_position_limits: false  # Disable absolute joint position checks and URDF clipping.
+    max_velocity_rad_s: 5.0
+    max_acceleration_rad_s2: null  # Disable acceleration trips; velocity checks remain active.
     max_tracking_error_rad: 0.3
     tracking_timeout_s: 0.1
-  state_timeout_s: 0.25
+  state_timeout_s: 0.25  # Used in full mode; speed_only accepts cached finite feedback.
   # Refresh the horizon asynchronously; control and feedback never wait for it.
   replan_interval_s: 0.5
-  # Reject actions older than this observation age, even if inference succeeds.
+  # Full mode only: reject actions older than this observation age.
   max_action_age_s: 1.0
   jpeg_quality: 80
   # Use the medium-stiffness preset for policy deployment and dataset replay.
   pd_level: mid
   rigidity_mode: 2
-  # Maximum target offset from fresh joint feedback at each bridge tick.
+  # Full mode only: maximum target offset from fresh joint feedback at each bridge tick.
   # This is deliberately small
   # for first tests; increase only after replay and dry-run checks pass.
   max_joint_step_rad: 0.3

@@ -43,7 +43,12 @@ ROS 各话题和三台 USB 相机没有共享硬件触发。本采集器进行�
 真正的采集间隙超限仍会中止片段并保留原始证据。
 
 录制过程中每 2 秒输出一次 `Capture diagnostics`，保存或中止时额外输出一次。
-`callback_ms(avg/max)` 是采样回调起始时间的平均/最大间隔；
+`callback_interval_ms(avg/max)` 是采样回调起始时间的平均/最大间隔；
+`sample_body_ms` 是本次采样主体执行耗时（截至打印诊断之前）；
+`callback_exec_ms(last/avg/max)` 是已经结束的回调的完整执行耗时，包含日志输出；
+`callback_thread_cpu_ms(last/avg/max)` 是对应回调线程实际消耗的 CPU 时间。
+因此当前回调的完整耗时会在后续日志和资源记录中体现；墙钟耗时明显高于线程 CPU 时间
+说明存在等待或调度延迟，不能仅凭差值判断是 CPU 争抢还是锁/GIL/I/O 等待。
 `frame_gap_ms(current/max)` 是采样时距上一帧已保存采样时间的当前/最大间隔；
 `write_ms(last/avg/max)` 是整帧保存耗时（含三路 JPEG 质量 90 编码写入与 JSONL 追加/flush），
 `jpeg_write_ms` 是最近一次保存中各路 JPEG 的耗时。这些耗时不代表磁盘 fsync 持久化时间。
@@ -52,9 +57,14 @@ ROS 各话题和三台 USB 相机没有共享硬件触发。本采集器进行�
 不含随后写盘的耗时；中止日志改为使用中止检查时的相机信息。
 `duplicate_skips` 记录因任一路相机帧号未更新而跳过的采样次数。
 `motion_skips` 记录因关节变化小于 `min_joint_delta_rad` 而跳过的采样次数。
-FPS、平均值、最大值和跳过次数从当前 episode 开始累计；中止时尽可能读取相机线程的最新帧号。
-例如，写盘耗时接近 100 ms 提示编码/写盘阻塞；`step=0` 和不断增加的
-`age_ms` 提示相机更新延迟。诊断不改变采集阈值或原始帧字段。
+采样 FPS、平均值、最大值和跳过次数从当前 episode 开始累计；中止时尽可能读取相机线程的最新帧号。
+相机的 `arrival_ms(last/max)` 是接收线程连续收到图像的主机时间间隔，
+`device_interval_ms` 是连续收到图像的设备时间戳间隔，`receiver_frame_gaps` 是接收时帧号跳过的累计数量。
+这些相机接收统计从相机启动开始累计，和相对于已保存帧的 `step` 不同。
+主机接收间隔变大而设备时间戳间隔正常时，应排查接收线程调度或传输延迟；
+帧号和设备时间戳同时跳变说明接收到了间隔更大的曝光帧，但不能仅凭这些字段断言 USB 故障。
+写盘耗时应与 `writer_queue` 的积压一起看，后台单次写入较慢不等于采样被同步阻塞。
+诊断不改变采集阈值。
 
 录制配置快照中 `min_joint_delta_rad > 0` 的片段，导出时将已保存帧逐帧写入，
 不重复补帧，也不再次过滤夹爪变化帧。训练时间轴为 `frame_index / fps`，
@@ -63,6 +73,56 @@ FPS、平均值、最大值和跳过次数从当前 episode 开始累计；中�
 未启用停顿过滤的旧片段保留间隔校验和基于真实时间的上一帧保持重采样；两种模式须分开导出。
 启用 `auxiliary.capture_time_s` 可保留所选原始帧的实际采样时间，它不等于压缩后的训练时间。
 完整的原始消息和相机时钟信息仍保存在 JSONL 中，便于以后重新对齐/导出。
+
+## 已导出数据的离线筛选
+
+`collection/filter_lerobot.py` 可以对已采集并导出的 LeRobot v3 数据集再次执行关节停顿过滤。
+它直接读取已有 Parquet 和视频，不需要连接机器人，也不要求保留原始 JPEG。
+修改 `recording.yaml` 只影响后续采集；离线处理通过 `--min-joint-delta-rad` 单独指定阈值。
+
+在安装了 LeRobot、PyArrow 和 PyAV 的训练环境执行（本机已有 `lerobot` Conda 环境；
+其他机器可使用已配置的 `towel-pi05` 环境）。先只统计，不读取视频、不写文件：
+
+```bash
+conda activate lerobot
+cd /home/yanziyu/projects/HW_arm/towel_task
+make filter-data DATASET=/home/yanziyu/datasets/fold-flat-towel \
+  MIN_JOINT_DELTA_RAD=0.02 ARGS="--dry-run"
+```
+
+确认保留比例后输出到新目录：
+
+```bash
+make filter-data DATASET=/home/yanziyu/datasets/fold-flat-towel \
+  OUTPUT=/home/yanziyu/datasets/fold-flat-towel-filtered-002 \
+  MIN_JOINT_DELTA_RAD=0.02
+```
+
+也可直接运行脚本，或使用 `--episodes 0 1` 先处理部分轨迹：
+
+```bash
+python collection/filter_lerobot.py \
+  --dataset /home/yanziyu/datasets/fold-flat-towel \
+  --output /home/yanziyu/datasets/fold-flat-towel-filtered-test \
+  --min-joint-delta-rad 0.02 --episodes 0 1
+```
+
+筛选比较当前帧和上一条保留帧的 14 个实测关节角（`observation.state`，不是动作目标）；
+最大绝对变化小于阈值时跳过。左右夹爪的反馈或目标状态变化、任务变化，以及每段首尾帧始终保留。
+阈值必须是正的有限数，单位 rad；已在采集时删除的帧无法恢复。
+
+工具由 LeRobot 写入接口重新编码所有视频并生成帧索引、时间戳、episode 元数据和统计信息。
+原始数据不修改，输出目录必须不存在，且不能与源目录互相包含。输出中的 episode 从 0 连续编号；
+`meta/offline_filter.json` 记录阈值、源 episode 编号、保留的原始帧号和原始数据集时间戳。
+其他数值特征随同一组帧保留；原数据集的缓存、原始 JSONL 旁路文件不复制。
+转换失败或中断时输出目录带有 `FILTER_INCOMPLETE` 标记，不应当作完整数据集使用；重试时使用新目录。
+
+**筛选后仍使用原数据集 FPS，删除帧对应的时间被压缩，因此轨迹时长变短。**
+视频会重新编码，处理时间和临时磁盘占用取决于保留帧数。重新回放时改用新目录，并先用 RViz 预览：
+
+```bash
+make replay ARGS="--dataset /home/yanziyu/datasets/fold-flat-towel-filtered-002 --episode 0 --max-frames 90 --rviz"
+```
 
 ## LeRobot 默认表示
 

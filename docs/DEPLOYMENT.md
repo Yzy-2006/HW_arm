@@ -33,7 +33,8 @@ make motion PI05_SLOW_FACTOR=0.1
 `make bridge ARGS=...` 和 `make motion ARGS=...` 支持传递额外 bridge 参数。
 
 需要部署中暂停模型、切换 VR 并采集恢复动作时，使用 `--intervention`，完整操作见
-[VR 接管与补采](POLICY_INTERVENTION.md)。该模式复用部署相机，不另启 `make record`。
+[VR 接管与补采](POLICY_INTERVENTION.md)。该模式自动启动独立补采进程，由它打开相机，
+部署桥通过共享内存读取图像；不需要额外终端，也不另启 `make record`。
 
 ## 环境分工
 
@@ -59,6 +60,10 @@ make preview
 `make build` 在控制源码或消息定义变化后必须重新执行。
 
 ## 部署 PI05
+
+下载并部署新平铺 B 模型的命令见 [更新到平铺起始 B 模型](PI05_DEPLOYMENT.md#更新到平铺起始-b-模型)。
+该模型需要 `inference_flat_towel.py`，使用 `PI05_ARGS="--inference-entry inference_flat_towel.py"`
+或 YAML 的 `worker.inference_entry` 选择。
 
 默认模型目录是 `$HOME/models/pi05-encos-fold-towel-93`，必须包含 `inference.py` 和
 `step-19999/params/`。首次安装环境：

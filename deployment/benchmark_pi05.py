@@ -111,6 +111,7 @@ def main():
     parser.add_argument("--model", required=True)
     parser.add_argument("--checkpoint", default="step-19999")
     parser.add_argument("--num-steps", type=int)
+    parser.add_argument("--inference-entry", choices=("inference.py", "inference_flat_towel.py"))
     parser.add_argument("--mode", choices=("policy", "worker", "both"), default="both")
     parser.add_argument("--input", type=Path, help="Optional NPZ: flat observation.* keys and prompt")
     parser.add_argument("--warmup", type=int, default=5)
@@ -127,6 +128,8 @@ def main():
     settings_argv = ["--config", args.config, "--model", str(model_path), "--checkpoint", args.checkpoint]
     if args.num_steps is not None:
         settings_argv += ["--num-steps", str(args.num_steps)]
+    if args.inference_entry is not None:
+        settings_argv += ["--inference-entry", args.inference_entry]
     settings = worker_args(settings_argv)
     config = yaml.safe_load(Path(args.config).expanduser().read_text())
     observation = read_observation(config, args.input)
@@ -134,7 +137,7 @@ def main():
 
     load_started = time.perf_counter()
     runner = PolicyRunner(settings.model, "cuda", False, {}, settings.checkpoint,
-                          settings.num_steps, settings.action_horizon)
+                          settings.num_steps, settings.action_horizon, settings.inference_entry)
     import jax
     from flax import nnx
 
@@ -150,6 +153,7 @@ def main():
     report = {
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "model": str(model_path), "checkpoint": settings.checkpoint,
+        "inference_entry": settings.inference_entry,
         "num_steps": settings.num_steps, "action_horizon": settings.action_horizon,
         "device": runner.device, "platform": platform.platform(), "machine": platform.machine(),
         "devices": [{"id": device.id, "kind": device.device_kind, "platform": device.platform}

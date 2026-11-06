@@ -29,6 +29,12 @@ int32 place_hold
 
 # Already sampled position/velocity from one validated joint trajectory.
 bool trajectory_sample
+bool policy_speed_checks_disabled
+
+# Persistent generation, incremented on upper publisher/control-mode changes.
+# Repeated packets keep the same value so a lost packet cannot hide a handoff.
+uint64 handoff_epoch
+std_msgs/Header trajectory_header  # Original bridge command identity, not the forwarding timestamp.
 
 #底层控制模式选择代码：
 int32[] base_rigidity_ctl_mode_l       #左臂各个关节底层控制模式选择

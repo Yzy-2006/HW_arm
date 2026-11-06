@@ -33,6 +33,7 @@ float64 upper_monitor_time   #上位机迭代时间
 # Original bridge sample identity; repeated forwarding must not restart interpolation.
 std_msgs/Header trajectory_header
 bool bridge_joint_stream
+bool policy_speed_checks_disabled
 bool derivatives_valid
 float64[] l_arm_des_acc
 float64[] r_arm_des_acc
