@@ -2,8 +2,8 @@
 """ROS2 bridge between the ENCOS robot and the PI05 worker process.
 
 The bridge assembles observations and publishes the existing ``BridgeCtlMsg``
-control path. Intervention mode delegates camera capture and correction recording
-to a managed process. Motion requires ``--motion``.
+control path. Motion requires ``--motion``. Stop this bridge before manually
+handing control to VR with ``make vr-takeover``.
 """
 
 from __future__ import annotations
@@ -285,9 +285,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default=str(ROOT / "config/pi05_deployment.yaml"))
     parser.add_argument("--motion", action="store_true", help="Publish robot and gripper commands")
-    parser.add_argument("--intervention", action="store_true",
-                        help="Enable VR takeover and shared-camera correction recording; starts paused")
-    parser.add_argument("--intervention-dir", default=str(ROOT / "data/raw/interventions"))
     parser.add_argument("--worker-host")
     parser.add_argument("--worker-port", type=int)
     parser.add_argument("--token")
@@ -298,8 +295,6 @@ def main() -> int:
     )
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args()
-    if args.intervention and not args.motion:
-        parser.error("--intervention requires --motion")
     logging.basicConfig(level=getattr(logging, args.log_level.upper()), format="%(asctime)s %(levelname)s %(message)s")
 
     return run_bridge(lambda: create_bridge_node(args))
@@ -366,7 +361,6 @@ def create_bridge_node(args):
     camera_cfg = _read_yaml(camera_cfg_path)
     camera_cfg["publish_rviz"] = False
     if speed_only:
-        # This config is also persisted in intervention episode metadata.
         camera_cfg["camera_timing_checks_enabled"] = False
     gripper_cfg = _read_yaml(_resolve_path(config.get("gripper_config"), ROOT / "teleop/VR_controller/config/grippers.yaml"))
     controller_cfg = _read_yaml(_resolve_path(config.get("controller_config"), ROOT / "ros2_ws/src/ctl_msgs_hw/config/controllerConfig.yaml"))
@@ -442,33 +436,17 @@ def create_bridge_node(args):
 
     sys.path.insert(0, str(ROOT / "collection"))
     from record import Cameras
-    recording_config = None
-    if getattr(args, "intervention", False):
-        recording_config = dict(camera_cfg)
-        recording_config["dataset_root"] = str(Path(args.intervention_dir).expanduser().resolve())
-        recording_config["min_joint_delta_rad"] = 0.0
-        recording_config["episode_metadata"] = {
-            "source": "policy_intervention", "control_source": "vr",
-            "deployment_config": config, "task": task,
-        }
 
     class BridgeNode(Node):
         def __init__(self):
             super().__init__("pi05_encos_bridge")
             self.motion = bool(args.motion)
-            self.intervention = None
             self.safety = None
             self.command_safety = CommandSafety(policy_safety_cfg, lower, upper, now=time.monotonic)
             self.sample_velocity = self.sample_acceleration = None
             self.last_sample_derivatives = None
-            self.recorder = None
             self.client = PolicyClient(worker_host, worker_port, token, float(worker_cfg.get("timeout_s", 5.0)))
-            if recording_config is not None:
-                from recorder_process import RecorderProcess
-                self.recorder = RecorderProcess(recording_config)
-                self.cameras = self.recorder.cameras
-            else:
-                self.cameras = Cameras(camera_cfg)
+            self.cameras = Cameras(camera_cfg)
             self.state_lock = threading.Lock()
             self.joints = None
             self.joint_received_at = 0.0
@@ -512,9 +490,6 @@ def create_bridge_node(args):
                     arm_on_publish=True, startup_settle_s=0.2, monitor_heartbeat=not speed_only)
                 if speed_only:
                     self.get_logger().warning("Speed-only protection: heartbeat, age, position, acceleration, tracking and feedback-offset checks disabled; explicit faults/stops remain active")
-            if getattr(args, "intervention", False):
-                from intervention import attach_intervention
-                attach_intervention(self)
             self.get_logger().warning(
                 f"PI05 bridge started in {'MOTION' if self.motion else 'DRY-RUN'} "
                 f"mode; worker={worker_host}:{worker_port} task={task!r} "
@@ -629,8 +604,6 @@ def create_bridge_node(args):
         def _hold(self):
             self.command_safety.reset()
             self.last_sample_derivatives = None
-            if self.intervention is not None and self.intervention.mode != "policy":
-                return
             if self.motion and self.last_command is not None:
                 # Targets in this packet are ignored by the controller: it
                 # captures its own joint feedback once on entry to hold.
@@ -643,30 +616,8 @@ def create_bridge_node(args):
             self.last_sample_derivatives = None
             self.generation += 1
 
-        def pause_policy(self):
-            self.command_safety.reset()
-            self._invalidate()
-            self.reanchor_next_command = True
-            # A hold packet locks the controller before requesting VR ownership.
-            state = self._snapshot_state()
-            if self.motion:
-                self._publish_command(state if state is not None else np.zeros(16), hold=True)
-
-        def resume_policy(self):
-            if self.safety is not None and not self.safety.ready():
-                raise MotionFault("Policy resume requires healthy servo safety state")
-            self.command_safety.reset()
-            self._invalidate()
-            self.last_command = None
-            self.reanchor_next_command = True
-            self.last_observation_check = -float("inf")
-            self.startup_ready = False
-            self.last_request_at = -float("inf")
-
         def publish_step(self):
             if self.safety is not None and not self.safety.ready():
-                return
-            if self.intervention is not None and self.intervention.mode != "policy":
                 return
             if not self.startup_ready:
                 return
@@ -725,8 +676,6 @@ def create_bridge_node(args):
             if self.safety is not None and not self.safety.ready():
                 if not self.startup_ready and not self.safety.fault:
                     self._warn(f"Waiting for startup servo safety; {self.safety.diagnostics()}; {self._input_diagnostics()}")
-                return
-            if self.intervention is not None and self.intervention.mode != "policy":
                 return
             try:
                 state = self._snapshot_state()
@@ -823,9 +772,7 @@ def create_bridge_node(args):
         def _safety_fault(self, reason):
             self._invalidate()
             self.last_command = None
-            if self.intervention is not None:
-                self.intervention.latch_fault(reason)
-            self.get_logger().error(f"Motion fault latched; policy and VR blocked: {reason}")
+            self.get_logger().error(f"Motion fault latched; policy blocked: {reason}")
 
         def _warn(self, message: str):
             now = time.monotonic()
@@ -848,8 +795,6 @@ def create_bridge_node(args):
                 # still holds the arms when this stream disappears.
                 LOG.warning("Could not publish shutdown hold: %s", exc)
             finally:
-                if self.recorder is not None:
-                    self.recorder.close()
                 self.inference_pool.shutdown(wait=True, cancel_futures=True)
                 self.client.close()
                 self.cameras.close()

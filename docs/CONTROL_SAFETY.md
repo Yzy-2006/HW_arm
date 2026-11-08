@@ -361,10 +361,11 @@ Replay writes a JSON status alongside its CSV/plot, including `completed`,
 `interrupted`, or `fault`, the reason and number of samples. Even rejection before
 the first sample writes a status file. Faulted replay exits nonzero.
 
-VR takeover is allowed only while servo safety is ready. A fault invalidates policy
-results, blocks both handoff directions and enters `fault` intervention state. A
-recording already started is finalized, including when its start acknowledgement
-arrives after the fault. Fault recovery cannot automatically enable either source.
+Manual VR takeover uses `/dexbotCtl/vr_override` after the policy bridge exits.
+The controller checks servo safety and anchors VR to fresh finite FK feedback
+within configured VR bounds. A latched fault blocks either handoff direction.
+Recording is a separate `make record` process; saving does not resume policy.
+See [Manual VR takeover](POLICY_INTERVENTION.md) for the terminal sequence.
 
 ## Offline Verification
 
@@ -373,7 +374,7 @@ The ROS message definitions changed. Rebuild `ctl_msgs_hw`, `dual_arm_control_hw
 
 ```bash
 source scripts/env.sh
-.venv-robot/bin/python -m pytest tests/test_motion_safety.py tests/test_minimum_snap.py tests/test_replay_dataset.py tests/test_pi05_deployment.py tests/test_intervention.py
+.venv-robot/bin/python -m pytest tests/test_motion_safety.py tests/test_minimum_snap.py tests/test_replay_dataset.py tests/test_pi05_deployment.py tests/test_vr_debug.py tests/test_ros_shutdown.py
 ```
 
 Native tests run long filter sequences, covariance checks and fault injection.

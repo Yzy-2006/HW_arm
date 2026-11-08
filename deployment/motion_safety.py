@@ -135,7 +135,8 @@ class SafetyState:
 
 
 def attach_safety(node, on_fault, *, receive_callback_group=None, diagnostics=None,
-                  arm_on_publish=False, startup_settle_s=0.0, monitor_heartbeat=True):
+                  arm_on_publish=False, startup_settle_s=0.0, monitor_heartbeat=True,
+                  repeat_stop_until_ack=False):
     from std_msgs.msg import String
     from rclpy.qos import QoSProfile, DurabilityPolicy
 
@@ -155,7 +156,12 @@ def attach_safety(node, on_fault, *, receive_callback_group=None, diagnostics=No
     options = {} if receive_callback_group is None else {"callback_group": receive_callback_group}
     node.create_subscription(String, "/towel/safety/state", lambda msg: state.receive(msg.data),
                              QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL), **options)
-    node.create_timer(0.05, state.ready)
+    def update():
+        state.ready()
+        if repeat_stop_until_ack and state.fault and not state.state.startswith("fault:"):
+            publisher.publish(String(data=state.fault))
+
+    node.create_timer(0.05, update)
     return state
 
 

@@ -1,4 +1,6 @@
 import sys
+import datetime as dt
+import json
 import types
 from pathlib import Path
 
@@ -13,6 +15,8 @@ from replay_dataset import (  # noqa: E402
     ReplayRecorder, _make_bridge_message, _resolve_slow_factor, _rviz_joint_state,
     load_episode_actions, create_replay_node,
 )
+from minimum_snap import JOINT_INDICES
+from motion_safety import MotionFault
 
 
 def report_handoff(node, complete=True):
@@ -123,6 +127,9 @@ def test_replay_recorder_writes_command_and_feedback_csv(tmp_path):
     csv_path, plot_path = recorder.save()
     assert csv_path is not None and csv_path.is_file()
     assert plot_path is None
+    dt.datetime.strptime(csv_path.stem, '%Y%m%d_%H%M%S_%f')
+    metadata = json.loads(csv_path.with_suffix('.json').read_text())
+    assert metadata['episode'] == 3 and metadata['start_frame'] == 10
     text = csv_path.read_text()
     assert "command_left_joint_1" in text
     assert "dataset_left_joint_1" in text
@@ -144,6 +151,8 @@ def test_replay_recorder_plot_marks_source_knots_and_interpolation(tmp_path):
     csv_path, plot_path = recorder.save()
     assert csv_path is not None and csv_path.is_file()
     assert plot_path is not None and plot_path.is_file()
+    assert plot_path.stem == csv_path.stem
+    dt.datetime.strptime(plot_path.stem, '%Y%m%d_%H%M%S_%f')
 
 
 def test_rviz_joint_state_uses_model_viewer_joint_names():
@@ -224,17 +233,21 @@ def replay(monkeypatch, tmp_path, request):
 
     class Node:
         def __init__(self, name):
-            pass
+            self.publishers = {}
 
         def create_publisher(self, *args):
             messages = []
-            return types.SimpleNamespace(messages=messages, publish=messages.append)
+            publisher = types.SimpleNamespace(messages=messages, publish=messages.append)
+            self.publishers[args[1]] = publisher
+            return publisher
 
         def create_subscription(self, *args):
             pass
 
         def create_timer(self, period, callback):
-            return types.SimpleNamespace(period=period, cancel=lambda: None)
+            timer = types.SimpleNamespace(period=period, cancelled=False)
+            timer.cancel = lambda: setattr(timer, 'cancelled', True)
+            return timer
 
         def get_clock(self):
             return types.SimpleNamespace(now=lambda: types.SimpleNamespace(to_msg=lambda:
@@ -246,17 +259,20 @@ def replay(monkeypatch, tmp_path, request):
     for name, value in {
         "rclpy": types.ModuleType("rclpy"),
         "rclpy.node": types.SimpleNamespace(Node=Node),
-        "rclpy.qos": types.SimpleNamespace(qos_profile_sensor_data=object()),
+        "rclpy.qos": types.SimpleNamespace(qos_profile_sensor_data=object(),
+            QoSProfile=lambda **kw: kw, DurabilityPolicy=types.SimpleNamespace(TRANSIENT_LOCAL=1)),
         "ctl_msgs_hw.msg": types.SimpleNamespace(BridgeCtlMsg=Message, GripperCtl=Message,
                                                 MidNodeCtlMsgRet=Message, HandoffStatus=Message),
-        "std_msgs.msg": types.SimpleNamespace(Float64MultiArray=Message),
+        "std_msgs.msg": types.SimpleNamespace(Float64MultiArray=Message, String=types.SimpleNamespace),
     }.items():
         monkeypatch.setitem(sys.modules, name, value)
     monkeypatch.setattr(module, "time", types.SimpleNamespace(monotonic=lambda: clock[0]))
     # Timing tests supply a healthy servo; fault/heartbeat behavior is tested separately.
-    from motion_safety import SafetyState
+    from motion_safety import attach_safety
     def safety(node, on_fault, **kwargs):
-        state = SafetyState(on_fault, now=lambda: clock[0], **kwargs)
+        state = attach_safety(node, on_fault, **kwargs)
+        state.now = lambda: clock[0]
+        state.started = clock[0]
         if kwargs.get("monitor_heartbeat", True):
             state.ready = lambda: not state.fault
         return state
@@ -287,6 +303,84 @@ def replay(monkeypatch, tmp_path, request):
 
     feedback()
     return node, clock, feedback, actions, recorder
+
+
+@pytest.mark.parametrize('replay', [{'protection_mode': 'speed_only'}], indirect=True)
+@pytest.mark.parametrize('joint', range(14))
+def test_tracking_error_stops_on_first_feedback_for_every_arm_joint(replay, joint):
+    node, clock, feedback, _, recorder = replay
+    node.step()
+    assert node.last_command is not None
+    before = (len(node.command_pub.messages), len(node.gripper_pub.messages))
+    actual = node.last_command[JOINT_INDICES].copy()
+    actual[joint] -= .301
+    feedback(actual)  # No timer tick and no debounce required.
+    assert node.done and node.timer.cancelled and node.failed
+    assert f'{"left" if joint < 7 else "right"}_joint_{joint % 7 + 1}' in node.failed
+    assert 'limit=0.3rad' in node.failed
+    assert recorder.status == 'fault' and recorder.failure_reason == node.failed
+    stops = node.publishers['/towel/safety/stop'].messages
+    assert len(stops) == 1 and stops[0].data == node.failed
+    feedback(node.last_command[JOINT_INDICES])
+    node.step()
+    node._publish_hold()
+    assert (len(node.command_pub.messages), len(node.gripper_pub.messages)) == before
+
+
+@pytest.mark.parametrize('replay', [{'protection_mode': 'speed_only'}], indirect=True)
+def test_tracking_guard_checks_next_target_before_clipping_or_publication(replay):
+    node, _, feedback, _, _ = replay
+    node.step()
+    node.approach.at = lambda elapsed, derivative=0: np.r_[.301, np.zeros(13)] if derivative == 0 else np.zeros(14)
+    before = len(node.command_pub.messages)
+    node.step()
+    assert 'source=next_target' in node.failed
+    assert len(node.command_pub.messages) == before
+    assert node.publishers['/towel/safety/stop'].messages
+
+
+def test_tracking_threshold_is_strict_and_does_not_apply_to_grippers(replay):
+    node, _, _, _, _ = replay
+    node.joints = np.zeros(14)
+    target = np.zeros(16)
+    target[0], target[7], target[15] = .3, 1., 1.
+    node._check_tracking(target, 'test')
+    target[0] = .300001
+    with pytest.raises(MotionFault, match='Replay tracking error'):
+        node._check_tracking(target, 'test')
+
+
+def test_replay_mid_gains_match_original_preset_and_rigidity_mode(replay):
+    from pi05_bridge import load_pd
+    node, _, _, _, _ = replay
+    kp_l, kd_l, kp_r, kd_r = load_pd(ROOT / 'ros2_ws/src/ctl_msgs_hw/config/initialPD.yaml', 'mid')
+    node.step()
+    node._publish_hold()
+    for msg in node.command_pub.messages:
+        assert msg.l_arm_rigidity_mod == [2] * 7 and msg.r_arm_rigidity_mod == [2] * 7
+        np.testing.assert_array_equal(msg.l_arm_jnt_kp, kp_l)
+        np.testing.assert_array_equal(msg.r_arm_jnt_kp, kp_r)
+        np.testing.assert_array_equal(msg.l_arm_jnt_kd, kd_l)
+        np.testing.assert_array_equal(msg.r_arm_jnt_kd, kd_r)
+    config = yaml.safe_load((ROOT / 'config/pi05_deployment.yaml').read_text())
+    assert config['bridge']['pd_level'] == 'mid' and config['bridge']['rigidity_mode'] == 2
+
+
+@pytest.mark.parametrize('acknowledged', [False, True])
+def test_replay_exit_waits_for_servo_fault_or_reports_unconfirmed(monkeypatch, acknowledged):
+    import replay_dataset as module
+    clock, messages = [0.], []
+    monkeypatch.setattr(module, 'time', types.SimpleNamespace(monotonic=lambda: clock[0]))
+    state = types.SimpleNamespace(state='ready')
+    def spin(node, timeout_sec):
+        clock[0] += timeout_sec
+        if acknowledged:
+            state.state = 'fault:upstream: Replay tracking error'
+    node = types.SimpleNamespace(safety=state,
+        get_logger=lambda: types.SimpleNamespace(info=messages.append, error=messages.append))
+    ros = types.SimpleNamespace(ok=lambda: True, spin_once=spin)
+    assert module._wait_for_servo_fault(node, ros) is acknowledged
+    assert ('NOT confirmed' in messages[-1]) != acknowledged
 
 
 @pytest.mark.parametrize("replay", [{"protection_mode": "speed_only", "max_velocity_rad_s": 5.}], indirect=True)

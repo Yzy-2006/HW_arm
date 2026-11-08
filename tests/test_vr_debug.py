@@ -101,54 +101,35 @@ def test_make_vr_debug_starts_only_the_vr_publisher_with_debug_flag():
     assert "servo" not in result.stdout
 
 
-def test_managed_vr_does_not_emit_arm_motion_without_fresh_grant(monkeypatch):
+def test_standalone_vr_records_and_toggles_gripper_on_button_edges(monkeypatch):
     module = load_vr_publisher(monkeypatch)
-    cls = module.VRPoseIncrementPublisher
-    invalidations = []
-    node = types.SimpleNamespace(
-        intervention_enabled=True, intervention_mode="policy", intervention_received_at=10.0,
-        intervention_was_active=False, first_frame=False,
-        dual_grippers=types.SimpleNamespace(sides={
-            "left": types.SimpleNamespace(invalidate=lambda: invalidations.append("left")),
-            "right": types.SimpleNamespace(invalidate=lambda: invalidations.append("right")),
-        }),
-    )
-    monkeypatch.setattr(module.time, "monotonic", lambda: 10.1)
-    node._intervention_active = lambda: cls._intervention_active(node)
-    cls.publish_increment(node, object())  # Invalid telemetry must not even be inspected.
-    assert node.first_frame
-    node.intervention_mode = "vr"
-    assert node._intervention_active()
-    assert invalidations == []  # Standby feedback already anchors the grippers.
-    node.intervention_received_at = 9.0
-    assert not node._intervention_active()
-    assert invalidations == ["left", "right"]
-
-
-def test_managed_gripper_commands_only_publish_during_vr(monkeypatch):
-    module = load_vr_publisher(monkeypatch)
-    commands, states, toggles = [], [], []
+    commands, states, toggles, recording = [], [], [], []
 
     def step(now, buttons):
         toggles.append(buttons)
         return [0.2, -0.3], [0, 1, 0, 1]
 
-    active = [False]
     node = types.SimpleNamespace(
-        intervention_enabled=True, _intervention_active=lambda: active[0],
         prev_record_button=False, prev_discard_button=False,
         prev_left_gripper_button=False, prev_right_gripper_button=False,
+        toggle_recording=lambda: recording.append("toggle"),
+        discard_recording=lambda: recording.append("discard"),
         dual_grippers=types.SimpleNamespace(step=step),
         gripper_ctl_pub=types.SimpleNamespace(publish=commands.append),
         gripper_state_pub=types.SimpleNamespace(publish=states.append),
     )
     telemetry = types.SimpleNamespace(tele_state=types.SimpleNamespace(left_squeeze_ctrl_state=True))
-    module.VRPoseIncrementPublisher.update_gripper(node, telemetry)
-    assert not commands
-    assert len(states) == 1
-    assert not toggles[-1]["left"]
-    active[0] = True
+    setattr(telemetry.tele_state, module.LEFT_RECORD_BUTTON_ATTR, True)
     module.VRPoseIncrementPublisher.update_gripper(node, telemetry)
     assert len(commands) == 1
-    assert not toggles[-1]["left"]  # A squeeze held during policy cannot toggle on takeover.
+    assert len(states) == 1
+    assert toggles[-1]["left"]
+    assert recording == ["toggle"]
+    module.VRPoseIncrementPublisher.update_gripper(node, telemetry)
+    assert len(commands) == 2
+    assert not toggles[-1]["left"]
+    assert recording == ["toggle"]
+    setattr(telemetry.tele_state, module.LEFT_DISCARD_BUTTON_ATTR, True)
+    module.VRPoseIncrementPublisher.update_gripper(node, telemetry)
+    assert recording == ["toggle", "discard"]
     np.testing.assert_allclose([commands[0].l_arm_gripper_pos, commands[0].r_arm_gripper_pos], [.2, -.3])

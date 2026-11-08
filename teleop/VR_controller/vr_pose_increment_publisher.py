@@ -25,7 +25,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSHistoryPolicy, QoSReliabilityPolicy
 from geometry_msgs.msg import Vector3
-from std_msgs.msg import Bool, Float64MultiArray, Int8MultiArray, String
+from std_msgs.msg import Bool, Float64MultiArray, Int8MultiArray
 from std_srvs.srv import SetBool, Trigger
 from ctl_msgs_hw.msg import GripperCtl
 from ament_index_python.packages import get_package_share_directory
@@ -209,16 +209,8 @@ def load_gripper_config():
 class VRPoseIncrementPublisher(Node):
     """订阅(内部)VR 数据，逐帧计算位姿增量，并按扳机门控发布到 ROS2 话题。"""
 
-    def __init__(self, intervention=False):
+    def __init__(self):
         super().__init__('vr_pose_increment_publisher')
-        self.intervention_enabled = intervention
-        self.intervention_mode = "paused"
-        self.intervention_received_at = -float("inf")
-        self.intervention_was_active = False
-        self.intervention_request_pending = False
-        if intervention:
-            self.intervention_client = self.create_client(SetBool, "/towel/intervene")
-            self.create_subscription(String, "/towel/intervention/state", self._intervention_state, 1)
 
         # Increment topics are a latest-sample stream.  A deep reliable queue
         # replays stale per-frame deltas after a scheduling hiccup, producing
@@ -330,7 +322,7 @@ class VRPoseIncrementPublisher(Node):
         self._left_rot_filter = np.zeros(3)
         self._right_rot_filter = np.zeros(3)
         self.gripper_ctl_pub = self.create_publisher(
-            GripperCtl, "/towel/intervention/gripper_command" if intervention else "/gripper/ctl", 1)
+            GripperCtl, "/gripper/ctl", 1)
         self.gripper_fdb_sub = self.create_subscription(
             Float64MultiArray, "/gripper/fdb", self._gripper_fdb_callback, 10
         )
@@ -385,9 +377,6 @@ class VRPoseIncrementPublisher(Node):
 
     def publish_increment(self, teleData):
         """逐帧计算位姿增量并发布。未扣扳机时发布零增量。"""
-        if getattr(self, "intervention_enabled", False) and not self._intervention_active():
-            self.first_frame = True
-            return
         if teleData is None or teleData.head_pose is None:
             return
 
@@ -435,7 +424,7 @@ class VRPoseIncrementPublisher(Node):
         # 在「按下」的上升沿发布一次 /vr/zero_return_cmd=True，由 robot_control_hw
         # 以 controllerConfig.yaml 配置的平滑关节轨迹从当前反馈角回归 zeropos.yaml。
         a_button = bool(state.right_aButton) if state is not None else False
-        if a_button and not self.prev_a_button and not getattr(self, "intervention_enabled", False):
+        if a_button and not self.prev_a_button:
             self.get_logger().info("检测到 A 键按下，发布关节空间回零触发指令")
             self.zero_return_pub.publish(Bool(data=True))
         self.prev_a_button = a_button
@@ -598,48 +587,7 @@ class VRPoseIncrementPublisher(Node):
         self.prev_head_pose = head_pose.copy()
 
     def _gripper_fdb_callback(self, msg):
-        if self.intervention_enabled and not self._intervention_active():
-            for side in self.dual_grippers.sides.values():
-                side.invalidate()
         self.dual_grippers.feedback(msg.data, time.monotonic())
-
-    def _intervention_state(self, msg):
-        self.intervention_mode = msg.data
-        self.intervention_received_at = time.monotonic()
-
-    def _intervention_active(self):
-        active = (self.intervention_mode == "vr"
-                  and time.monotonic() - self.intervention_received_at < 0.3)
-        if active != self.intervention_was_active:
-            self.first_frame = True
-            if not active:
-                for side in self.dual_grippers.sides.values():
-                    side.invalidate()
-            self.intervention_was_active = active
-        return active
-
-    def toggle_intervention(self):
-        if self.intervention_request_pending:
-            return
-        if not self.intervention_client.service_is_ready():
-            self.get_logger().warning("Intervention service unavailable; VR commands remain disabled")
-            return
-        if self.intervention_mode in {"arming_vr", "saving", "resuming"}:
-            return
-        request = SetBool.Request()
-        request.data = self.intervention_mode != "vr"
-        self.intervention_request_pending = True
-        future = self.intervention_client.call_async(request)
-
-        def done(result):
-            self.intervention_request_pending = False
-            try:
-                response = result.result()
-                self.get_logger().info(response.message)
-            except Exception as exc:
-                self.get_logger().warning(f"Intervention request failed: {exc}")
-
-        future.add_done_callback(done)
 
     def update_gripper(self, teleData):
         state = teleData.tele_state if teleData is not None else None
@@ -647,18 +595,13 @@ class VRPoseIncrementPublisher(Node):
         discard_button = bool(getattr(state, LEFT_DISCARD_BUTTON_ATTR, False))
         left_button = bool(getattr(state, "left_squeeze_ctrl_state", False))
         right_button = bool(getattr(state, "right_squeeze_ctrl_state", False))
-        managed = getattr(self, "intervention_enabled", False)
-        active = not managed or self._intervention_active()
         if record_button and not self.prev_record_button:
-            if managed:
-                self.toggle_intervention()
-            else:
-                self.toggle_recording()
-        if discard_button and not self.prev_discard_button and not managed:
+            self.toggle_recording()
+        if discard_button and not self.prev_discard_button:
             self.discard_recording()
         positions, states = self.dual_grippers.step(time.monotonic(), {
-            "left": active and left_button and not self.prev_left_gripper_button,
-            "right": active and right_button and not self.prev_right_gripper_button,
+            "left": left_button and not self.prev_left_gripper_button,
+            "right": right_button and not self.prev_right_gripper_button,
         })
         self.prev_record_button, self.prev_discard_button = record_button, discard_button
         self.prev_left_gripper_button, self.prev_right_gripper_button = left_button, right_button
@@ -666,7 +609,7 @@ class VRPoseIncrementPublisher(Node):
         ctl.ctl_time = 0.02
         ctl.l_arm_gripper_pos, ctl.r_arm_gripper_pos = positions
         ctl.l_arm_gripper_tor = ctl.r_arm_gripper_tor = 0.0
-        if active and np.isfinite(positions).all():
+        if np.isfinite(positions).all():
             self.gripper_ctl_pub.publish(ctl)
         msg = Int8MultiArray()
         msg.data = states  # measured L/R, commanded L/R; 0=open, 1=closed, -1=invalid
@@ -757,8 +700,6 @@ class VRPoseIncrementPublisher(Node):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--intervention", action="store_true",
-                        help="Wait for deployment ownership; left B takes over/saves and resumes")
     parser.add_argument(
         "--debug-controller-input",
         action="store_true",
@@ -789,7 +730,7 @@ def main():
 
     # 4. ROS2 节点
     rclpy.init()
-    node = VRPoseIncrementPublisher(intervention=args.intervention)
+    node = VRPoseIncrementPublisher()
 
     try:
         input("请先用 XR 设备浏览器打开 https://<本机IP>:8012?ws=wss://<本机IP>:8012，"

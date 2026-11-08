@@ -174,11 +174,24 @@ make replay ARGS="--dataset /home/yanziyu/datasets/fold-towel-93 --episode 0 --s
 
 ## 独立的首帧接近段
 
-当前 `bridge.motion_safety.protection_mode: speed_only` 关闭非限速保护：
-回放不等待安全心跳，不检查缓存反馈年龄、跟踪误差或反馈相对目标偏移；
+当前 `bridge.motion_safety.protection_mode: speed_only` 下，
+回放不等待安全心跳，不检查缓存反馈年龄或旧的反馈相对目标裁剪限制；
 接近段结束后直接开始数据回放，不执行下文的首帧接管/反馈到位确认。
 首次有效关节/夹爪反馈、有限数值与协议检查、显式停止和底层故障锁存仍保留。
 接近轨迹及底层接管的平滑规划继续执行。下文的到位等待规则可通过将模式设为 `full` 恢复。
+
+真机回放另有独立的即时跟踪误差保护：`bridge.replay_max_tracking_error_rad: 0.3`。
+双臂全部 14 个关节均检查，不受后三关节不限速或 `speed_only` 模式影响。
+接近、到位等待、数据回放期间，任何关节目标与反馈的绝对误差 **超过** 0.3 rad，
+单次检查就停止发布轨迹和夹爪指令，并向 `/towel/safety/stop` 发送故障请求。
+检查包括新反馈相对上次已发布目标，以及每次发布前的本次轨迹目标；不以尚未接近的首帧位置作为接近段目标。
+日志报告关节名、目标、反馈、误差和阈值，回放 JSON 元数据记录失败原因，CSV 保留停止前已发布的采样。
+该阈值必须为正的有限数值，只作用于回放，不改变模型部署或 VR 的检查策略。
+
+底层接收停止请求后锁存故障，双臂输出 `Kp=0`、零目标速度/前馈力矩及配置的故障阻尼 `Kd`。
+回放节点每 50 ms 重发停止请求，退出前最多等待 1 秒的底层 `fault:` 确认；确认超时会明确报告
+`damping NOT confirmed`，不能将其视为底层已停止。这里的即时是首次检测即触发，仍有反馈、ROS 传输和伺服周期延迟。
+故障不会因反馈重新接近目标而自动恢复；阻尼模式也不保证承重保持。RViz/dry-run 不触发实机停止请求。
 
 真机回放先从新鲜的关节反馈位置接近所选片段的首帧，再开始数据回放计时。
 接近段与数据段分别规划、检查，不再要求机械臂在一个数据帧间隔内赶到首帧。
@@ -283,9 +296,12 @@ make replay ARGS="--dataset /home/yanziyu/datasets/fold-towel-93 --episode 0 --m
 这会让原始目标点按 15 FPS 排列；启用插值时仍以 300 Hz 下发，
 每个发布周期都执行当前配置的反馈偏差限制和 URDF 限位。
 
-回放使用 `config/pi05_deployment.yaml` 中的 `bridge.pd_level` 和 `bridge.rigidity_mode`。
-当前配置是 `pd_level: mid`、`rigidity_mode: 2`，因此左右两臂都会发送
-`initialPD.yaml` 的 `mid` Kp/Kd，以及每个关节的刚度模式 `2`。
+回放单独使用 `config/pi05_deployment.yaml` 中的 `bridge.replay_pd_level: mid`，
+两臂 Kp/Kd 恢复为 `initialPD.yaml` 的原有 `mid` 预设，刚度模式为 `2`。
+若以后选择 Kd 超过协议上限的预设，回放会将 Kd 截到 50，并通过自定义 PD 模式
+`rigidity_mode=-1` 传递，避免中间控制器重新载入超限 Kd。
+预设文件不变，模型部署仍使用 `bridge.pd_level: mid` 和 `bridge.rigidity_mode: 2`。
+未配置 `replay_pd_level` 的旧配置继续沿用通用档位。0.3 rad 即时跟踪误差保护继续生效。
 
 ## 保存角度并生成对比图
 
@@ -303,9 +319,12 @@ minimum-snap 插值，橙色曲线是电机反馈（如果有反馈）。
 
 ```text
 outputs/replay_logs/
-├── episode_0_start_0_YYYYMMDD_HHMMSS_microseconds.csv
-└── episode_0_start_0_YYYYMMDD_HHMMSS_microseconds.png
+├── YYYYMMDD_HHMMSS_microseconds.csv
+├── YYYYMMDD_HHMMSS_microseconds.png
+└── YYYYMMDD_HHMMSS_microseconds.json
 ```
+
+同次回放的文件使用相同时间戳；episode 和起始帧信息保留在 JSON 内容中。
 
 CSV 还会保存左右夹爪反馈的原始角度字段 `feedback_left_gripper_deg` 和
 `feedback_right_gripper_deg`。PNG 包含 14 个子图，每个子图叠加原始锚点、插值目标和电机实际

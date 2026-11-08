@@ -31,6 +31,8 @@ bridge:
   interpolation:
     enabled: true
     publish_rate_hz: 100
+  # Replay only: immediate stop/damping for any arm joint, including speed_only mode.
+  replay_max_tracking_error_rad: 0.3
   # Standalone feedback-to-first-frame segment for dataset replay only.
   # Also capped by motion_safety and the servo homingHandoff settings.
   # Arrival tolerances/settling below are bypassed in speed_only protection mode.
@@ -58,9 +60,11 @@ bridge:
   # Full mode only: reject actions older than this observation age.
   max_action_age_s: 1.0
   jpeg_quality: 80
-  # Use the medium-stiffness preset for policy deployment and dataset replay.
+  # Policy deployment defaults.
   pd_level: mid
   rigidity_mode: 2
+  # Replay uses this preset; capped Kd uses custom-PD mode to preserve the cap.
+  replay_pd_level: mid
   # Full mode only: maximum target offset from fresh joint feedback at each bridge tick.
   # This is deliberately small
   # for first tests; increase only after replay and dry-run checks pass.

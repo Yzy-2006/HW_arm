@@ -32,9 +32,9 @@ make motion PI05_SLOW_FACTOR=0.1
 
 `make bridge ARGS=...` 和 `make motion ARGS=...` 支持传递额外 bridge 参数。
 
-需要部署中暂停模型、切换 VR 并采集恢复动作时，使用 `--intervention`，完整操作见
-[VR 接管与补采](POLICY_INTERVENTION.md)。该模式自动启动独立补采进程，由它打开相机，
-部署桥通过共享内存读取图像；不需要额外终端，也不另启 `make record`。
+需要切换 VR 时，先用 `Ctrl+C` 退出 `make motion`，再启动 `make vr` 并执行
+`make vr-takeover`。需要补采时单独启动 `make record`，完整操作见
+[VR 接管与补采](POLICY_INTERVENTION.md)。部署与独立采集器不能同时占用相机。
 
 ## 环境分工
 

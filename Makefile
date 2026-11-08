@@ -45,11 +45,14 @@ endef
 
 .PHONY: help env check check-control check-record check-visualize build test launch visualize sim-check sim-demo sim teleop experiment teleop-watch preview camera-list servo arms robot vr vr-opencv vr-debug record record-opencv record-rviz watch watch-arm calibrate calibrate-arm-zero scan-arm-can save-arm-zero validate-data export-data filter-data pi05 pi05-bench act bridge motion replay clean-build
 
+.PHONY: vr-takeover
+
 help:
 	@echo "Towel task commands"
 	@echo "  make check                  Read-only dependency check"
 	@echo "  make build                  Build the ROS workspace"
 	@echo "  make vr-debug               Diagnose XR controller events without publishing control commands"
+	@echo "  make vr-takeover            Request VR ownership anchored to current feedback after stopping motion"
 	@echo "  make vr-opencv              Compatibility alias for make vr; cameras come from make record"
 	@echo "  make watch                  Observe /towel/gripper_state (override WATCH_TOPIC=... )"
 	@echo "  make watch-arm SIDE=both RATE=3  Print one or both arms' joint angles at a controlled rate"
@@ -81,8 +84,8 @@ help:
 	@echo "  make bridge                       Start the policy bridge in dry-run mode"
 	@echo "  make motion                       Start the policy bridge with motion enabled"
 	@echo "  make motion PI05_SLOW_FACTOR=0.1  Start motion at 10% joint step size"
-	@echo "  make motion ARGS=\"--intervention\"  Enable VR correction capture (starts paused)"
-	@echo "  make vr ARGS=\"--intervention\"      VR standby; left B takes over/saves and resumes"
+	@echo "  make vr                           Start standalone VR; after stopping motion run make vr-takeover"
+	@echo "  make record ARGS=\"--dataset-root data/raw/interventions\"  Record manual VR corrections"
 	@echo "  make replay ARGS=\"--episode 0\"  Replay recorded actions (dry-run by default)"
 	@echo "  make replay ARGS=\"--episode 0 --max-frames 90 --rviz\"  Replay safely in RViz"
 	@echo "  Defaults: VENV=$(VENV), OPENROBOTS_PREFIX=$(OPENROBOTS_PREFIX), DATASET_ROOT=$(DATASET_ROOT), EXPORT_CONFIG=$(EXPORT_CONFIG)"
@@ -218,7 +221,7 @@ camera-list:
 
 record:
 	@$(ROBOT_ENV)
-	@python3 "$(ROOT)/collection/record.py" --show-opencv
+	@python3 "$(ROOT)/collection/record.py" --show-opencv $(ARGS)
 
 record-opencv:
 	@$(MAKE) --no-print-directory record
@@ -230,6 +233,10 @@ record-rviz:
 vr:
 	@$(ROBOT_ENV)
 	@python3 "$(ROOT)/teleop/VR_controller/vr_pose_increment_publisher.py" $(ARGS)
+
+vr-takeover:
+	@$(ROBOT_ENV)
+	@ros2 service call /dexbotCtl/vr_override std_srvs/srv/SetBool "{data: true}"
 
 vr-opencv:
 	@echo "相机窗口由 make record 启动；vr-opencv 现在只兼容转发到 make vr" >&2

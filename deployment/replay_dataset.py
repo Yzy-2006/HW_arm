@@ -133,7 +133,7 @@ class ReplayRecorder:
         self.status = "interrupted"
         self.failure_reason = ""
         stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        self.prefix = f"episode_{episode}_start_{start_frame}_{stamp}"
+        self.prefix = stamp
 
     def record(self, frame: int, dataset_action: np.ndarray, command: np.ndarray,
                feedback: np.ndarray | None,
@@ -462,14 +462,25 @@ def create_replay_node(args, actions: np.ndarray, fps: float, recorder: ReplayRe
     pd_path = (ROOT / config.get("pd_config", "ros2_ws/src/ctl_msgs_hw/config/initialPD.yaml")).resolve()
     lower, upper = load_joint_limits(urdf_path)
     lower, upper = configured_position_limits(bridge_cfg, lower, upper)
-    pd_level = str(bridge_cfg.get("pd_level", "mid")).strip().lower()
+    pd_level = str(bridge_cfg.get("replay_pd_level", bridge_cfg.get("pd_level", "mid"))).strip().lower()
     rigidity_by_level = {"low": 1, "mid": 2, "high": 3, "superhigh": 7}
     if pd_level not in rigidity_by_level:
-        raise ValueError(f"pd_level must be one of {sorted(rigidity_by_level)}")
-    rigidity_mode = int(bridge_cfg.get("rigidity_mode", rigidity_by_level[pd_level]))
+        raise ValueError(f"Replay PD level must be one of {sorted(rigidity_by_level)}")
+    rigidity_mode = (rigidity_by_level[pd_level] if "replay_pd_level" in bridge_cfg
+                     else int(bridge_cfg.get("rigidity_mode", rigidity_by_level[pd_level])))
     if rigidity_mode not in set(rigidity_by_level.values()):
         raise ValueError("rigidity_mode must be one of 1 (low), 2 (mid), 3 (high), or 7 (superhigh)")
     kp_l, kd_l, kp_r, kd_r = load_pd(pd_path, pd_level)
+    if (not np.isfinite(np.r_[kp_l, kd_l, kp_r, kd_r]).all()
+            or np.any(np.r_[kp_l, kd_l, kp_r, kd_r] < 0)
+            or np.any(np.r_[kp_l, kp_r] > 500)):
+        raise ValueError("Replay PD gains must be finite and nonnegative, with Kp <= 500")
+    kd_capped = bool(np.any(np.r_[kd_l, kd_r] > 50.0))
+    kd_l, kd_r = np.minimum(kd_l, 50.0), np.minimum(kd_r, 50.0)
+    if kd_capped:
+        # Preset mode 3 reloads the uncapped YAML gains in the middle controller.
+        # Its existing custom-PD mode preserves the gains carried by this message.
+        rigidity_mode = -1
     max_step = _as_vector(bridge_cfg.get("max_joint_step_rad", 0.02), 14, "max_joint_step_rad")
     if np.any(max_step <= 0):
         raise ValueError("max_joint_step_rad must be positive")
@@ -490,6 +501,9 @@ def create_replay_node(args, actions: np.ndarray, fps: float, recorder: ReplayRe
     if interpolate:
         validate_controller_rate(controller_cfg, publish_rate_hz)
     state_timeout = float(bridge_cfg.get("state_timeout_s", 0.25))
+    tracking_limit = float(bridge_cfg.get("replay_max_tracking_error_rad", 0.3))
+    if not np.isfinite(tracking_limit) or tracking_limit <= 0:
+        raise ValueError("replay_max_tracking_error_rad must be finite and positive")
 
     class ReplayNode(Node):
         def __init__(self):
@@ -531,15 +545,21 @@ def create_replay_node(args, actions: np.ndarray, fps: float, recorder: ReplayRe
                 self.create_subscription(HandoffStatus, "/towel/control/handoff", self._handoff_callback, 1)
             self.timer = self.create_timer(1.0 / publish_rate_hz, self.step)
             if self.motion:
-                self.safety = attach_safety(self, self._fault, monitor_heartbeat=not speed_only)
+                self.safety = attach_safety(self, self._fault, monitor_heartbeat=not speed_only,
+                                            repeat_stop_until_ack=True)
                 if speed_only:
-                    self.get_logger().warning("Speed-only protection: heartbeat, feedback age, tracking, position and first-frame arrival checks disabled; explicit faults/stops remain active")
+                    self.get_logger().warning("Speed-only protection: heartbeat, feedback age, position and first-frame arrival checks disabled; replay tracking-error stop and explicit faults/stops remain active")
+                self.get_logger().info(f"Replay tracking guard: all 14 arm joints, immediate stop above {tracking_limit:g} rad")
             self.get_logger().warning(
                 f"dataset replay {'MOTION' if self.motion else 'DRY-RUN'}: "
                 f"frames={len(actions)} rate={fps * args.speed:g}Hz slow_factor={slow_factor:g} "
                 f"minimum_snap={interpolate} publish_rate_hz={publish_rate_hz:g} "
+                f"pd_level={pd_level} rigidity_mode={rigidity_mode} "
                 f"rviz={bool(getattr(args, 'rviz', False))}"
             )
+            if kd_capped:
+                self.get_logger().warning(
+                    f"Replay {pd_level} preset Kd capped at motor protocol maximum 50; preset Kp unchanged")
 
         def _joint_callback(self, msg):
             left = np.asarray(msg.l_arm_pos_fdback, dtype=np.float64)
@@ -549,6 +569,24 @@ def create_replay_node(args, actions: np.ndarray, fps: float, recorder: ReplayRe
                 self.joint_received_at = time.monotonic()
                 velocity = np.r_[getattr(msg, "l_arm_spd_fdback", []), getattr(msg, "r_arm_spd_fdback", [])]
                 self.joint_velocity = velocity if velocity.shape == (14,) and np.isfinite(velocity).all() else None
+                if self.motion and not self.done and self.last_command is not None:
+                    try:
+                        self._check_tracking(self.last_command, "last_command")
+                    except MotionFault as exc:
+                        self.safety.trip(str(exc))
+
+        def _check_tracking(self, target, source):
+            if not self.motion or self.joints is None:
+                return
+            desired = np.asarray(target)[JOINT_INDICES]
+            errors = np.abs(desired - self.joints)
+            joint = int(np.argmax(errors))
+            if errors[joint] > tracking_limit:
+                raise MotionFault(
+                    f"Replay tracking error: {JOINT_LABELS[joint]} source={source} "
+                    f"target={desired[joint]:.9g}rad feedback={self.joints[joint]:.9g}rad "
+                    f"abs_error={errors[joint]:.9g}rad limit={tracking_limit:g}rad"
+                )
 
         def _handoff_callback(self, msg):
             self.start_gate.observe(stamp_ns(msg.source_header.stamp), msg.complete,
@@ -601,6 +639,8 @@ def create_replay_node(args, actions: np.ndarray, fps: float, recorder: ReplayRe
         def _step(self):
             if self.failed or (self.safety is not None and not self.safety.ready()):
                 return
+            if self.last_command is not None and not self.done:
+                self._check_tracking(self.last_command, "last_command")
             if self.index >= len(self.actions):
                 self._publish_hold()
                 self.timer.cancel()
@@ -733,6 +773,9 @@ def create_replay_node(args, actions: np.ndarray, fps: float, recorder: ReplayRe
             if self.motion and not speed_only and (time.monotonic() - self.joint_received_at > state_timeout
                                 or time.monotonic() - self.gripper_feedback_at > state_timeout):
                 raise MotionFault("Feedback expired before replay publication")
+            # Check the planned target before clipping can hide a tracking error.
+            if self.motion:
+                self._check_tracking(target, "next_target")
             action = limit_action(target, state, lower, upper, max_step) if self.motion else target
             if self.motion:
                 if (interpolate or approaching) and not np.allclose(action[JOINT_INDICES], target[JOINT_INDICES], atol=1e-9, rtol=0):
@@ -783,6 +826,17 @@ def create_replay_node(args, actions: np.ndarray, fps: float, recorder: ReplayRe
                 self.index = len(self.actions)
 
     return ReplayNode()
+
+
+def _wait_for_servo_fault(node, rclpy, timeout_s=1.0):
+    deadline = time.monotonic() + timeout_s
+    while rclpy.ok() and not node.safety.state.startswith("fault:") and time.monotonic() < deadline:
+        rclpy.spin_once(node, timeout_sec=0.05)
+    if node.safety.state.startswith("fault:"):
+        node.get_logger().info("Servo fault acknowledged; damping mode requested by latched fault")
+        return True
+    node.get_logger().error("Servo fault acknowledgement missing; damping NOT confirmed")
+    return False
 
 
 def main() -> int:
@@ -867,6 +921,8 @@ def main() -> int:
     finally:
         try:
             if node is not None:
+                if node.motion and node.failed:
+                    _wait_for_servo_fault(node, rclpy)
                 node.destroy_node()
             if rclpy.ok():
                 rclpy.shutdown()

@@ -183,6 +183,27 @@ int main() {
         }
     }
 
+    // Replay stop requests use this same latched path, even in speed-only mode.
+    arm_safety.fault.clear();
+    const bool previous_speed_only = arm_safety.limits.speed_only;
+    arm_safety.limits.speed_only = true;
+    arm_safety.trip("upstream: Replay tracking error: right_joint_7 limit=0.3rad");
+    EtherCAT_Command_Set();
+    for (int ch = 0; ch < 2; ++ch) {
+        for (int j = 0; j < 7; ++j) {
+            const auto& block = pdo_tx[ch][j];
+            const int kp = (block.data[0] << 7) | (block.data[1] >> 1);
+            const int kd = ((block.data[1] & 1) << 8) | block.data[2];
+            const int velocity = (block.data[5] << 4) | (block.data[6] >> 4);
+            const int torque = ((block.data[6] & 15) << 8) | block.data[7];
+            assert(kp == 0);
+            assert(kd == float_to_uint(arm_safety.limits.damping, KD_MIN, KD_MAX, 9));
+            assert(velocity == float_to_uint(0, SPD_MIN, SPD_MAX, 12));
+            assert(torque == float_to_uint(0, T_MIN, T_MAX, 12));
+        }
+    }
+    arm_safety.limits.speed_only = previous_speed_only;
+
     MotorBlock input[CAN_CHANNELS][MOTORS_PER_CH]{};
     ecat_phys = 1;
     ec_slave[1].inputs = reinterpret_cast<uint8*>(input);

@@ -250,6 +250,29 @@ def test_safety_subscription_group_is_independent_but_cleanup_timer_is_serial(mo
     assert faults == ["fault:test"]
 
 
+@pytest.mark.parametrize('repeat', [False, True])
+def test_stop_retries_until_servo_fault_acknowledgement(monkeypatch, repeat):
+    from types import SimpleNamespace
+    from motion_safety import attach_safety
+    published, timers, faults = [], [], []
+    node = SimpleNamespace(
+        create_publisher=lambda *a: SimpleNamespace(publish=published.append),
+        create_subscription=lambda *a, **kw: None,
+        create_timer=lambda period, callback: timers.append(callback))
+    monkeypatch.setitem(sys.modules, 'std_msgs.msg', SimpleNamespace(String=SimpleNamespace))
+    monkeypatch.setitem(sys.modules, 'rclpy.qos', SimpleNamespace(
+        QoSProfile=lambda **kw: kw, DurabilityPolicy=SimpleNamespace(TRANSIENT_LOCAL=1)))
+    state = attach_safety(node, faults.append, monitor_heartbeat=False, repeat_stop_until_ack=repeat)
+    state.trip('Replay tracking error')
+    assert len(published) == 1 and published[0].data == 'Replay tracking error'
+    timers[0]()
+    assert len(published) == (2 if repeat else 1)
+    state.receive('fault:upstream: Replay tracking error')
+    timers[0]()
+    assert len(published) == (2 if repeat else 1)
+    assert faults == ['Replay tracking error']
+
+
 def test_ros_executor_receives_heartbeat_while_control_group_is_blocked(tmp_path, monkeypatch):
     monkeypatch.setenv("ROS_LOG_DIR", str(tmp_path / "ros_logs"))
     script = '''

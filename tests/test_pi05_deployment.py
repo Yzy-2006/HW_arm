@@ -210,7 +210,7 @@ def test_all_policy_speed_override_is_scoped_to_non_hold_packets(bridge):
     node.step()
     msg = node.command_pub.messages[-1]
     assert msg.policy_speed_checks_disabled and msg.header.frame_id == "pi05_policy"
-    node.pause_policy()
+    node._hold()
     hold = node.command_pub.messages[-1]
     assert hold.hold_position and not hold.policy_speed_checks_disabled
     node.safety.receive("fault:operator_stop")
@@ -280,7 +280,10 @@ def bridge(monkeypatch, tmp_path, request):
             self.subscriptions.append(kwargs)
 
         def create_timer(self, period, callback):
-            return SimpleNamespace(period=period, cancel=lambda: None)
+            timer = SimpleNamespace(period=period, cancelled=False)
+            timer.cancel = lambda: setattr(timer, "cancelled", True)
+            timer.reset = lambda: setattr(timer, "cancelled", False)
+            return timer
 
         def get_clock(self):
             return SimpleNamespace(now=lambda: SimpleNamespace(to_msg=lambda: clock[0]))
@@ -333,35 +336,14 @@ def bridge(monkeypatch, tmp_path, request):
     config["bridge"]["max_joint_step_rad"] = 0.02
     config["bridge"]["interpolation"] = {"enabled": False}
     config["bridge"]["replan_interval_s"] = 0.25
-    # These tests isolate inference/handoff timing, not physical motion limits.
+    # These tests isolate inference timing, not physical motion limits.
     config["bridge"]["motion_safety"] = {"max_velocity_rad_s": 100, "max_acceleration_rad_s2": 100000}
     options = dict(getattr(request, "param", {}))
-    independent_recorder = options.pop("independent_recorder", False)
     config["bridge"].update(options)
     config_path = tmp_path / "deployment.yaml"
     config_path.write_text(yaml.safe_dump(config))
     args = SimpleNamespace(config=config_path, worker_host=None,
                            worker_port=None, token=None, slow_factor=None, motion=True)
-    if independent_recorder:
-        class FakeRecorder:
-            def __init__(self, config):
-                self.config = config
-                self.cameras = Cameras(config)
-                self.closed = False
-
-            def close(self):
-                self.closed = True
-
-        def local_camera_forbidden(config):
-            raise AssertionError("Bridge must not open cameras in intervention mode")
-
-        monkeypatch.setitem(sys.modules, "record", SimpleNamespace(Cameras=local_camera_forbidden))
-        monkeypatch.setitem(sys.modules, "recorder_process", SimpleNamespace(RecorderProcess=FakeRecorder))
-        import intervention
-        monkeypatch.setattr(intervention, "attach_intervention",
-                            lambda node: setattr(node, "intervention", SimpleNamespace(mode="paused")))
-        args.intervention = True
-        args.intervention_dir = str(tmp_path / "corrections")
     node = create_bridge_node(args)
 
     def feedback(value=0.0):
@@ -374,47 +356,32 @@ def bridge(monkeypatch, tmp_path, request):
     node.close()
 
 
-@pytest.mark.parametrize("bridge", [{"independent_recorder": True}], indirect=True)
-def test_bridge_delegates_camera_ownership_to_recorder_process(bridge):
+@pytest.mark.parametrize("bridge", [{"interpolation": {"enabled": True, "publish_rate_hz": 100}}], indirect=True)
+def test_bridge_close_holds_before_releasing_cameras_for_manual_vr(bridge, monkeypatch):
+    import rclpy
+
+    monkeypatch.setattr(rclpy, "ok", lambda: True)
     node, _, _ = bridge
-    assert node.cameras is node.recorder.cameras
-    assert node.recorder.config["min_joint_delta_rad"] == 0.
-    assert node.recorder.config["episode_metadata"]["source"] == "policy_intervention"
-    assert node.intervention.mode == "paused"
+    node.last_command = np.zeros(16)
+    events = []
+
+    def release_cameras():
+        assert node.control_timer.cancelled and node.publish_timer.cancelled
+        assert node.command_pub.messages[-1].hold_position
+        events.append("cameras_closed")
+
+    monkeypatch.setattr(node.cameras, "close", release_cameras)
+    monkeypatch.setattr(node.client, "close", lambda: events.append("client_closed"))
+    monkeypatch.setattr(node.inference_pool, "shutdown", lambda **kwargs: events.append("inference_drained"))
     node.close()
-    assert node.recorder.closed
+    assert events == ["inference_drained", "client_closed", "cameras_closed"]
+    assert not node.gripper_pub.messages
 
 
 def complete(node, value=1.0):
     actions = np.full((50, 16), value)
     actions[:, [4 - 1, 9]] *= -1  # Left elbow and right shoulder roll have nonpositive ranges.
     node.pending.set_result({"actions": actions.tolist()})
-
-
-@pytest.mark.parametrize("bridge", [{"interpolation": {"enabled": True, "publish_rate_hz": 300}}], indirect=True)
-def test_intervention_blocks_all_policy_ticks_and_discards_inflight_result(bridge):
-    node, clock, feedback = bridge
-    node.step()
-    old = node.pending
-    generation = node.generation
-    node.intervention = SimpleNamespace(mode="paused")
-    node.pause_policy()
-    assert node.generation > generation
-    assert node.command_pub.messages[-1].hold_position
-    count = len(node.command_pub.messages)
-    old.set_result({"actions": np.full((50, 16), 999).tolist()})
-    node.step()
-    node.publish_step()
-    assert len(node.command_pub.messages) == count
-    assert not node.gripper_pub.messages
-    node.resume_policy()
-    node.intervention.mode = "policy"
-    feedback()
-    node.step()
-    assert node.chunk is None
-    assert node.pending is not old
-    assert node.inference_pool.calls[-1][1][-1] is True
-    assert node.last_command is None
 
 
 @pytest.mark.parametrize("bridge", [{"rate_hz": 60, "action_rate_hz": 15}], indirect=True)
@@ -750,7 +717,6 @@ from pi05_bridge import run_bridge
 class TestNode(Node):
     def __init__(self):
         super().__init__("bridge_shutdown_test")
-        self.recorder = None
         self.active = False
         self.finished = False
         self.timer = self.create_timer(.01, self.callback)

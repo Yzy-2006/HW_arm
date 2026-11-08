@@ -51,15 +51,6 @@ class RecordingDiagnostics:
         self.exec_max = max(self.exec_max, wall)
         self.cpu_max = max(self.cpu_max, cpu)
 
-    def summary(self):
-        return dict(callback_interval_max_ms=self.tick_max * 1000,
-                    sample_body_last_ms=self.body_last * 1000,
-                    callback_exec_last_ms=self.exec_last * 1000,
-                    callback_exec_max_ms=self.exec_max * 1000,
-                    callback_thread_cpu_last_ms=self.cpu_last * 1000,
-                    frame_gap_max_ms=self.frame_gap_max * 1000,
-                    duplicate_skips=self.duplicate_skips, cameras=self.camera_meta)
-
     def tick(self, now, last_frame_time):
         if self.last_tick is not None:
             interval = now - self.last_tick
@@ -251,7 +242,7 @@ class Cameras:
             pipeline.stop()
 
 # 用于处理与ROS的交互，将各个topic的信息整合为一帧
-def make_node(config, cameras, *, show_opencv=False, status_callback=None):
+def make_node(config, cameras, *, show_opencv=False):
     import rclpy
     from rclpy.node import Node
     from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
@@ -320,19 +311,6 @@ def make_node(config, cameras, *, show_opencv=False, status_callback=None):
             msg = Bool()
             msg.data = self.episode is not None
             self.status.publish(msg)
-            if status_callback is not None:
-                status_callback(self.recording_status())
-
-        def recording_status(self):
-            episode = self.episode or self.retiring_episode
-            return {
-                "session": episode.path.name if episode is not None else None,
-                "active": self.episode is not None,
-                "ready": self.episode is not None and self.start_time is not None,
-                "error": self.last_recording_error,
-                "frames": episode.frames if episode is not None else 0,
-                "diagnostics": self.diagnostics.summary() if self.diagnostics is not None else None,
-            }
 
         def put(self, key, values, msg):
             stamp = getattr(getattr(msg, "header", None), "stamp", None)
