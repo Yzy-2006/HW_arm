@@ -1,0 +1,67 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Global Options:
+    Background Color: 35; 38; 42
+    Fixed Frame: camera_link
+    Frame Rate: 30
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 0.1
+      Plane Cell Count: 20
+      Color: 90; 95; 100
+      Alpha: 0.35
+      Reference Frame: camera_link
+    - Class: rviz_default_plugins/Axes
+      Name: Camera Axes
+      Enabled: true
+      Reference Frame: camera_link
+      Length: 0.15
+      Radius: 0.006
+    - Class: rviz_default_plugins/MarkerArray
+      Name: RGB-D Cyan + Differences
+      Enabled: true
+      Topic:
+        Value: /hands/rgbd/markers
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Depth: 1
+    - Class: rviz_default_plugins/MarkerArray
+      Name: RGB PnP Magenta
+      Enabled: true
+      Topic:
+        Value: /hands/rgb/markers
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Depth: 1
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Name: Current View
+      Target Frame: camera_link
+      Distance: 1.1
+      Pitch: 0.35
+      Yaw: 3.14
+      Focal Point:
+        X: 0.55
+        Y: 0.0
+        Z: 0.0
+      Near Clip Distance: 0.01
+Window Geometry:
+  Width: 1100
+  Height: 800
+  X: 1360
+  Y: 80

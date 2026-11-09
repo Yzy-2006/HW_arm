@@ -1,0 +1,13 @@
+name: mediapipe
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - mediapipe==1.2.2
+      - pyrealsense2==2.59.1.11053
+      - opencv-contrib-python==5.0.0.93
+      - numpy==2.4.6
+      - scipy==1.17.1

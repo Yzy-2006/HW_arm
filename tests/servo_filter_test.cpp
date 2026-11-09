@@ -31,6 +31,25 @@ int main() {
         for (double p : result.runinData.lArm_posDot) assert(std::abs(p - 1) < 1e-9);
     }
 
+    // With lowpass disabled, linear interpolation reaches each new endpoint
+    // within one command interval, including reversals after several updates.
+    runin_control direct;
+    direct.set_lowpass_enabled(false);
+    direct.init(position, position, 3);
+    double last_target = 1.0;
+    for (double target : {1.003, 1.006, 1.009, 1.006, 1.003, 1.0}) {
+        std::vector<double> next(7, target);
+        direct.ModelRunin(next, zero, zero, zero, zero,
+                          next, zero, zero, zero, zero, kp, kd, kp, kd, 1, 3);
+        for (int tick = 1; tick <= 3; ++tick) {
+            const auto sample = direct.dataOutp();
+            const double expected = last_target + (target - last_target) * tick / 3;
+            for (double q : sample.runinData.lArm_posDot) assert(std::abs(q - expected) < 1e-12);
+            for (double q : sample.runinData.rArm_posDot) assert(std::abs(q - expected) < 1e-12);
+        }
+        last_target = target;
+    }
+
     // Homing ends at q=.5 while actual feedback still lags at .1. Waiting must
     // preserve the command endpoint, never silently initialize from feedback.
     ArmSafetyGuard safety;

@@ -81,6 +81,20 @@ ServoNode::ServoNode() : Node ("servo_node"),
     RARMDOF = static_cast<int>(ctl_inteMsg_config.RARMDOF);
     SERVODOF = LARMDOF + RARMDOF;
     const auto controller_config = YAML::LoadFile(controllerConfig_yamlPath);
+    const auto smoothing = controller_config["servoCommandSmoothing"];
+    bool command_lowpass_enabled = true;
+    if (smoothing) {
+        command_interpolation_mode_ = smoothing["interpolation_mode"].as<int>(2);
+        command_lowpass_enabled = smoothing["lowpass_enabled"].as<bool>(true);
+        command_output_kalman_enabled_ = smoothing["output_kalman_enabled"].as<bool>(true);
+    }
+    if (command_interpolation_mode_ != 1 && command_interpolation_mode_ != 2)
+        throw std::runtime_error("servoCommandSmoothing.interpolation_mode must be 1 or 2");
+    runin_control_core.set_lowpass_enabled(command_lowpass_enabled);
+    RCLCPP_INFO(get_logger(), "Command smoothing: interpolation=%s lowpass=%s output_kalman=%s",
+                command_interpolation_mode_ == 1 ? "linear" : "B-spline",
+                command_lowpass_enabled ? "enabled" : "disabled",
+                command_output_kalman_enabled_ ? "enabled" : "disabled");
     homing_handoff_.load(controller_config);
     motor_position_offsets.load(controller_config);
     RCLCPP_INFO(get_logger(), "CAN 0 ID 2 position offset: %+.6f deg; feedback uses inverse offset",
@@ -904,9 +918,9 @@ void ServoNode::run(){
             }
 
             //滤波计算
-            pos_ftrRes = posOutpFtr.Outp_ftr(
+            pos_ftrRes = command_output_kalman_enabled_ ? posOutpFtr.Outp_ftr(
                 lArm_posOrig, rArm_posOrig
-            );
+            ) : std::vector<std::vector<double>>{lArm_posOrig, rArm_posOrig};
 
             for(int i = 0; i < LARMDOF; i++){
                 servo_desMsg_orig[i].joint_pos = pos_ftrRes[0][i];
@@ -915,9 +929,9 @@ void ServoNode::run(){
                 servo_desMsg_orig[i + LARMDOF].joint_pos = pos_ftrRes[1][i];
             }
 
-            vel_ftrRes = velOutpFtr.Outp_ftr(
+            vel_ftrRes = command_output_kalman_enabled_ ? velOutpFtr.Outp_ftr(
                 lArm_velOrig, rArm_velOrig
-            );
+            ) : std::vector<std::vector<double>>{lArm_velOrig, rArm_velOrig};
             for(int i = 0; i < LARMDOF; i++){
                 servo_desMsg_orig[i].joint_spd = vel_ftrRes[0][i];
             }
@@ -1309,7 +1323,7 @@ void ServoNode::ctlMsg_runin(){
         //获取插补长度
         winlen = std::clamp(static_cast<int>(std::round(tempTime_upperMonitor / TEMPTIME)), 1, 100);
 
-        //执行插补代码 -- 这里强制采用第二种插补模式
+        // The configured command interpolator is independent of upstream modes.
         runin_control_core.ModelRunin(
             lArm_pos_receive,
             lArm_vel_receive,
@@ -1328,7 +1342,7 @@ void ServoNode::ctlMsg_runin(){
             rArm_Kp_receive,
             rArm_Kd_receive,
 
-            2,
+            command_interpolation_mode_,
             winlen
         );
     }

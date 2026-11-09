@@ -244,6 +244,8 @@ class ServoNode : public rclcpp::Node {
         //----------模式控制变量----------
         double tempTime_upperMonitor;       //上位机迭代时间
         int runin_mod;                      //插补模式
+        int command_interpolation_mode_ = 2;
+        bool command_output_kalman_enabled_ = true;
         int if_runin_renew;                 //是否刷新插补
         int msg_get_ifUseDebugMod;          //是否使用调试模式
         int if_useret_to_start_runin;       //判断量 -- 是否使用返回值作为第一轮插补的输入值

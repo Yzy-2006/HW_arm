@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.conda/
+models/*.task
+!models/hand_landmarker.task
+calibration/*.json
+!calibration/hand_geometry.json
+calibration/*.json.tmp

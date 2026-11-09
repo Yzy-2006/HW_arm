@@ -1,14 +1,17 @@
 # 环境划分
 
-这个项目使用三套彼此独立的运行环境。
+这个项目的运行环境彼此独立。
 
 | 环境 | 用途 | Python | 不应放入的依赖 |
 |---|---|---|---|
 | `robot-system` | 电机、双臂控制、VR、标定、采集 | 系统 Python 3.12，与 ROS 2 Jazzy 一致 | PyTorch、CUDA、LeRobot π0.5 |
 | `towel-pi05` | 原始数据导出、数据检查、π0.5 微调 | Conda Python 3.12 | ROS 2、rclpy、EtherCAT/CAN 驱动 |
 | `towel-newton` | Newton 机器人与布料仿真 | Conda Python 3.12 | ROS 2、rclpy、EtherCAT/CAN 驱动 |
+| `mediapipe` | 相机手势识别、手掌位姿检测 | Conda Python 3.11 | ROS 2、rclpy；通过本机 UDP 连接机器人环境 |
 
 Newton 的逐步安装和验证见 [Newton 仿真环境](NEWTON_SETUP.md)。
+手势识别的环境文件位于 `gesture_teleoperation/environment.yml`，
+安装与检查见[手势识别说明](../gesture_teleoperation/README.md#included-in-towel_task)。
 
 ## 机器人端：系统 Python，不创建 Conda Python 环境
 

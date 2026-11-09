@@ -44,7 +44,7 @@ def generate_launch_description():
         package="rviz2",
         executable="rviz2",
         name="rviz2",
-        arguments=["-d", str(rviz_config)],
+        arguments=["-d", LaunchConfiguration("rviz_config")],
         condition=IfCondition(LaunchConfiguration("rviz")),
         **common,
     )
@@ -52,6 +52,7 @@ def generate_launch_description():
         DeclareLaunchArgument("gui", default_value="true"),
         DeclareLaunchArgument("joint_publisher", default_value="true"),
         DeclareLaunchArgument("rviz", default_value="true"),
+        DeclareLaunchArgument("rviz_config", default_value=str(rviz_config)),
         Node(
             package="robot_state_publisher",
             executable="robot_state_publisher",

@@ -68,6 +68,9 @@ help:
 	@echo "  make sim-check              Check Newton and CUDA in Conda environment $(SIM_ENV)"
 	@echo "  make sim-demo               Run the official Newton robot-cloth example"
 	@echo "  make sim                    Run the ENCOS dual-arm, gripper and towel scene"
+	@echo "  make gesture-rviz           Run hand gestures in isolated RViz simulation"
+	@echo "  make gesture-check          Check hand input and robot readiness without commands"
+	@echo "  make gesture                Use open-palm gestures through hardware VR interfaces"
 	@echo "  make sim-fold               Run automatic corner grasp and one dual-arm half-fold"
 	@echo "  make sim-vr                 Control Newton arms and grippers with existing VR input (no video)"
 	@echo "  make launch ARGS=\"visualize:=true\"  Start optional RViz/TF visualization"
@@ -130,6 +133,20 @@ launch:
 visualize:
 	@$(ROBOT_ENV)
 	@ros2 launch "$(ROOT)/ros2_ws/src/towel_bringup/launch/model_viewer.launch.py" $(ARGS)
+
+.PHONY: gesture-rviz
+gesture-rviz:
+	@$(ROBOT_ENV)
+	@python3 "$(ROOT)/scripts/run_gesture_rviz.py" $(ARGS)
+
+.PHONY: gesture gesture-check
+gesture:
+	@$(ROBOT_ENV)
+	@python3 "$(ROOT)/scripts/run_gesture_rviz.py" --robot $(ARGS)
+
+gesture-check:
+	@$(ROBOT_ENV)
+	@python3 "$(ROOT)/scripts/run_gesture_rviz.py" --robot --dry-run $(ARGS)
 
 sim-check:
 	@conda run --no-capture-output -n "$(SIM_ENV)" python -I -u "$(ROOT)/scripts/check_newton.py" $(ARGS)

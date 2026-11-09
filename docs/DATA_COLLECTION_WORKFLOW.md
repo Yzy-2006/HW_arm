@@ -40,6 +40,11 @@ make check
 | 4 | `make record` | 日志显示已就绪并提供 `/towel/record`、`/towel/discard`，同时打开三个 OpenCV 窗口；此时尚未开始 episode。 |
 | 5 | `make vr` | 头显连接后进入 **Virtual Reality**，再回终端按 **Enter**；看到“开始发布位姿增量”后才可操作。 |
 
+使用相机手势时，终端 5 改为 `make gesture`，不要同时运行 `make vr`。
+先用 `make gesture-check` 检查识别和控制器接口，再退出检查并启动实机入口。
+完全张掌驱动对应机械臂，离开张掌手势停止，握拳切换夹爪，左 OK 启停采集，右 OK 回零。
+接管完成后先收拢手指至少 0.2 秒再张掌；详见[手势真机接入](GESTURE_ROBOT.md)。
+
 开始 VR 前，双手保持不扣扳机。先做一次最小幅度的左右单臂动作，确认控制链仍然正确，
 再开始正式示教。
 

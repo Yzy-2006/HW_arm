@@ -73,6 +73,13 @@ homingHandoff:
   kd_rate_per_s: 10.0
   feedforward_rate_per_s: 1.0
 
+# Command smoothing for ordinary arm commands (not sampled policy trajectories).
+# Restart servo after changes. Legacy values: 2 / true / true.
+servoCommandSmoothing:
+  interpolation_mode: 2  # 1: short linear interpolation; 2: B-spline.
+  lowpass_enabled: true
+  output_kalman_enabled: false
+
 gravComp:
 
   # ---------- 开关量 ----------
@@ -200,7 +207,7 @@ IKoptimizeSolverPara:
 #============================================
 jointTargetSafety:
   enabled: true
-  max_delta_rad: 0.025
+  max_delta_rad: 0.015
 
 #============================================
 #控制器控制流程总控参数

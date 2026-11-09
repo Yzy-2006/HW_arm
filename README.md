@@ -34,6 +34,9 @@ sudo 密码并配置 `servo_node`，具体见[环境与构建](environments/READ
 | 记录单臂或双臂新的安全初始姿态 | [机械臂零位标定](docs/ARM_ZERO_CALIBRATION.md) | `make calibrate-arm-zero SIDE=both` |
 | 采样左右夹爪开/闭端点 | [双夹爪标定](docs/GRIPPER_CALIBRATION.md) | `make servo`、`make calibrate ...` |
 | 连接 XR、检查按键与空载遥操 | [VR 遥操作检查](docs/VR_TELEOP_CHECK.md) | 分终端依次执行 `make servo`、`make arms`、`make robot`、`make vr` |
+| 使用手掌位姿和手势进行 RViz 仿真遥操作 | [手势 RViz 仿真](docs/GESTURE_RVIZ.md) | `make gesture-rviz`，独立仿真，不启动真机控制 |
+| 使用张掌手势遥操作真机 | [手势真机接入](docs/GESTURE_ROBOT.md) | `make gesture-check` 检查，`make gesture` 替代 `make vr` |
+| 安装或单独测试手势识别 | [仓库内手势识别代码](gesture_teleoperation/README.md) | `make -C gesture_teleoperation test`，包含模型、标定及环境文件 |
 | 理解原始片段、字段、校验与 LeRobot 导出 | [数据集约定](docs/DATASET.md) | `make validate-data` |
 | 训练 π0.5 | [π0.5 训练说明](training/README_PI05.md) | 在训练环境运行 |
 | 排查环境或历史验证范围 | [依赖说明](docs/DEPENDENCIES.md)、[验证记录](docs/VALIDATION.md) | `make check` |

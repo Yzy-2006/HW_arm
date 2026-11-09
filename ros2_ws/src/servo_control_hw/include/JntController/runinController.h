@@ -436,6 +436,7 @@ class runin_control{
             int runinMod,
             int m_trajLen
         );
+        void set_lowpass_enabled(bool enabled) { ifUseFtr = enabled; }
         //插补结果输出函数
         runinTrajOutp dataOutp();
 
