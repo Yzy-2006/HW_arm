@@ -153,7 +153,10 @@ dry-run 只验证数据读取、episode 选择、帧率调度和消息构造，�
 
 ## 第二步：短片段真机回放
 
-首次真机测试建议只回放 30 至 90 帧，并把关节步长限制缩小到默认值的 10%。例如：
+首次真机测试先限制为 30 至 90 帧。以下示例保留 `--slow-factor 0.1` 参数，
+但当前 `speed_only` 关闭反馈相对目标裁剪，该参数不会降低轨迹速度或步长。
+需要延长源点间隔时使用 `--speed`，并先完成 dry-run/RViz 检查；保护开关见
+[控制安全说明](CONTROL_SAFETY.md#current-configuration)。例如：
 
 ```bash
 make replay ARGS="--dataset /home/yanziyu/datasets/fold-towel-93 --episode 0 --start-frame 0 --max-frames 30 --slow-factor 0.1 --motion"

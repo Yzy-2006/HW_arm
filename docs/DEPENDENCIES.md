@@ -1,5 +1,9 @@
 # 提取范围与依赖
 
+[文档索引](README.md) · [环境与构建](../environments/README.md)
+
+本文保留项目初始提取来源；当前模块分工见[项目架构](ARCHITECTURE.md)。
+
 ## 从源码复制
 
 - `ctl_msgs_hw`：双臂控制消息、零位和 PD 配置。
@@ -16,7 +20,7 @@
 - `chassis_control_hw`：提取原始 msg/srv/action，重建消息包。
   原上层控制器仍引用它的升降等消息类型，所以不能直接删掉这个依赖；本目录不提供底盘驱动节点。
 
-目录级来源见 `copied_sources.json`。旧 `.git`、`.vscode` 数据库、缓存、build/install/log、
+目录级来源见 [copied_sources.json](copied_sources.json)。旧 `.git`、`.vscode` 数据库、缓存、build/install/log、
 白板控制/标定、旧 demo、白板数据、ACT 输出及 LeRobot 整个仓库均未作为源码带入。
 本次本地验证产生的新 build/install/log 已由 `.gitignore` 忽略。
 
@@ -36,11 +40,11 @@
 在原机器人上可通过 `TOWEL_OPENROBOTS_PREFIX` 显式选择修复过路径的兼容依赖。
 在 x86 主机需要重新安装/构建依赖，不能用原 ARM `.so`。
 
-## 尚未完成的实机工作
+## 当前验收边界
 
-- 当前主机缺少上述部分依赖，双臂控制节点尚未完整编译验证。
-- 没有启动 EtherCAT/CAN、VR 服务或相机，未验证实际控制频率和采集吞吐。
-- 双夹爪控制/标定工具已实现；夹爪开闭端点及毛巾任务参数需实机测量确认。
-- 未训练 π0.5，也未实现新的 π0.5 实机策略执行器。
+- 依赖是否满足以目标主机的 `make check` 和构建结果为准；早期缺依赖记录见[历史验证](VALIDATION.md)。
+- 控制链、夹爪标定、PI05/ACT bridge、worker 和回放器已有实现，使用入口见[文档索引](README.md)。
+- 实际控制频率、相机吞吐、夹爪端点、零位及策略效果需在目标设备逐项验收；文档整理不代表实机验证通过。
+- 训练说明保留示例性质；模型能启动推理不等于本项目已完成训练或真机任务验收。
 
 原工程各包保留其版权/许可声明；若声明为 TODO，不在本次整理中擅自重新授权。

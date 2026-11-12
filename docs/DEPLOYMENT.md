@@ -2,6 +2,10 @@
 
 本文档是当前仓库的快速部署入口。两种策略共用同一个 ROS2 bridge，只更换推理 worker：
 
+完整资料见[文档索引](README.md)。当前 YAML 使用 `speed_only`，模型流还通过
+`policy_disable_all_speed_checks: true` 关闭速度检查；`PI05_SLOW_FACTOR` 不降低实际轨迹速度。
+具体生效范围见[当前保护配置](CONTROL_SAFETY.md#current-configuration)，不要把参数示例当作已启用全部保护。
+
 ```text
 RealSense + ROS2 feedback -> bridge -> TCP -> pi05 或 act worker
                                       -> BridgeCtlMsg / gripper command
@@ -93,7 +97,7 @@ make pi05
 PI05 worker listening on 127.0.0.1:8765
 ```
 
-PI05 每次推理输出 **50 步动作**，推理积分步数默认为 **10 步**；两者含义不同。
+通过 `make pi05` 读取当前 YAML 时，每次推理输出 **50 步动作**，推理积分步数为 **20 步**；两者含义不同。
 参数写在 `config/pi05_deployment.yaml` 的 `worker.action_horizon` 和 `worker.num_steps`，
 `make pi05` 会自动读取。`action_horizon` 用于校验模型原生输出，当前模型需保持 50。
 完整参数表和执行时序见 [PI05 动作与时序](PI05_DEPLOYMENT.md#动作与时序)。
@@ -160,14 +164,15 @@ dry-run 会读取三路相机、关节反馈和夹爪反馈，请求 worker 推�
 make motion
 ```
 
-首次观察动作方向时使用慢放：
+`PI05_SLOW_FACTOR` 是反馈相对目标偏移系数，参数写法如下：
 
 ```bash
 make motion PI05_SLOW_FACTOR=0.1
 ```
 
-这会把默认的 `0.02 rad` 单周期关节步长限制缩小到 `0.002 rad`。它只改变桥接层的安全
-步长，不改变模型输出或关节顺序。
+当前 YAML 的 `max_joint_step_rad` 为 `0.3 rad`，在启用反馈相对裁剪的模式下，
+系数 `0.1` 将该偏移上限缩为 `0.03 rad`。当前 `speed_only` 已关闭这项裁剪，
+该参数不改变实际轨迹速度、模型输出或关节顺序，不能将上述命令视为慢放。
 
 也可以保留旧写法：
 

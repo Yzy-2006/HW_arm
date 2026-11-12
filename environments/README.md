@@ -8,6 +8,12 @@
 | `towel-pi05` | 原始数据导出、数据检查、π0.5 微调 | Conda Python 3.12 | ROS 2、rclpy、EtherCAT/CAN 驱动 |
 | `towel-newton` | Newton 机器人与布料仿真 | Conda Python 3.12 | ROS 2、rclpy、EtherCAT/CAN 驱动 |
 | `mediapipe` | 相机手势识别、手掌位姿检测 | Conda Python 3.11 | ROS 2、rclpy；通过本机 UDP 连接机器人环境 |
+| `pi05-openpi` | OpenPI/JAX PI05 推理 worker | Conda Python 3.11 | ROS 2、EtherCAT/CAN 驱动 |
+| `lerobot` | ACT/PyTorch 推理 worker、LeRobot 数据处理 | 与所用 LeRobot 安装匹配 | ROS 2、EtherCAT/CAN 驱动 |
+
+表中的 `robot-system` 使用项目内 `.venv-robot`，不是 Conda 环境名。
+PI05/ACT 推理环境及启动器见[部署指南](../docs/DEPLOYMENT.md)，Thor 单机测速环境见
+[Thor 环境说明](PI05_THOR.md)。完整文档见[总索引](../docs/README.md)。
 
 Newton 的逐步安装和验证见 [Newton 仿真环境](NEWTON_SETUP.md)。
 手势识别的环境文件位于 `gesture_teleoperation/environment.yml`，
@@ -31,7 +37,7 @@ python -m pip install -e teleop
 bash scripts/create_certificate.sh
 ```
 
-每个控制终端都应按这个顺序进入环境：
+使用根 Makefile 的机器人端目标时会自动加载环境。直接运行 Python、ROS 命令时，按以下顺序进入环境：
 
 ```bash
 conda deactivate 2>/dev/null || true
@@ -47,7 +53,7 @@ source /home/yanziyu/projects/HW_arm/towel_task/scripts/env.sh
 - ROS 2 Jazzy：`rclpy`、rclcpp、KDL、URDF、TF2、robot_state_publisher、ament。
 - C++ Pinocchio；Python `pinocchio` 且 `from pinocchio import casadi` 可导入。
 - CasADi/IPOPT、Meshcat、SciPy、yaml-cpp、Eigen、Boost、TBB。
-- RealSense 的系统权限/udev 规则和两台相机；`pyrealsense2`。
+- RealSense 的系统权限/udev 规则和三台相机；`pyrealsense2`。
 - 与机器人处理器架构一致的 OpenRobots/Pinocchio SDK。原收到的二进制是 aarch64，不能在当前 x86_64 主机使用。
 
 安装完成并编译后，运行只读检查：

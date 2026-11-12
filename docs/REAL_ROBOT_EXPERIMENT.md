@@ -58,7 +58,7 @@ make test
 ## 5. 进入正式采集
 
 完成前置步骤、确认现场安全后，按[真机数据采集流程](DATA_COLLECTION_WORKFLOW.md)分终端
-依次启动 `servo → arms → robot → record → vr`。需要在录制中查看相机时，按该文档以
+依次启动 `servo → arms → robot → record → vr`。
 `make record` 已经包含三个 OpenCV 窗口；`make record-opencv` 只是兼容别名，不要启动第二个采集器。
 
 ## 6. 试录与正式采集

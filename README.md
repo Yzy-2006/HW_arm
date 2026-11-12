@@ -1,134 +1,79 @@
-# 擦毛巾：ENCOS 双臂 VR 遥操作与数据采集
+# ENCOS 双臂叠毛巾
 
-本目录用于双臂叠毛巾的真机 VR 遥操作与数据采集：使用头部、左腕、右腕三路 RealSense，相机与机器人数据可导出为 LeRobot 数据集，供后续 π0.5 微调。
+双臂叠毛巾实验项目，包含真机 VR/手势遥操作、三路 RealSense 数据采集、LeRobot 数据导出、PI05/ACT 策略部署，以及 Newton 布料仿真。
 
-> **安全边界：** 软件退出、`Ctrl+C` 或关闭 Launch 都不是物理急停。进入任何会让机械臂运动的流程前，先确认现场急停、上电和 CAN/EtherCAT 操作符合机器人厂商规范。
+> 软件退出、`Ctrl+C` 或关闭 Launch 都不是物理急停。真机启动和标定前，必须确认现场急停、工作空间、供电及 CAN/EtherCAT 接线符合厂商规范。当前保护开关与限制见[控制安全说明](docs/CONTROL_SAFETY.md)。
 
 ## 从这里开始
 
-首次配置机器人端环境、证书和 ROS 工作区，见 [环境与构建](environments/README.md)。完成后，在项目根目录执行：
+完整资料见[文档总索引](docs/README.md)，命令见[命令速查](docs/COMMANDS.md)，代码关系见[项目架构](docs/ARCHITECTURE.md)。
+
+| 使用场景 | 入口 |
+|---|---|
+| 首次安装、构建 ROS 工作区 | [环境与构建](environments/README.md) |
+| 更换上位机或交接设备 | [迁移与交接](docs/MIGRATION_HANDOVER.md) |
+| 真机遥操作与示教采集 | [真机数据采集流程](docs/DATA_COLLECTION_WORKFLOW.md) |
+| 当天实验预检与验收 | [真机实验总清单](docs/REAL_ROBOT_EXPERIMENT.md) |
+| 运行 PI05/ACT 模型 | [机器人部署指南](docs/DEPLOYMENT.md) |
+| 数据集动作回放 | [数据集回放流程](docs/DATASET_REPLAY_WORKFLOW.md) |
+| 纯仿真、自动对折或仿真 VR | [Newton 仿真指南](simulation/README.md) |
+| 使用相机手势 | [RViz 仿真](docs/GESTURE_RVIZ.md)、[真机接入](docs/GESTURE_ROBOT.md) |
+| 导出数据、筛选或训练 | [数据集约定](docs/DATASET.md)、[PI05 训练说明](training/README_PI05.md) |
+| 独立交付仿真 | [Newton 交付包](newton_towel_sim/README.md) |
+
+## 环境与检查
+
+先按[环境说明](environments/README.md)创建 `.venv-robot`、配置系统依赖和 VR 证书，再在项目根目录运行：
 
 ```bash
-make build       # 首次、更新源码或 ROS 工作区变化后执行
-make check       # 只读检查控制、相机和 RViz 依赖
-make test        # 不启动硬件的测试
+make build       # 编译 ROS；成功后通过 sudo 配置 EtherCAT 网卡权限
+make check       # 只读检查控制、相机和可视化依赖
+make test        # 项目 tests/，不启动真机硬件
 ```
 
-所有机器人端 `make` 命令都会自动激活 `.venv-robot`、加载 ROS/OpenRobots 和工作区环境；不需要在每个终端重复 `source`。训练与导出仍应在独立的训练环境运行。
-启动 `servo` 的命令另需 EtherCAT 原始网卡权限；`make build` 会在构建成功后自动提示
-sudo 密码并配置 `servo_node`，具体见[环境与构建](environments/README.md#ethercat-网卡权限)。
+机器人端 Makefile 目标会自动加载 `.venv-robot`、ROS/OpenRobots 和工作区环境。
+Newton 使用 `towel-newton`；数据导出/训练使用独立 LeRobot 环境；推理 worker 使用
+`pi05-openpi` 或 `lerobot`。不要在 Conda 训练环境构建或运行 ROS 控制节点。
+具体覆盖范围与测试前提见[验证说明](docs/VALIDATION.md)。
 
-## 文档导航
+## 真机采集入口
 
-| 要做的事 | 使用的文档 | 常用命令 |
+完成相机配置、夹爪标定和空载 VR 检查后，按[正式采集流程](docs/DATA_COLLECTION_WORKFLOW.md)分五个终端依次启动：
+
+| 终端 | 命令 | 职责 |
 |---|---|---|
-| 把当前代码迁移到另一台电脑 | [新电脑迁移与交接](docs/MIGRATION_HANDOVER.md) | 环境重建、参数核对、分阶段验收 |
-| 单独交付 Newton 仿真 | [独立交付包](newton_towel_sim/README.md) | 复制 `newton_towel_sim/` 或发送同名 `.tar.gz` |
-| 配置机器人与布料仿真环境 | [Newton 仿真环境](environments/NEWTON_SETUP.md) | `make sim-check`、`make sim-demo` |
-| 完整配置与使用双臂叠毛巾仿真、VR、自动对折及三路相机 | [双臂叠毛巾仿真完整指南](simulation/README.md) | `make sim`、`make sim-fold`、`make sim-vr` |
-| 部署已训练的 PI05 或 ACT 模型到机器人 | [机器人部署指南](docs/DEPLOYMENT.md) | `make pi05`/`make act`、`make bridge`、`make motion` |
-| 将 LeRobot 数据集动作通过控制链回放 | [数据集动作回放流程](docs/DATASET_REPLAY_WORKFLOW.md) | `make replay ARGS="--episode 0"`（默认 dry-run） |
-| 增大关节变化阈值，离线筛选已导出的数据 | [已导出数据的离线筛选](docs/DATASET.md#已导出数据的离线筛选) | `make filter-data DATASET=/path/to/lerobot MIN_JOINT_DELTA_RAD=0.02 ARGS="--dry-run"` |
-| 按正确顺序启动并采集真机数据 | [真机数据采集流程](docs/DATA_COLLECTION_WORKFLOW.md) | 分终端：`make servo` → `make arms` → `make robot` → `make record` → `make vr` |
-| 填写并核对三台 RealSense 的序列号和画面 | [相机序列号配置](docs/CAMERA_CONFIGURATION.md) | `make preview` |
-| 记录单臂或双臂新的安全初始姿态 | [机械臂零位标定](docs/ARM_ZERO_CALIBRATION.md) | `make calibrate-arm-zero SIDE=both` |
-| 采样左右夹爪开/闭端点 | [双夹爪标定](docs/GRIPPER_CALIBRATION.md) | `make servo`、`make calibrate ...` |
-| 连接 XR、检查按键与空载遥操 | [VR 遥操作检查](docs/VR_TELEOP_CHECK.md) | 分终端依次执行 `make servo`、`make arms`、`make robot`、`make vr` |
-| 使用手掌位姿和手势进行 RViz 仿真遥操作 | [手势 RViz 仿真](docs/GESTURE_RVIZ.md) | `make gesture-rviz`，独立仿真，不启动真机控制 |
-| 使用张掌手势遥操作真机 | [手势真机接入](docs/GESTURE_ROBOT.md) | `make gesture-check` 检查，`make gesture` 替代 `make vr` |
-| 安装或单独测试手势识别 | [仓库内手势识别代码](gesture_teleoperation/README.md) | `make -C gesture_teleoperation test`，包含模型、标定及环境文件 |
-| 理解原始片段、字段、校验与 LeRobot 导出 | [数据集约定](docs/DATASET.md) | `make validate-data` |
-| 训练 π0.5 | [π0.5 训练说明](training/README_PI05.md) | 在训练环境运行 |
-| 排查环境或历史验证范围 | [依赖说明](docs/DEPENDENCIES.md)、[验证记录](docs/VALIDATION.md) | `make check` |
+| 1 | `make servo` | 底层伺服与启动回零，会运动 |
+| 2 | `make arms` | 双臂运动学与轨迹控制 |
+| 3 | `make robot` | 上层控制与遥操作参考姿态 |
+| 4 | `make record` | 三路相机、OpenCV 窗口和 episode 写入 |
+| 5 | `make vr` | VR 输入；连接头显、进入 Virtual Reality 后按终端提示按 Enter |
 
-`DATA_COLLECTION_WORKFLOW.md` 是正式录制的唯一启动入口；`REAL_ROBOT_EXPERIMENT.md` 保留当天
-预检和验收总清单。控制、采集和 VR 必须分终端运行，避免重复节点发布同名控制话题。
+每一步等待前一层初始化完成。左 B 开始/结束录制，左 A 丢弃；扳机控制对应臂，
+squeeze 切换对应夹爪，右 A 回零，右 B 切换快速/精细模式。
+完整按键、停止顺序和通过条件统一维护在[采集流程](docs/DATA_COLLECTION_WORKFLOW.md)。
 
-## 常用启动命令
+`make preview`、`make record`、策略 bridge 都会占用相机，不能同时运行。
+控制与 VR 节点也不要重复启动。`make vr-debug` 只诊断输入，不发送控制指令。
+从部署切换到 VR 时，按[接管与补采](docs/POLICY_INTERVENTION.md)执行显式控制权交接。
 
-正式采集使用五个独立终端。每个终端先进入项目根目录：
+## 数据出口
 
-```bash
-cd /home/yanziyu/projects/HW_arm/towel_task
-```
-
-先执行一次 `make check-control`，通过后按顺序启动，每一步等待前一个节点初始化完成：
-
-| 顺序 | 命令 | 作用 |
-|---|---|---|
-| 终端 1 | `make servo` | 启动底层伺服，机械臂执行初始回零 |
-| 终端 2 | `make arms` | 启动双臂运动学与轨迹控制 |
-| 终端 3 | `make robot` | 启动上层控制，输出遥操作初始位姿 |
-| 终端 4 | `make record` | 启动唯一的相机采集器和三个 OpenCV 窗口；未按左 B 不会创建 episode |
-| 终端 5 | `make vr` | 启动 VR 输入，接收手柄操作 |
-
-头显连接页面并进入 **Virtual Reality** 后，回到终端 5 按 **Enter**。
-出现“开始发布位姿增量（扣动扳机生效）”后，按住对应手柄的扳机、小幅移动手柄进行遥操作。
-当前双臂开放全部三个 VR 旋转自由度，包括工具局部 Z 轴自转。
-`controllerConfig.yaml` 的 `vrOrientationControl.lock_tool_twist` 为 `false`；更改后重启 `make robot` 生效。
-`make vr-debug` 只显示诊断数据，不发送控制指令，不能替代 `make vr`。
-
-右手 A 键让双臂回到零位。右手 B 键在“快速移动”和“精细微调”两种 VR 响应模式之间切换；
-当前模式只影响手柄位姿增量的倍率与限速，不会移动机械臂到预设姿态。
-两套参数位于 `teleop/VR_controller/config/gripper_pd.yaml`，切换后立即作用于后续 VR 增量。
-
-其他常用命令：
-
-```bash
-make preview                         # 三个 OpenCV 窗口检查相机，不启动 ROS 或录制
-make record-opencv                   # make record 的兼容别名
-make record-rviz                     # 可选：向 ROS 发布 RViz 图像话题
-make visualize                       # 离线展示双臂模型，附带关节滑块，无需连接机器人
-make launch ARGS="visualize:=true"   # 可选：单独启动 RViz、状态桥接和独立 TF
-make watch                           # 观察 /towel/gripper_state；可通过 WATCH_TOPIC=... 改话题
-make calibrate-arm-zero SIDE=left    # 被选中左/右臂零电流；SIDE 可为 left、right、both
-make save-arm-zero SIDE=left TARGET=both  # 同步所选侧关节与末端零位；也可选 joint / cartesian
-```
-
-`make visualize` 打开 RViz 和关节滑块窗口，可拖动滑块调整模型姿态。
-与 `make sim`、`make sim-fold`、`make sim-vr` 一样，统一加载 `dual_arm/urdf/dual_arm.urdf` 和其 STL 资产，
-使用新版模型自带的旋转夹爪，不再追加简易夹爪。RViz 中的 `arm_l_joint_finger` / `arm_r_joint_finger`
-滑块单位为弧度，范围分别是 -90°–0° / 0°–90°；初始姿态读取 `simulation/scene.yaml`。
-Newton 中夹爪开口使用百分比。真机控制模型与零位配置独立，不随仿真模型切换。
-只查看静态模型时使用 `make visualize ARGS="gui:=false"`，按 `Ctrl+C` 退出。
-该命令仅发布 `/model_viewer/` 下的展示状态，不启动伺服、相机或控制节点。
-需要 ROS 工作区已构建，并安装 `ros-jazzy-joint-state-publisher-gui`。
-
-`make record` 会在唯一的相机采集器中打开三个 OpenCV 窗口；`make vr` 仍只负责 VR 遥操作。
-不要同时启动 `make preview`、`make record` 或 `make record-opencv`，因为多个 RealSense
-管线会争用相机。
-
-上述命令均为前台进程；在一个终端按 `Ctrl+C` 不会停止其他终端的节点。开始正式采集前，必须先完成相机配置、夹爪标定和空载 VR 检查；完整步骤见[真机数据采集流程](docs/DATA_COLLECTION_WORKFLOW.md)。
-
-## 配置归属
-
-| 文件 | 负责内容 | 对应说明 |
-|---|---|---|
-| `config/recording.yaml` | 任务文本、原始数据目录、三相机序列号、采集频率与时序阈值 | [相机序列号配置](docs/CAMERA_CONFIGURATION.md)、[数据集约定](docs/DATASET.md) |
-| `teleop/VR_controller/config/grippers.yaml` | 左右夹爪端点、运动时间和标定状态 | [双夹爪标定](docs/GRIPPER_CALIBRATION.md) |
-| `ros2_ws/src/ctl_msgs_hw/config/controllerConfig.yaml` 的 `gripperControl` | 夹爪位控模式、电机 Kp/Kd、位置范围和机械零点 | [双夹爪标定](docs/GRIPPER_CALIBRATION.md) |
-| `teleop/VR_controller/config/gripper_pd.yaml` | VR 位姿映射与缩放 | [VR 遥操作检查](docs/VR_TELEOP_CHECK.md) |
-| `ros2_ws/src/ctl_msgs_hw/config/zeropos.yaml` | 伺服启动和 VR A 键关节回零目标；`TARGET=joint/both` 保存 | [机械臂零位标定](docs/ARM_ZERO_CALIBRATION.md) |
-| `ros2_ws/src/ctl_msgs_hw/config/desc_zeropos.yaml` | 遥操作初始末端位姿；`TARGET=cartesian/both` 从关节反馈正运动学计算并保存 | [机械臂零位标定](docs/ARM_ZERO_CALIBRATION.md) |
-
-当前 `recording.yaml` 的 `right_wrist` 是占位值时，采集器会拒绝启动；请先完成相机模块。配置发生变化后，应使用新的原始数据目录，避免混合不兼容 episode。
-
-## 数据与训练
-
-采集器记录双臂关节反馈/目标、TCP 反馈/名义目标、夹爪二值状态和三路 RGB 图像。字段定义、时间对齐限制、数据质量规则和 LeRobot 映射都在 [数据集约定](docs/DATASET.md)。
-
-当前默认原始目录与 `Makefile` 的 `DATASET_ROOT` 一致，为 `data/raw/fold_towel`：
+默认原始目录为 `data/raw/fold_towel`。采集结束后校验，再到训练环境导出：
 
 ```bash
 make validate-data
 make export-data OUTPUT=/absolute/path/to/fold_towel_lerobot
 ```
 
-若修改了 `config/recording.yaml` 的 `dataset_root`，校验和导出时也显式传入相同目录：
+若修改 `config/recording.yaml` 的 `dataset_root`，两个命令都需传入相同的
+`DATASET_ROOT=/absolute/path/to/raw_data`。字段、时间对齐、过滤及质量规则见[数据集约定](docs/DATASET.md)。
 
-```bash
-make validate-data DATASET_ROOT=/absolute/path/to/raw_data
-make export-data DATASET_ROOT=/absolute/path/to/raw_data OUTPUT=/absolute/path/to/lerobot_data
-```
+## 目录与资料维护
 
-训练侧的动作/观测映射与 π0.5 示例见 [training/README_PI05.md](training/README_PI05.md)。
+`ros2_ws/` 为真机控制，`teleop/` 为输入，`collection/` 为采集与导出，
+`deployment/` 为策略与回放，`simulation/` 为当前仿真实现，`config/` 为任务配置。
+完整目录和配置归属见[项目架构](docs/ARCHITECTURE.md)。
+
+`newton_towel_sim/` 是独立交付快照；同名 `(2)` 目录及压缩包另行保留，
+主项目开发使用 `simulation/`。事故资料和早期设计记录的入口、日期与适用范围
+见[历史资料索引](docs/README.md#历史与交付资料)。

@@ -1,5 +1,7 @@
 # Minimum Snap 关节插值
 
+[文档索引](README.md) · [控制保护配置](CONTROL_SAFETY.md#current-configuration)
+
 模型部署和数据集回放默认保留每秒 30 个源目标点，并以 50 Hz 发布插值后的
 14 关节位置指令。数据集去重后的相邻行仍按 `1 / fps` 排列，不恢复已删除帧的时间。
 夹爪不做连续插值，按对应源帧的开/闭状态切换。
@@ -23,7 +25,7 @@ bridge:
 
 ```bash
 .venv-robot/bin/python -m pip install -r requirements-record.txt
-bash scripts/build.sh --packages-select ctl_msgs_hw robot_control_hw dual_arm_control_hw
+make build
 ```
 
 原有 `make bridge`、`make motion` 和 `make replay` 命令自动使用上述配置。
@@ -43,7 +45,8 @@ Python 启动时检查配置中的各层频率是否足以承载发布频率，�
 修改 `publish_rate_hz` 时应同时匹配上层、中层的控制频率，且不超过底层频率。
 设 `enabled: false` 可以恢复直接发布原始点；缺少整个 `interpolation` 配置时也
 沿用旧逻辑。回放 `--speed 0.5` 将源点间隔改为 `1/15` 秒，发布频率仍为 50 Hz。
-`--slow-factor` 仍只缩放目标相对反馈的最大偏差。
+`--slow-factor` 只缩放目标相对反馈的最大偏差；当前 `speed_only` 关闭这项裁剪，
+因此该参数不会降低轨迹速度或步长。
 
 ## 轨迹定义
 
@@ -54,23 +57,24 @@ minimum snap 插值，并非每两个点独立停稳的逐段插值。
 实现位于 `deployment/minimum_snap.py`；SciPy 接口见
 [make_interp_spline](https://docs.scipy.org/doc/scipy/reference/generated/scipy.interpolate.make_interp_spline.html)。
 
-回放对所选帧整体求解，开始时额外用一个源帧周期从当前反馈接入第一帧，末尾速度、
-加速度和 jerk 为零。正常回放以单调时钟采样，不按回调次数推进源帧；调度延迟
-不会导致积压后突发补发。反馈超时时发布 hold 并暂停，恢复后从反馈重建剩余轨迹。
+回放先通过独立接近段从反馈接入第一帧，再对所选帧规划；接近段参数与到位确认规则见
+[回放流程](DATASET_REPLAY_WORKFLOW.md#独立的首帧接近段)。末尾速度、加速度和 jerk 为零。
+正常回放以单调时钟采样，不按回调次数推进源帧；调度延迟不会导致积压后突发补发。
+反馈超时检查取决于保护模式，当前 `speed_only` 可以继续使用缓存反馈。
 CSV 每个发布周期记录一行，同一个 `dataset_frame` 可以出现多次；`dataset_*`
 为该源帧原始值，`command_*` 为插值并经过安全限制的实际指令。
 
-模型部署保持观测时间对齐。接收新 chunk 时，从旧曲线在当前时刻的位置及前三阶
-导数接入尚未过期的后续点；距离当前时刻不足半个源周期的点被跳过，避免极短接入段。
-单点返回的模型用一个源周期接入该点。首次接入从反馈开始，末端前三阶导数为零。
-高频发布独立于 30 Hz 观测定时器，每次检查反馈、最近观测检查时间和 chunk 有效期。
-推理仍在工作线程运行；相机异常、推理失败或过期动作均进入原有 hold 保护。
+模型新 chunk 从最后成功发布的 q/v/a/jerk 接入，规划和预检查不消耗播放时间，
+首次发布时才启动新轨迹的时间轴。首次接入及 hold 后重建从反馈锚定，末端前三阶导数为零。
+高频发布独立于 30 Hz 观测定时器，推理在工作线程运行。
+`full` 模式仍按观测的实际年龄检查有效性；当前 `speed_only` 关闭观测时效和结果年龄拒绝，
+但网络失败、序列耗尽、显式故障仍等待/保持。详见[PI05 时序](PI05_DEPLOYMENT.md#动作与时序)。
 
 ## 边界
 
-插值保留 URDF 限位及相对反馈的偏差裁剪。没有触发这些限制时，生成轨迹满足上述
-连续性；安全裁剪或紧急 hold 会打断数学上的导数连续性，安全限制优先。
-minimum snap 可能在源点之间过冲，因此每个高频样本都重新执行安全检查。
+URDF 限位和相对反馈偏差裁剪由保护模式及各自开关决定，当前 `speed_only` 不执行这些裁剪。
+生成轨迹满足上述连续性；启用的安全裁剪或紧急 hold 会打断数学上的导数连续性。
+minimum snap 可能在源点之间过冲，规划极值和发布检查的生效范围以[控制安全说明](CONTROL_SAFETY.md)为准。
 当前优化不包含关节速度、加速度、力矩的硬约束；在固定的 `1/30` 秒内移动更远，
 不能仅靠插值保证动力学可行。需要降低运动速度时，回放使用 `--speed` 延长源点间隔。
 末帧的规划速度为零，但结束时仍按现有逻辑 hold 当前反馈，不等待电机追到被裁剪的目标。

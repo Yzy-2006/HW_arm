@@ -1,5 +1,30 @@
 # Control Safety Changes
 
+[Documentation index](README.md)
+
+## Current Configuration
+
+Configuration review: 2026-11-12. The active files are
+`config/pi05_deployment.yaml` and `ros2_ws/src/ctl_msgs_hw/config/controllerConfig.yaml`.
+The sections below describe implemented protections; whether each is active depends on these files.
+
+- Python bridge/replay and servo use `protection_mode: speed_only`. Python heartbeat readiness/age,
+  feedback/image age and skew, position/acceleration and feedback-relative target checks are bypassed.
+- Model deployment additionally sets `policy_disable_all_speed_checks: true`, bypassing Python
+  model speed checks and native command/feedback speed checks for fresh model commands.
+  Homing, VR and replay retain their separately configured speed checks.
+- `slow_factor` only scales the feedback-relative target allowance. With that allowance disabled,
+  it does not reduce trajectory speed. Replay `--speed` changes the source timeline.
+- Replay has a separate immediate tracking-error check (`replay_max_tracking_error_rad: 0.3`),
+  which still applies to all 14 joints in `speed_only` mode.
+- Non-finite values, protocol bounds, explicit stops and reported faults remain enforced.
+  Switching protection mode does not clear a latched fault or enable individually disabled checks.
+
+See [Replay and Deployment](#replay-and-deployment) for detailed switch behavior.
+Heartbeat/startup/arrival rules below apply when their protection mode enables them;
+they must not be read as guarantees of the current configuration. This documentation review
+does not constitute hardware validation.
+
 All gravity, inertia, Coriolis and friction compensation switches are **off** in
 `ros2_ws/src/ctl_msgs_hw/config/controllerConfig.yaml`. The installed configuration
 is a symlink to that file. Historical incident evidence is unchanged.

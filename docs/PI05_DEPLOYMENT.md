@@ -6,8 +6,9 @@ worker 协议和动作时序的细节。
 部署时暂停模型、切换 VR 并补采恢复数据，见 [VR 接管与补采](POLICY_INTERVENTION.md)。
 
 控制链现已加入锁存故障保护，重力、惯性、科氏和摩擦补偿默认全部关闭。
-运动需要底层安全心跳；故障状态禁止模型和 VR 恢复运动。构建范围、阈值和限制见
-[控制安全说明](CONTROL_SAFETY.md)。这些修改尚未经过实机验证。
+当前 `speed_only` 配置不等待底层安全心跳就绪/时效，但显式底层故障仍禁止恢复运动；
+模型流还设置了关闭速度检查的开关。构建范围、保护模式和限制见
+[控制安全说明](CONTROL_SAFETY.md#current-configuration)。这些修改尚未经过实机验证。
 
 ## Checkpoint 格式
 
@@ -224,13 +225,13 @@ make pi05 PI05_ARGS='--camera-map {"cam_high":"head","cam_left":"left_wrist","ca
 | --- | --- | --- |
 | 每次推理输出的动作步数 `action_horizon` | **50 步** | YAML 的 `worker.action_horizon`；用于校验模型原生 chunk 长度，必须与模型 `inference.py` 一致，单改 YAML 不会改变模型结构 |
 | 每步动作维度 | 16 | 左臂 7 关节 + 左夹爪 + 右臂 7 关节 + 右夹爪 |
-| 每次推理的积分步数 `num_steps` | **10 步** | YAML 的 `worker.num_steps`；Flow Matching 采样计算步数，可用 `--num-steps` 临时覆盖 |
+| 每次推理的积分步数 `num_steps` | **20 步** | 当前 YAML 的 `worker.num_steps`；Flow Matching 采样计算步数，可用 `--num-steps` 临时覆盖；不读 YAML 的 worker 回退值为 10 |
 | bridge 观测和规划频率 `rate_hz` | 30 Hz | YAML 的 `bridge.rate_hz`；检查观测、处理推理结果 |
 | 插值后指令发布频率 | 50 Hz | `bridge.interpolation.publish_rate_hz`；minimum snap 关节插值 |
 | 动作序列时间频率 `action_rate_hz` | 30 Hz | YAML 的 `bridge.action_rate_hz`；用于 chunk 动作的时间索引，默认匹配数据集的 30 FPS |
 | 相邻预测动作的时间间隔 | 约 33.3 ms | `1 / action_rate_hz`；50 步对应约 1.67 秒的预测范围，不是每 33.3 ms 运行一次模型 |
 | 重规划间隔 `replan_interval_s` | 0.5 秒 | 有效 chunk 存在时，推理请求的最小发起间隔；上一次请求完成后才能发起下一次 |
-| 动作最大有效年龄 `max_action_age_s` | 1.0 秒 | 从该次观测请求的时刻计算；超时后保持位置 |
+| 动作最大有效年龄 `max_action_age_s` | 1.0 秒 | 仅 `full` 模式按观测时刻检查；当前 `speed_only` 不启用结果年龄拒绝 |
 | 每段 chunk 实际执行步数 | 不固定 | 当前没有独立的 `n_action_steps` 参数；取决于推理耗时、重规划间隔和观测有效性 |
 
 `make pi05` 自动读取 `config/pi05_deployment.yaml`（可用 `PI05_CONFIG=...` 指定其他文件）。
@@ -241,11 +242,12 @@ make pi05 PI05_ARGS='--camera-map {"cam_high":"head","cam_left":"left_wrist","ca
 make pi05 PI05_CHECKPOINT=step-49999 PI05_ARGS="--num-steps 10"
 ```
 
-该命令仍然每次输出 50 步动作。bridge 会跳过推理期间已经过去的动作时刻，
-并在新的有效 chunk 返回后替换旧 chunk，因此不是按顺序执行完全部 50 步后才再推理。
+该命令仍然每次输出 50 步动作。新的有效 chunk 返回后可以替换旧 chunk，
+因此不是按顺序执行完全部 50 步后才再推理。
 
-OpenPI worker 返回完整的动作序列；bridge 按观测时间消费序列，而不是按推理完成时间
-重新计时。以下为步长限制 0.02 rad 的配置示例，实际以现场 YAML 为准：
+OpenPI worker 返回完整动作序列；当前轨迹规划完成后从首次发布开始播放，
+`full` 模式仍使用观测时间检查结果年龄。以下为 10 步积分、步长限制 0.02 rad 的示例，
+不是当前默认值；反馈相对步长限制仅在启用对应保护时生效：
 
 ```yaml
 worker:
@@ -277,7 +279,7 @@ bridge:
 不会因为规划耗时跳过开头。夹爪动作使用相同的播放时间轴。
 尚未发布的新规划不会替代已发送状态；保持/暂停后重新从反馈构造静止起点。
 首次启动、超时恢复或安全裁剪后的重规划从反馈/最后实际指令重新锚定。
-插值不延长动作有效期，也不会补发推理期间已过期的动作点。
+`full` 模式的观测年龄检查不会因延后首次播放而变新；当前 `speed_only` 关闭该检查。
 
 当前 `bridge.motion_safety.protection_mode: speed_only` 关闭非限速保护。
 模型部署设置 `bridge.motion_safety.policy_disable_all_speed_checks: true`，关闭
@@ -313,12 +315,12 @@ servo 的指令速度、位置步进及实际反馈超速检查，双臂全部�
 Ctrl+C/SIGTERM 会先停止并排空回调，最后关闭 ROS 上下文，避免退出时的
 `cannot use Destroyable because destruction was requested` 异常。
 
-14 个关节动作是绝对弧度目标。bridge 在发布前使用最新关节反馈执行 URDF 限位和每周期
-步长限制；夹爪动作经过二值化后映射到 `grippers.yaml` 的开闭端点。
+14 个关节动作是绝对弧度目标。URDF 限位和反馈相对步长限制取决于保护模式及各自开关，
+当前 `speed_only` 不执行这些裁剪；夹爪动作经过二值化后映射到 `grippers.yaml` 的开闭端点。
 默认 `pd_level: mid` 与 `rigidity_mode: 2` 使用 VR 遥操作的中刚度配置。
 
-相机或反馈过期、worker 超时或动作序列耗尽时，bridge 会清空旧序列并保持当前位置。恢复
-后会用新观测重新推理。默认策略不发布动作，必须显式执行 `make motion`。
+`full` 模式下相机或反馈过期会触发相应等待/保护；当前 `speed_only` 可继续使用缓存的有限数值。
+worker 超时或动作序列耗尽时仍等待/保持。默认 bridge 不发布动作，必须显式执行 `make motion`。
 
 ## PI05 与 ACT 的区别
 
