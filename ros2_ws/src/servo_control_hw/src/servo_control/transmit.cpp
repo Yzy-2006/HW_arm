@@ -708,6 +708,25 @@ void EtherCAT_Run()
     // return;
 }
 
+bool EtherCAT_ShutdownDamping()
+{
+    arm_safety.trip("servo_shutdown");
+    if (ecat_phys < 1 || !ec_slave[ecat_phys].outputs ||
+        !ec_slave[ecat_phys].inputs || ec_slave[ecat_phys].Obytes != ETC_PDO_SIZE ||
+        ec_slave[ecat_phys].Ibytes != ETC_PDO_SIZE)
+        return false;
+
+    bool exchanged = false;
+    // Use the existing fault output path, which overrides targets and queued commands.
+    // This exchange must continue even after SIGINT has shut down the ROS context.
+    for (int cycle = 0; cycle < 3; ++cycle) {
+        EtherCAT_Run();
+        exchanged = exchanged || wkc >= expectedWKC;
+        if (cycle < 2) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    return exchanged;
+}
+
 /**
  * @description: slave data get
  * @return {*}

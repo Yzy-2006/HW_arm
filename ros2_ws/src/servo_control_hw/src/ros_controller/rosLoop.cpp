@@ -9,6 +9,33 @@
 #include "servo_control/motorZeroSession.h"
 #include "servo_control/shutdownAwareRate.h"
 
+namespace {
+const char* controller_packet_fault(const ctl_msgs_hw::msg::CtlInformation& msg,
+                                   const ArmSafetyGuard::Limits& limits) {
+    const auto valid = [](const auto& values) {
+        return values.size() == 7 && std::all_of(values.begin(), values.end(),
+            [](double value) { return std::isfinite(value); });
+    };
+    if (!std::isfinite(msg.temp_time) || msg.temp_time <= 0 || msg.temp_time > 0.25 ||
+        !valid(msg.base_rigidity_ctl_mode_l) || !valid(msg.base_rigidity_ctl_mode_r) ||
+        !valid(msg.l_position_at_runin_st) || !valid(msg.r_position_at_runin_st) ||
+        !valid(msg.l_position) || !valid(msg.r_position) || !valid(msg.l_speed) || !valid(msg.r_speed) ||
+        !valid(msg.l_torque_grav_comp) || !valid(msg.r_torque_grav_comp) ||
+        !valid(msg.l_torque_interia_comp) || !valid(msg.r_torque_interia_comp) ||
+        !valid(msg.l_torque_feedforward) || !valid(msg.r_torque_feedforward) ||
+        !valid(msg.l_kp) || !valid(msg.r_kp) || !valid(msg.l_kd) || !valid(msg.r_kd))
+        return "invalid_controller_packet";
+    for (size_t i = 0; !limits.speed_only && i < 7; ++i) {
+        if (std::abs(msg.l_torque_grav_comp[i]) + std::abs(msg.l_torque_interia_comp[i]) +
+                std::abs(msg.l_torque_feedforward[i]) > limits.max_feedforward ||
+            std::abs(msg.r_torque_grav_comp[i]) + std::abs(msg.r_torque_interia_comp[i]) +
+                std::abs(msg.r_torque_feedforward[i]) > limits.max_feedforward)
+            return "raw_feedforward_limit";
+    }
+    return nullptr;
+}
+}
+
 //全局变量 -- 数据传输
 std::vector<double> joint_pos(SERVODOF, 0.0);
 std::vector<double> joint_kp(SERVODOF, 0.0);
@@ -62,7 +89,7 @@ ServoNode::ServoNode() : Node ("servo_node"),
         );
     }
 
-    //显式 executor 替代全局 rclcpp::spin_some
+    // This executor is spun only by ros_receiver_.
     executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
     executor_->add_node(this->get_node_base_interface());
 
@@ -151,61 +178,24 @@ ServoNode::ServoNode() : Node ("servo_node"),
     safety_pub_ = create_publisher<std_msgs::msg::String>("/towel/safety/state", rclcpp::QoS(1).transient_local());
     handoff_pub_ = create_publisher<ctl_msgs_hw::msg::HandoffStatus>("/towel/control/handoff", 1);
     safety_stop_ = create_subscription<std_msgs::msg::String>("/towel/safety/stop", 1,
-        [](std_msgs::msg::String::ConstSharedPtr msg) { arm_safety.trip("upstream: " + msg->data); });
-    safety_timer_ = create_wall_timer(std::chrono::milliseconds(50), [this] {
-        std_msgs::msg::String msg;
-        msg.data = arm_safety.fault.empty()
-            ? (!startup_homing_ && arm_safety.ready(arm_safety_now()) ? "ready" : "waiting") : "fault:" + arm_safety.fault;
-        safety_pub_->publish(msg);
-        ctl_msgs_hw::msg::HandoffStatus handoff;
-        handoff.header.stamp = now();
-        handoff.source_header = last_source_header_;
-        handoff.handoff_epoch = homing_handoff_.epoch();
-        handoff.complete = !startup_homing_ && !arm_zero_calibration_ &&
-            arm_safety.ready(arm_safety_now()) && !homing_handoff_.transitioning();
-        for (size_t i = 0; i < std::min(size_t{14}, servo_desMsg_orig.size()); ++i)
-            handoff.commanded_position.push_back(servo_desMsg_orig[i].joint_pos);
-        handoff_pub_->publish(handoff);
-        if (!arm_safety.fault.empty()) RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 1000,
-            "Latched arm fault: %s; damping only, no load holding guarantee", arm_safety.fault.c_str());
-    });
+        [this](std_msgs::msg::String::ConstSharedPtr msg) {
+            pending_stop_.store(std::make_shared<std::string>("upstream: " + msg->data), true);
+            stop_requested_ = true;
+        });
     safety_reset_ = create_service<std_srvs::srv::Trigger>("/towel/safety/reset",
         [this](std_srvs::srv::Trigger::Request::SharedPtr, std_srvs::srv::Trigger::Response::SharedPtr response) {
-            if (startup_homing_) {
-                response->success = false;
-                response->message = "Startup homing has not finished";
-                return;
-            }
-            response->success = arm_safety.reset(arm_safety_now());
-            response->message = response->success ? "Fault reset; restart upstream controllers from feedback"
-                : "Stop upstream controllers for 1s; require fresh stationary feedback within limits";
-            if (response->success) {
-                last_source_header_ = std_msgs::msg::Header{};
-                ifRuninerInited = false;
-                ifRunin = false;
-                trajectory_sample_ = false;
-                ifFirstRunin = true;
-                posOutpFtr = runinOutpFtr{};
-                velOutpFtr = runinOutpFtr{};
-                TorOutpFtr = runinOutpFtr{};
-                ifGetGripperMsg = false;
-                l_gripper_pos_received = r_gripper_pos_received = false;
-                l_gripper_posTraj.clear();
-                r_gripper_posTraj.clear();
-                l_gripper_torTraj.assign(1, 0.0);
-                r_gripper_torTraj.assign(1, 0.0);
-                l_gripper_tor_get = r_gripper_tor_get = 0.0;
-                l_gripper_tor = r_gripper_tor = 0.0;
-                gripper_LastTorRec_l = gripper_LastTorRec_r = 0.0;
-                gripper_otputTimes = 0;
-                setLeftGripperCmd(gripperCmd{});
-                setRightGripperCmd(gripperCmd{});
-                for (auto& c : servo_desMsg_orig) {
-                    c.transMod = 2; c.joint_pos = c.joint_spd = c.joint_tor = c.joint_Kp = 0;
-                    c.joint_Kd = arm_safety.limits.damping;
+            auto request = std::make_shared<ResetRequest>();
+            auto result = request->result.get_future();
+            pending_reset_.store(request);
+            while (ros_io_running_ && rclcpp::ok()) {
+                if (result.wait_for(std::chrono::milliseconds(10)) == std::future_status::ready) {
+                    *response = *result.get();
+                    return;
                 }
-                homing_handoff_.begin(servo_desMsg_orig, arm_safety);
             }
+            request->cancelled = true;
+            response->success = false;
+            response->message = "Servo is shutting down; reset cancelled";
         });
     ZERO_POS_THRESHOLD = ctl_inteMsg_config.ZeroPos_Threshold;
     if (!std::isfinite(ZERO_POS_THRESHOLD) || ZERO_POS_THRESHOLD <= 0)
@@ -227,7 +217,17 @@ ServoNode::ServoNode() : Node ("servo_node"),
     CtlData = this->create_subscription<ctl_msgs_hw::msg::CtlInformation>(
         "/dexbotCtl/ctl_data_pub",
         1,
-        std::bind(&ServoNode::message_callback, this, std::placeholders::_1)
+        [this, limits = arm_safety.limits](ctl_msgs_hw::msg::CtlInformation::SharedPtr msg) {
+            if (!accept_commands_) return;
+            const double received_at = arm_safety_now();
+            last_command_received_at_ = received_at;
+            if (const auto fault = controller_packet_fault(*msg, limits)) {
+                pending_stop_.store(std::make_shared<std::string>(fault), true);
+                stop_requested_ = true;
+                return;
+            }
+            pending_command_.store(std::move(msg));
+        }
     );
 
     //----------debug消息类型初始化-----------
@@ -245,16 +245,119 @@ ServoNode::ServoNode() : Node ("servo_node"),
     //----------夹爪控制订阅----------
     gripper_des_get = this->create_subscription<ctl_msgs_hw::msg::GripperCtl>(
         "/gripper/ctl",
-        200,
-        std::bind(&ServoNode::gripper_desMsg_get, this, std::placeholders::_1)
+        1,
+        [this](ctl_msgs_hw::msg::GripperCtl::SharedPtr msg) {
+            if (accept_commands_) pending_gripper_.store(std::move(msg));
+        }
     );
 
     //----------控制调试信息发送初始化----------
-    performance_test = std::make_unique<performanceTestSeal>(this);  // 传入当前节点指针
+    performance_test = std::make_unique<performanceTestSeal>(this, &ros_publisher_);
 
     //初始化debug发布器
-    global_debugPub = new debugMsgPub(this);
+    global_debugPub = new debugMsgPub(this, &ros_publisher_);
 
+}
+
+ServoNode::~ServoNode() {
+    stop_ros_io();
+    delete global_debugPub;
+    global_debugPub = nullptr;
+}
+
+void ServoNode::start_ros_io() {
+    ros_publisher_.start();
+    ros_io_running_ = true;
+    ros_receiver_ = std::thread([this] {
+        try {
+            while (ros_io_running_ && rclcpp::ok())
+                executor_->spin_once(std::chrono::milliseconds(10));
+        } catch (...) {
+            ros_io_failed_ = true;
+        }
+    });
+}
+
+void ServoNode::stop_ros_io() {
+    accept_commands_ = false;
+    ros_io_running_ = false;
+    if (ros_receiver_.joinable()) {
+        try {
+            executor_->cancel();
+        } catch (...) {
+            ros_io_failed_ = true;
+        }
+        ros_receiver_.join();
+    }
+    ros_publisher_.stop();
+}
+
+void ServoNode::apply_safety_reset(const std_srvs::srv::Trigger::Response::SharedPtr& response) {
+    if (ros_io_failed_ || ros_publisher_.failed()) {
+        response->success = false;
+        response->message = "ROS I/O worker failed; restart servo";
+        return;
+    }
+    if (startup_homing_) {
+        response->success = false;
+        response->message = "Startup homing has not finished";
+        return;
+    }
+    response->success = arm_safety.reset(arm_safety_now());
+    response->message = response->success ? "Fault reset; restart upstream controllers from feedback"
+        : "Stop upstream controllers for 1s; require fresh stationary feedback within limits";
+    if (response->success) {
+        last_source_header_ = std_msgs::msg::Header{};
+        ifRuninerInited = false;
+        ifRunin = false;
+        trajectory_sample_ = false;
+        ifFirstRunin = true;
+        posOutpFtr = runinOutpFtr{};
+        velOutpFtr = runinOutpFtr{};
+        TorOutpFtr = runinOutpFtr{};
+        ifGetGripperMsg = false;
+        l_gripper_pos_received = r_gripper_pos_received = false;
+        l_gripper_posTraj.clear();
+        r_gripper_posTraj.clear();
+        l_gripper_torTraj.assign(1, 0.0);
+        r_gripper_torTraj.assign(1, 0.0);
+        l_gripper_tor_get = r_gripper_tor_get = 0.0;
+        l_gripper_tor = r_gripper_tor = 0.0;
+        gripper_LastTorRec_l = gripper_LastTorRec_r = 0.0;
+        gripper_otputTimes = 0;
+        setLeftGripperCmd(gripperCmd{});
+        setRightGripperCmd(gripperCmd{});
+        for (auto& c : servo_desMsg_orig) {
+            c.transMod = 2; c.joint_pos = c.joint_spd = c.joint_tor = c.joint_Kp = 0;
+            c.joint_Kd = arm_safety.limits.damping;
+        }
+        homing_handoff_.begin(servo_desMsg_orig, arm_safety);
+    }
+}
+
+void ServoNode::publish_status() {
+    const double steady_now = arm_safety_now();
+    if (last_status_at_ >= 0 && steady_now - last_status_at_ < 0.05) return;
+    std_msgs::msg::String msg;
+    msg.data = arm_safety.fault.empty()
+        ? (!startup_homing_ && arm_safety.ready(steady_now) ? "ready" : "waiting") : "fault:" + arm_safety.fault;
+    ctl_msgs_hw::msg::HandoffStatus handoff;
+    handoff.header.stamp = now();
+    handoff.source_header = last_source_header_;
+    handoff.handoff_epoch = homing_handoff_.epoch();
+    handoff.complete = !startup_homing_ && !arm_zero_calibration_ &&
+        arm_safety.ready(steady_now) && !homing_handoff_.transitioning();
+    for (size_t i = 0; i < std::min(size_t{14}, servo_desMsg_orig.size()); ++i)
+        handoff.commanded_position.push_back(servo_desMsg_orig[i].joint_pos);
+    if (ros_publisher_.post(ServoPublishChannel::status,
+        [safety = safety_pub_, publisher = handoff_pub_, msg = std::move(msg),
+         handoff = std::move(handoff), logger = get_logger(), clock = get_clock()] {
+            safety->publish(msg);
+            publisher->publish(handoff);
+            if (msg.data.rfind("fault:", 0) == 0)
+                RCLCPP_ERROR_THROTTLE(logger, *clock, 1000,
+                    "Latched arm fault: %s; damping only, no load holding guarantee", msg.data.c_str());
+        })) last_status_at_ = steady_now;
 }
 
 //ros循环通讯变量初始化函数
@@ -422,12 +525,35 @@ void ServoNode::msg_publish(){
         tempRetData_pub.if_first_time = 0;
     }
 
-    RetData_pub->publish(tempRetData_pub);
+    ros_publisher_.publish(ServoPublishChannel::feedback, RetData_pub, std::move(tempRetData_pub));
 }
 
 //ros消息参量发送模块 -- 反馈值发送函数
 void ServoNode::ctlmsg_get(){
-    executor_->spin_some();  // 非阻塞检查回调（显式 executor，与主循环同线程）
+    // Even commands still waiting in the mailbox must inhibit a safety reset.
+    const double received_at = last_command_received_at_.exchange(-1);
+    if (received_at >= 0) arm_safety.command_received(received_at);
+    bool reset_succeeded = false;
+    if (auto reset = pending_reset_.take()) {
+        if (!reset->cancelled) {
+            auto response = std::make_shared<std_srvs::srv::Trigger::Response>();
+            apply_safety_reset(response);
+            reset_succeeded = response->success;
+            reset->result.set_value(std::move(response));
+        }
+    }
+    if (ros_io_failed_ || ros_publisher_.failed()) arm_safety.trip("ros_io_worker_failed");
+    // A stop is sticky and applied before any ordinary command, including after a reset.
+    const bool stop_requested = stop_requested_.exchange(false);
+    if (auto reason = pending_stop_.take()) arm_safety.trip(*reason);
+    else if (stop_requested) arm_safety.trip("upstream_stop");
+    auto command = pending_command_.take();
+    auto gripper = pending_gripper_.take();
+    if (!reset_succeeded) {
+        if (command) message_callback(command);
+        if (gripper) gripper_desMsg_get(gripper);
+    }
+    publish_status();
 }
 
 //消息传输辅助函数 -- 仅仅进行一次消息的接收(与底层关节的通讯)
@@ -442,6 +568,23 @@ void ServoNode::EtherCATrun(){
     desMsg_pack_func();
     servo_retMsg = runImpl(servo_desMsg);
     retMsg_unpack_func();
+}
+
+void ServoNode::shutdown_damping() noexcept {
+    if (!shutdown_damping_required_) return;
+    shutdown_damping_required_ = false;
+    accept_commands_ = false;
+    try {
+        if (EtherCAT_ShutdownDamping()) {
+            RCLCPP_WARN(get_logger(), "Servo shutdown: damping packets exchanged before exit");
+        } else {
+            RCLCPP_ERROR(get_logger(), "Servo shutdown: damping exchange NOT confirmed");
+        }
+    } catch (const std::exception& error) {
+        RCLCPP_ERROR(get_logger(), "Servo shutdown damping failed: %s", error.what());
+    } catch (...) {
+        RCLCPP_ERROR(get_logger(), "Servo shutdown damping failed: unknown exception");
+    }
 }
 
 void ServoNode::apply_arm_zero_calibration_commands(
@@ -587,6 +730,8 @@ void ServoNode::run(){
         return;
     }
 
+    shutdown_damping_required_ = true;
+    start_ros_io();
 
     //-----------------------------------------------
     //初始位置获取
@@ -633,18 +778,18 @@ void ServoNode::run(){
         }
 
         if (both_arm_zero_calibration_) {
-            RCLCPP_WARN(
-                this->get_logger(),
+            log_async(
+                RCUTILS_LOG_SEVERITY_WARN,
                 "both-arm calibration: zero-current; support both arms before moving them"
             );
         } else if (left_arm_zero_calibration_) {
-            RCLCPP_WARN(
-                this->get_logger(),
+            log_async(
+                RCUTILS_LOG_SEVERITY_WARN,
                 "left arm calibration: zero-current; support the arm before moving it"
             );
         } else {
-            RCLCPP_WARN(
-                this->get_logger(),
+            log_async(
+                RCUTILS_LOG_SEVERITY_WARN,
                 "right arm calibration: zero-current; support the arm before moving it"
             );
         }
@@ -660,7 +805,7 @@ void ServoNode::run(){
                arm_safety_now() < feedback_deadline) {
             EtherCATrun();
             msg_publish();
-            executor_->spin_some();
+            ctlmsg_get();
             sleep_while_running(loop_rate);
         }
         if (!arm_safety.ready(arm_safety_now())) arm_safety.trip("homing_feedback_not_ready");
@@ -702,12 +847,12 @@ void ServoNode::run(){
 
         //若达成回零控制条件，则开启回零控制
         if(needRetZero){
-        RCLCPP_INFO(get_logger(), "Homing preflight passed; executing validated trajectory");
+        log_async(RCUTILS_LOG_SEVERITY_INFO, "Homing preflight passed; executing validated trajectory");
 
         //执行回零控制循环
         bool retZero_done = false;
         while(!retZero_done && rclcpp::ok() && arm_safety.fault.empty()){
-            executor_->spin_some();
+            ctlmsg_get();
             if (!arm_safety.fault.empty()) break;
             //获取下一帧回零轨迹输出
             TrajCtlOutp retZero_outp = retZero_Init.retZero_trajOutp();
@@ -765,15 +910,15 @@ void ServoNode::run(){
                            result == HomingMonitor::Result::finished_unverified;
 
             //尾处理代码
-            executor_->spin_some();
+            ctlmsg_get();
             sleep_while_running(loop_rate);
         }
 
             if (retZero_done && arm_safety.fault.empty() && rclcpp::ok()) {
                 if (arm_safety.limits.speed_only)
-                    RCLCPP_WARN(get_logger(), "Homing trajectory finished; arrival NOT verified (speed_only mode)");
+                    log_async(RCUTILS_LOG_SEVERITY_WARN, "Homing trajectory finished; arrival NOT verified (speed_only mode)");
                 else
-                    RCLCPP_INFO(get_logger(), "Homing complete: fresh feedback within %.6f rad and |v|<=0.05 rad/s for 0.2s",
+                    log_async(RCUTILS_LOG_SEVERITY_INFO, "Homing complete: fresh feedback within %.6f rad and |v|<=0.05 rad/s for 0.2s",
                                 ZERO_POS_THRESHOLD);
             }
         }else if (arm_safety.fault.empty()){
@@ -781,14 +926,14 @@ void ServoNode::run(){
             while (rclcpp::ok() && arm_safety.fault.empty()) {
                 EtherCATrun();
                 msg_publish();
-                executor_->spin_some();
+                ctlmsg_get();
                 const auto result = homing_monitor.update(arm_safety, arm_safety_now(), true);
                 if (result == HomingMonitor::Result::finished_unverified) {
-                    RCLCPP_WARN(get_logger(), "Homing skipped near target; settled position NOT verified (speed_only mode)");
+                    log_async(RCUTILS_LOG_SEVERITY_WARN, "Homing skipped near target; settled position NOT verified (speed_only mode)");
                     break;
                 }
                 if (result == HomingMonitor::Result::reached) {
-                    RCLCPP_INFO(get_logger(), "Already home: fresh stationary feedback confirmed for 0.2s");
+                    log_async(RCUTILS_LOG_SEVERITY_INFO, "Already home: fresh stationary feedback confirmed for 0.2s");
                     break;
                 }
                 if (result == HomingMonitor::Result::fault) break;
@@ -799,7 +944,7 @@ void ServoNode::run(){
         if (!arm_safety.fault.empty()) {
             // Send damping immediately, including faults discovered after the last exchange.
             EtherCATrun();
-            RCLCPP_ERROR(get_logger(), "Homing aborted; zero position NOT confirmed: %s", arm_safety.fault.c_str());
+            log_async(RCUTILS_LOG_SEVERITY_ERROR, "Homing aborted; zero position NOT confirmed: %s", arm_safety.fault.c_str());
         }
     }
     if (!arm_zero_calibration_ && arm_safety.fault.empty() && rclcpp::ok()) {
@@ -811,11 +956,12 @@ void ServoNode::run(){
         posOutpFtr = runinOutpFtr{};
         velOutpFtr = runinOutpFtr{};
         TorOutpFtr = runinOutpFtr{};
-        RCLCPP_INFO(get_logger(), "Homing handoff: holding last output until first upstream command; limited joints takeover speed<=%.3f rad/s, acceleration<=%.3f rad/s^2, gains/feedforward ramped",
+        log_async(RCUTILS_LOG_SEVERITY_INFO, "Homing handoff: holding last output until first upstream command; limited joints takeover speed<=%.3f rad/s, acceleration<=%.3f rad/s^2, gains/feedforward ramped",
                     std::min(homing_handoff_.limits.max_speed, arm_safety.limits.max_speed),
                     homing_handoff_.limits.max_acceleration);
     }
     startup_homing_ = false;
+    accept_commands_ = true;
 
     //-----------------------------------------------
     //开启ros2循环
@@ -830,7 +976,7 @@ void ServoNode::run(){
             msg_publish();
             gripper_fdb_publish();
             EtherCATrun();
-            executor_->spin_some();
+            ctlmsg_get();
             sleep_while_running(loop_rate);
             continue;
         }
@@ -980,7 +1126,7 @@ void ServoNode::run(){
         const bool was_handoff = homing_handoff_.transitioning();
         homing_handoff_.apply(servo_desMsg_orig, arm_safety, TEMPTIME);
         if (was_handoff && !homing_handoff_.transitioning() && arm_safety.fault.empty())
-            RCLCPP_INFO(get_logger(), "Controller handoff complete: command position/velocity/gains aligned; physical arrival not implied");
+            log_async(RCUTILS_LOG_SEVERITY_INFO, "Controller handoff complete: command position/velocity/gains aligned; physical arrival not implied");
 
         //状态监测 -- 输出底层状态
 
@@ -1083,11 +1229,13 @@ void ServoNode::run(){
         EtherCATrun();
 
         //尾处理代码
-        executor_->spin_some();
+        ctlmsg_get();
         sleep_while_running(loop_rate);
     }
 
     //-----------------------------------------------
+    shutdown_damping();
+    stop_ros_io();
     RCLCPP_INFO(this->get_logger(), "程序已安全退出");
 }
 
@@ -1138,29 +1286,9 @@ void ServoNode::retMsg_unpack_func(){
 //传输信息回调函数 -- 接收消息并执行插补任务
 void ServoNode::message_callback(const ctl_msgs_hw::msg::CtlInformation::SharedPtr msg){
     if (startup_homing_) return;
-    arm_safety.command_received(arm_safety_now());
     if (!arm_safety.fault.empty()) return;
-    const auto valid = [](const auto& values) {
-        return values.size() == 7 && std::all_of(values.begin(), values.end(),
-            [](double v) { return std::isfinite(v); });
-    };
-    if (!std::isfinite(msg->temp_time) || msg->temp_time <= 0 || msg->temp_time > 0.25 ||
-        !valid(msg->base_rigidity_ctl_mode_l) || !valid(msg->base_rigidity_ctl_mode_r) ||
-        !valid(msg->l_position_at_runin_st) || !valid(msg->r_position_at_runin_st) ||
-        !valid(msg->l_position) || !valid(msg->r_position) || !valid(msg->l_speed) || !valid(msg->r_speed) ||
-        !valid(msg->l_torque_grav_comp) || !valid(msg->r_torque_grav_comp) ||
-        !valid(msg->l_torque_interia_comp) || !valid(msg->r_torque_interia_comp) ||
-        !valid(msg->l_torque_feedforward) || !valid(msg->r_torque_feedforward) ||
-        !valid(msg->l_kp) || !valid(msg->r_kp) || !valid(msg->l_kd) || !valid(msg->r_kd)) {
-        arm_safety.trip("invalid_controller_packet"); return;
-    }
-    for (size_t i = 0; !arm_safety.limits.speed_only && i < 7; ++i) {
-        if (std::abs(msg->l_torque_grav_comp[i]) + std::abs(msg->l_torque_interia_comp[i]) +
-                std::abs(msg->l_torque_feedforward[i]) > arm_safety.limits.max_feedforward ||
-            std::abs(msg->r_torque_grav_comp[i]) + std::abs(msg->r_torque_interia_comp[i]) +
-                std::abs(msg->r_torque_feedforward[i]) > arm_safety.limits.max_feedforward) {
-            arm_safety.trip("raw_feedforward_limit"); return;
-        }
+    if (const auto fault = controller_packet_fault(*msg, arm_safety.limits)) {
+        arm_safety.trip(fault); return;
     }
 
     //--------------------接收消息--------------------
@@ -1172,7 +1300,7 @@ void ServoNode::message_callback(const ctl_msgs_hw::msg::CtlInformation::SharedP
         arm_safety.trip("controller_packet_timestamp"); return;
     }
     if (latency.seconds() > 0.005) {
-        RCLCPP_WARN(this->get_logger(), "High latency detected: %f seconds", latency.seconds());
+        log_async(RCUTILS_LOG_SEVERITY_WARN, "High latency detected: %f seconds", latency.seconds());
     }
 
     const bool speed_override_before = arm_safety.policy_speed_override_active();
@@ -1180,7 +1308,7 @@ void ServoNode::message_callback(const ctl_msgs_hw::msg::CtlInformation::SharedP
         msg->policy_speed_checks_disabled && msg->trajectory_header.frame_id == "pi05_policy",
         (now - msg->trajectory_header.stamp).seconds(), arm_safety_now());
     if (speed_override_before != arm_safety.policy_speed_override_active())
-        RCLCPP_WARN(get_logger(), "Policy software speed checks: %s (source-scoped override)",
+        log_async(RCUTILS_LOG_SEVERITY_WARN, "Policy software speed checks: %s (source-scoped override)",
                     arm_safety.policy_speed_override_active() ? "disabled" : "restored");
 
     if (homing_handoff_.receive_epoch(msg->handoff_epoch, servo_desMsg_orig, arm_safety)) {
@@ -1189,7 +1317,7 @@ void ServoNode::message_callback(const ctl_msgs_hw::msg::CtlInformation::SharedP
         posOutpFtr = runinOutpFtr{};
         velOutpFtr = runinOutpFtr{};
         TorOutpFtr = runinOutpFtr{};
-        RCLCPP_INFO(get_logger(), "Controller handoff epoch=%llu: restarting transition from last emitted command",
+        log_async(RCUTILS_LOG_SEVERITY_INFO, "Controller handoff epoch=%llu: restarting transition from last emitted command",
                     static_cast<unsigned long long>(msg->handoff_epoch));
     }
 
@@ -1271,7 +1399,7 @@ void ServoNode::message_callback(const ctl_msgs_hw::msg::CtlInformation::SharedP
                 max_feedback_error = std::abs(held - arm_safety.feedback[i].position); feedback_joint = i;
             }
         }
-        RCLCPP_INFO(get_logger(), "Controller takeover started: max target change=%.6f rad (joint_%zu), max held/feedback error=%.6f rad (joint_%zu); indices zero-based",
+        log_async(RCUTILS_LOG_SEVERITY_INFO, "Controller takeover started: max target change=%.6f rad (joint_%zu), max held/feedback error=%.6f rad (joint_%zu); indices zero-based",
                     max_target_delta, target_joint, max_feedback_error, feedback_joint);
     }
 }
@@ -1409,7 +1537,7 @@ void ServoNode::comp_desMsg_containerMsg(){
         comp_pub.float_reserve_b[i] = servo_desMsg_orig[i].joint_pos;
     }
 
-    debugDataPub_comparison->publish(comp_pub);
+    ros_publisher_.publish(ServoPublishChannel::comparison, debugDataPub_comparison, std::move(comp_pub));
 }
 
 //==================================================
@@ -1502,7 +1630,7 @@ void ServoNode::gripper_fdb_publish(){
     msg.data[5] = right_gripper_fdb.spd_rad;
     msg.data[6] = right_gripper_fdb.current_A;
     msg.data[7] = right_gripper_fdb.temperature;
-    gripper_fdb_pub->publish(msg);
+    ros_publisher_.publish(ServoPublishChannel::gripper, gripper_fdb_pub, std::move(msg));
 }
 
 //夹爪目标控制量接收

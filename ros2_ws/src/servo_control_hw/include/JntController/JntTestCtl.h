@@ -10,6 +10,7 @@
 #include "ctl_msgs_hw/msg/jnt_ctl_res_visu.hpp"
 
 #include "rclcpp/rclcpp.hpp"
+#include "servo_control/rosIoWorker.h"
 
 //电流环跟踪测试
 class currentTrackTest{
@@ -181,6 +182,7 @@ class fricCompRes_visu{
 //测试结果综合可视化函数
 class Comprehensive_visu{
     private:
+        ServoRosPublisher* async_;
         //消息发送变量
         rclcpp::Publisher<ctl_msgs_hw::msg::JntCtlResVisu>::SharedPtr Jnt_ctl_res_pub;
         rclcpp::Publisher<ctl_msgs_hw::msg::JntCompResVisu>::SharedPtr Jnt_comp_res_pub;
@@ -195,7 +197,7 @@ class Comprehensive_visu{
         double tempTime = 0.001;
 
     public:
-        Comprehensive_visu(rclcpp::Node* node);
+        Comprehensive_visu(rclcpp::Node* node, ServoRosPublisher* async = nullptr);
 
         //控制结果发送
         void ctl_res_pub_PVTmod(
@@ -239,7 +241,7 @@ public:
 
     Comprehensive_visu* comprehensive_msg_pub;
     
-    performanceTestSeal(rclcpp::Node* node);
+    performanceTestSeal(rclcpp::Node* node, ServoRosPublisher* async = nullptr);
     ~performanceTestSeal();
 };
 

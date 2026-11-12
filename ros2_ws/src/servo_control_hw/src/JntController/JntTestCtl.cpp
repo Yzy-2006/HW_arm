@@ -302,7 +302,7 @@ void fricCompRes_visu::msgGetAndPlot_PVTmod(
 }
 //-------------------------------------------------------------------------------------
 //控制结果综合可视化
-Comprehensive_visu::Comprehensive_visu(rclcpp::Node* node) : node_ptr_(node){
+Comprehensive_visu::Comprehensive_visu(rclcpp::Node* node, ServoRosPublisher* async) : async_(async), node_ptr_(node){
 
     //消息发送变量初始化
     Jnt_ctl_res_pub = node_ptr_->create_publisher<ctl_msgs_hw::msg::JntCtlResVisu>(
@@ -404,7 +404,8 @@ void Comprehensive_visu::ctl_res_pub_PVTmod(
 
     time_last = time_spot;
 
-    Jnt_ctl_res_pub->publish(tempResPub);
+    if (async_) async_->publish(ServoPublishChannel::control_test, Jnt_ctl_res_pub, std::move(tempResPub));
+    else Jnt_ctl_res_pub->publish(tempResPub);
 }
 
 void Comprehensive_visu::comp_res_pub_PVTmod(
@@ -447,11 +448,12 @@ void Comprehensive_visu::comp_res_pub_PVTmod(
         tempResPub.r_fric_comp[i] = r_fricComp[i];
     }
 
-    Jnt_comp_res_pub->publish(tempResPub);
+    if (async_) async_->publish(ServoPublishChannel::compensation_test, Jnt_comp_res_pub, std::move(tempResPub));
+    else Jnt_comp_res_pub->publish(tempResPub);
 }
 
 //-------------------------------------------------------------------------------------
-performanceTestSeal::performanceTestSeal(rclcpp::Node* node) : node_ptr_(node) {
+performanceTestSeal::performanceTestSeal(rclcpp::Node* node, ServoRosPublisher* async) : node_ptr_(node) {
     // 创建各个测试类的实例
     current_track = new currentTrackTest(node);
     pos_vel_track = new pvTrackOutp(node);
@@ -459,7 +461,7 @@ performanceTestSeal::performanceTestSeal(rclcpp::Node* node) : node_ptr_(node) {
     k_comp_visu = new K_compVisu(node);
     fric_comp_visu = new fricCompRes_visu(node);
 
-    comprehensive_msg_pub = new Comprehensive_visu(node);
+    comprehensive_msg_pub = new Comprehensive_visu(node, async);
 }
 
 performanceTestSeal::~performanceTestSeal() {

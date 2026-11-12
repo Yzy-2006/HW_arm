@@ -19,7 +19,7 @@ from PIL import Image
 import yaml
 
 from pi05_common import encode_bytes
-from pi05_worker import PolicyRunner, _is_openpi_checkpoint, parse_args as worker_args
+from pi05_worker import OPENPI_INFERENCE_ENTRIES, PolicyRunner, _is_openpi_checkpoint, parse_args as worker_args
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -111,7 +111,7 @@ def main():
     parser.add_argument("--model", required=True)
     parser.add_argument("--checkpoint", default="step-19999")
     parser.add_argument("--num-steps", type=int)
-    parser.add_argument("--inference-entry", choices=("inference.py", "inference_flat_towel.py"))
+    parser.add_argument("--inference-entry", choices=OPENPI_INFERENCE_ENTRIES)
     parser.add_argument("--mode", choices=("policy", "worker", "both"), default="both")
     parser.add_argument("--input", type=Path, help="Optional NPZ: flat observation.* keys and prompt")
     parser.add_argument("--warmup", type=int, default=5)

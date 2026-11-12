@@ -14,7 +14,7 @@ def interpolation_settings(config: dict, source_rate: float) -> tuple[bool, floa
     enabled = settings.get("enabled", False)
     if not isinstance(enabled, bool):
         raise ValueError("interpolation.enabled must be a boolean")
-    rate = float(settings.get("publish_rate_hz", 300.0)) if enabled else source_rate
+    rate = float(settings.get("publish_rate_hz", 50.0)) if enabled else source_rate
     if not np.isfinite(rate) or not np.isfinite(source_rate) or rate < source_rate or source_rate <= 0:
         raise ValueError("interpolation.publish_rate_hz must be finite and >= the source rate")
     return enabled, rate

@@ -12,11 +12,13 @@ int main(int argc, char ** argv){
     std::cout << "===================================" << std::endl;
 
     rclcpp::init(argc, argv);
+    std::shared_ptr<ServoNode> node;
     try {
-        auto node = std::make_shared<ServoNode>();
+        node = std::make_shared<ServoNode>();
         node->run();
     } catch (const std::exception& error) {
         std::cerr << "Servo operation failed: " << error.what() << std::endl;
+        if (node) node->shutdown_damping();
         if (rclcpp::ok()) rclcpp::shutdown();
         return 1;
     }

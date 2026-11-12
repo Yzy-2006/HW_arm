@@ -11,6 +11,7 @@
 #include <fstream>
 #include <thread>
 #include <chrono>
+#include <future>
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/float64_multi_array.hpp"
 #include "std_msgs/msg/string.hpp"
@@ -136,8 +137,7 @@ class ServoNode : public rclcpp::Node {
         //构造函数（初始化用）
         ServoNode();
 
-        //析构函数（performance_test 由 unique_ptr 自动管理）
-        ~ServoNode() = default;
+        ~ServoNode();
 
         //ros循环通讯变量初始化函数
         void rosLoopVar_Init();
@@ -157,13 +157,50 @@ class ServoNode : public rclcpp::Node {
         //主要循环函数
         void run();
 
+        void shutdown_damping() noexcept;
+
     private:
+        friend struct ServoRosIoTest;
+        bool shutdown_damping_required_ = false;
+        struct ResetRequest {
+            std::promise<std_srvs::srv::Trigger::Response::SharedPtr> result;
+            std::atomic<bool> cancelled{false};
+        };
+        LatestRosInput<ctl_msgs_hw::msg::CtlInformation::SharedPtr> pending_command_;
+        LatestRosInput<ctl_msgs_hw::msg::GripperCtl::SharedPtr> pending_gripper_;
+        LatestRosInput<std::shared_ptr<std::string>> pending_stop_;
+        LatestRosInput<std::shared_ptr<ResetRequest>> pending_reset_;
+        ServoRosPublisher ros_publisher_;
+        std::thread ros_receiver_;
+        std::atomic<bool> ros_io_running_{false};
+        std::atomic<bool> ros_io_failed_{false};
+        std::atomic<bool> accept_commands_{false};
+        std::atomic<bool> stop_requested_{false};
+        std::atomic<double> last_command_received_at_{-1};
+        double last_status_at_ = -1;
+        void start_ros_io();
+        void stop_ros_io();
+        void publish_status();
+        void apply_safety_reset(const std_srvs::srv::Trigger::Response::SharedPtr& response);
+        template<class... Args>
+        void log_async(int severity, const char* format, Args... args) {
+            char buffer[1024];
+            if constexpr (sizeof...(Args) == 0)
+                std::snprintf(buffer, sizeof(buffer), "%s", format);
+            else
+                std::snprintf(buffer, sizeof(buffer), format, args...);
+            ros_publisher_.post(ServoPublishChannel::log,
+                [logger = get_logger(), severity, text = std::string(buffer)] {
+                    if (severity == RCUTILS_LOG_SEVERITY_ERROR) RCLCPP_ERROR(logger, "%s", text.c_str());
+                    else if (severity == RCUTILS_LOG_SEVERITY_WARN) RCLCPP_WARN(logger, "%s", text.c_str());
+                    else RCLCPP_INFO(logger, "%s", text.c_str());
+                });
+        }
         rclcpp::Publisher<std_msgs::msg::String>::SharedPtr safety_pub_;
         rclcpp::Publisher<ctl_msgs_hw::msg::HandoffStatus>::SharedPtr handoff_pub_;
         std_msgs::msg::Header last_source_header_;
         rclcpp::Subscription<std_msgs::msg::String>::SharedPtr safety_stop_;
         rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr safety_reset_;
-        rclcpp::TimerBase::SharedPtr safety_timer_;
         //====================消息发送变量====================
 
         //----------反馈信息发送----------
@@ -208,8 +245,7 @@ class ServoNode : public rclcpp::Node {
         );
 
         //----------ROS2回调执行器----------
-        //显式 executor（替代每次调用都会临时创建 executor 的全局 rclcpp::spin_some）
-        //注意：EtherCAT 主循环与回调仍在同一线程执行，避免共享数据竞态
+        // Only the receive thread enters DDS. Control state belongs to the EtherCAT thread.
         rclcpp::Executor::SharedPtr executor_;
 
         //调试模式标志 -- 无EtherCAT从站时回传下发指令

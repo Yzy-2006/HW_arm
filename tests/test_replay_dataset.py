@@ -280,6 +280,12 @@ def replay(monkeypatch, tmp_path, request):
     config = yaml.safe_load((ROOT / "config/pi05_deployment.yaml").read_text())
     # Timing tests use 300 Hz independently of the operator's publication rate.
     config["bridge"]["interpolation"] = {"enabled": True, "publish_rate_hz": 300}
+    controller = yaml.safe_load((ROOT / config["controller_config"]).read_text())
+    for name in ("robot_ctlNode_loop_ctl", "dual_arm_ctl_node_loop_ctl"):
+        controller["TransLoopCtlInte"][name]["TempTime"] = 1 / 300
+    controller_path = tmp_path / "controller.yaml"
+    controller_path.write_text(yaml.safe_dump(controller))
+    config["controller_config"] = str(controller_path)
     config["bridge"]["motion_safety"] = {"max_acceleration_rad_s2": 100.0}
     config["bridge"]["motion_safety"].update(getattr(request, "param", {}))
     config["bridge"]["replay_approach"] = {

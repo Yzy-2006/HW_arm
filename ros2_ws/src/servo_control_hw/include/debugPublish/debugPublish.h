@@ -7,10 +7,12 @@
 
 #include "rclcpp/rclcpp.hpp"
 #include "ctl_msgs_hw/msg/dbg_information.hpp"
+#include "servo_control/rosIoWorker.h"
 
 class debugMsgPub{
     private:
         rclcpp::Node* node_ptr_;
+        ServoRosPublisher* async_;
 
         //初始化发送的消息类型
         rclcpp::Publisher<ctl_msgs_hw::msg::DbgInformation>::SharedPtr debug_msg_send;
@@ -18,7 +20,7 @@ class debugMsgPub{
         rclcpp::Publisher<ctl_msgs_hw::msg::DbgInformation>::SharedPtr debug_msg_send_3;
     public:
 
-        debugMsgPub(rclcpp::Node* node);
+        debugMsgPub(rclcpp::Node* node, ServoRosPublisher* async = nullptr);
 
         void debug_msg_publish_1(std::vector<double> l_reserve, std::vector<double> r_reserve);
         void debug_msg_publish_2(std::vector<double> l_reserve, std::vector<double> r_reserve);

@@ -272,7 +272,7 @@ bridge:
 回放默认使用 YAML 中的 `bridge.slow_factor`；显式传入 `--slow-factor` 时，以命令行值为准。
 YAML 未配置该字段时回退到 `1.0`，有效范围为 `0 < slow_factor <= 1`。
 启动日志会显示实际使用的倍率。原始目标点频率由数据集 FPS 和 `--speed` 决定；
-默认通过 [minimum snap 插值](MINIMUM_SNAP.md) 以 300 Hz 发布关节指令。
+默认通过 [minimum snap 插值](MINIMUM_SNAP.md) 以 50 Hz 发布关节指令。
 
 ```text
 目标相对当前反馈的最大偏差 = max_joint_step_rad * slow_factor
@@ -293,7 +293,7 @@ YAML 未配置该字段时回退到 `1.0`，有效范围为 `0 < slow_factor <= 
 make replay ARGS="--dataset /home/yanziyu/datasets/fold-towel-93 --episode 0 --max-frames 90 --speed 0.5 --slow-factor 0.1 --motion"
 ```
 
-这会让原始目标点按 15 FPS 排列；启用插值时仍以 300 Hz 下发，
+这会让原始目标点按 15 FPS 排列；启用插值时仍以 50 Hz 下发，
 每个发布周期都执行当前配置的反馈偏差限制和 URDF 限位。
 
 回放单独使用 `config/pi05_deployment.yaml` 中的 `bridge.replay_pd_level: mid`，

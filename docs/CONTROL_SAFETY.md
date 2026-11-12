@@ -58,6 +58,32 @@ These changes have offline tests and compilation checks, not physical validation
 The damaged hardware must be inspected before motion testing. RViz checks geometry;
 it does not validate dynamics, collision forces, load support or bus behavior.
 
+## Servo ROS I/O Threads
+
+The EtherCAT thread owns motor feedback, command validation, interpolation,
+handoff and the safety guard. A separate receive thread runs the ROS executor;
+callbacks only transfer messages to bounded input mailboxes. Arm and gripper
+commands keep their latest sample. Stop requests and malformed-packet faults
+are retained independently and applied before ordinary commands. Reset requests
+are executed by the EtherCAT thread; the service response waits on the receive
+thread. Worker failures latch damping and require restarting the servo.
+
+Another worker publishes immutable snapshots of feedback, grippers, debug/test
+data, safety state and handoff state. Control-path ROS logging is also deferred.
+Each publication channel holds at most one pending sample, plus a single task
+being sent. The worker visits channels in round-robin order. DDS calls never run
+under a mailbox lock; the EtherCAT thread uses try-lock operations and never
+waits for either worker. Feedback and handoff timestamps are captured by the
+control thread, rather than refreshed after a delayed publication.
+
+Ctrl+C sends three damping exchanges before waiting for ROS workers to finish.
+Feedback-only, single-motor zero and CAN-scan modes keep their isolated paths.
+This removes the direct DDS wait/send coupling to EtherCAT; it does not fix a
+broken bus, make ROS messages arrive on time, or establish a hard real-time
+deadline. A delayed heartbeat can still make upstream controllers reject VR
+increments. Compile and offline blocking-injection tests do not establish
+physical robot behavior.
+
 ## Fault Behavior
 
 The servo checks every arm joint before encoding the output packet. It latches on
@@ -271,7 +297,7 @@ errors while the context remains active still propagate.
 `BridgeCtlMsg.target_period_s` is the source sample interval. Upper forwarding
 preserves the original sample timestamp; repeated forwarding does not restart
 mid-level interpolation. A 15 Hz source interval is approximately 66.7 ms even
-when the upper and middle controllers run at 300 Hz.
+when the upper and middle controllers run at 50 Hz.
 
 Minimum-snap samples carry analytic velocity and acceleration. The middle layer
 uses that same acceleration for inertia compensation when enabled with target

@@ -1,6 +1,6 @@
 # Minimum Snap 关节插值
 
-模型部署和数据集回放默认保留每秒 30 个源目标点，并以 300 Hz 发布插值后的
+模型部署和数据集回放默认保留每秒 30 个源目标点，并以 50 Hz 发布插值后的
 14 关节位置指令。数据集去重后的相邻行仍按 `1 / fps` 排列，不恢复已删除帧的时间。
 夹爪不做连续插值，按对应源帧的开/闭状态切换。
 
@@ -14,7 +14,7 @@ bridge:
   action_rate_hz: 30
   interpolation:
     enabled: true
-    publish_rate_hz: 300
+    publish_rate_hz: 50
   replan_interval_s: 0.5
   max_action_age_s: 1.0
 ```
@@ -34,15 +34,15 @@ make replay ARGS="--episode 0 --max-frames 90"
 ```
 
 `controllerConfig.yaml` 的上层 `robot_ctlNode_loop_ctl.TempTime` 和中层
-`dual_arm_ctl_node_loop_ctl.TempTime` 均改为 `1/300` 秒，底层仍为 `0.001` 秒。
+`dual_arm_ctl_node_loop_ctl.TempTime` 均为 `0.02` 秒（50 Hz），底层仍为 `0.001` 秒。
 这是共享控制配置，也影响遥操作时的控制循环频率；加载该配置的节点必须重启。
-构建安装配置后再启动，以免仍使用旧的 50 Hz 转发配置。
+确认安装配置已同步后再启动，以免仍使用旧的 300 Hz 配置。
 Python 启动时检查配置中的各层频率是否足以承载发布频率，但不能检测运行中节点
-是否已经重新加载配置。300 Hz 是定时器目标值，实际吞吐仍取决于主机和 ROS 调度。
+是否已经重新加载配置。50 Hz 是定时器目标值，实际吞吐仍取决于主机和 ROS 调度。
 
 修改 `publish_rate_hz` 时应同时匹配上层、中层的控制频率，且不超过底层频率。
 设 `enabled: false` 可以恢复直接发布原始点；缺少整个 `interpolation` 配置时也
-沿用旧逻辑。回放 `--speed 0.5` 将源点间隔改为 `1/15` 秒，发布频率仍为 300 Hz。
+沿用旧逻辑。回放 `--speed 0.5` 将源点间隔改为 `1/15` 秒，发布频率仍为 50 Hz。
 `--slow-factor` 仍只缩放目标相对反馈的最大偏差。
 
 ## 轨迹定义

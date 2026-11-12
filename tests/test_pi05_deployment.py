@@ -67,15 +67,19 @@ def test_yaml_integration_steps_reach_openpi_loader_and_horizon_is_checked(tmp_p
         PolicyRunner(str(tmp_path), "cuda", False, {}, "step-49999", 7, 25)
 
 
-def test_flat_towel_entry_imports_sibling_and_reaches_policy_loader(tmp_path, monkeypatch):
+@pytest.mark.parametrize("entry,stats", [
+    ("inference_flat_towel.py", "encos_flat_train45"),
+    ("inference_mix159.py", "encos_mix159_train125"),
+])
+def test_release_entry_imports_sibling_and_reaches_policy_loader(tmp_path, monkeypatch, entry, stats):
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.setitem(sys.modules, "inference", None)
     monkeypatch.delitem(sys.modules, "inference", raising=False)
     monkeypatch.setitem(sys.modules, "downloaded_pi05_inference", None)
     monkeypatch.delitem(sys.modules, "downloaded_pi05_inference", raising=False)
     monkeypatch.setitem(sys.modules, "jax", SimpleNamespace(devices=lambda: [SimpleNamespace(platform="gpu")]))
-    (tmp_path / "inference.py").write_text("STATS = 'encos_flat_train45'\n")
-    (tmp_path / "inference_flat_towel.py").write_text(
+    (tmp_path / "inference.py").write_text(f"STATS = {stats!r}\n")
+    (tmp_path / entry).write_text(
         "def load_policy(checkpoint, num_steps):\n"
         "    from inference import STATS\n"
         "    from types import SimpleNamespace\n"
@@ -84,16 +88,18 @@ def test_flat_towel_entry_imports_sibling_and_reaches_policy_loader(tmp_path, mo
     )
     (tmp_path / "flat-model/params").mkdir(parents=True)
     config = tmp_path / "deployment.yaml"
-    config.write_text(yaml.safe_dump({"worker": {"inference_entry": "inference_flat_towel.py"}}))
+    config.write_text(yaml.safe_dump({"worker": {"inference_entry": entry}}))
     args = parse_args(["--config", str(config), "--model", str(tmp_path), "--checkpoint", "flat-model"])
     runner = PolicyRunner(args.model, args.device, args.allow_cpu, {}, args.checkpoint,
                           args.num_steps, args.action_horizon, args.inference_entry)
-    assert runner.policy.stats == "encos_flat_train45"
+    assert runner.policy.stats == stats
     assert runner.policy.steps == 10
     assert runner.policy.checkpoint == str(tmp_path / "flat-model")
     override = parse_args(["--config", str(config), "--model", str(tmp_path),
                            "--inference-entry", "inference.py"])
     assert override.inference_entry == "inference.py"
+    cli_entry = parse_args(["--model", str(tmp_path), "--inference-entry", entry])
+    assert cli_entry.inference_entry == entry
 
 
 def test_pi05_protocol_round_trip():
@@ -340,6 +346,13 @@ def bridge(monkeypatch, tmp_path, request):
     config["bridge"]["motion_safety"] = {"max_velocity_rad_s": 100, "max_acceleration_rad_s2": 100000}
     options = dict(getattr(request, "param", {}))
     config["bridge"].update(options)
+    # High-rate cases use an isolated controller config, not the operator's 50 Hz loops.
+    controller = yaml.safe_load((ROOT / config["controller_config"]).read_text())
+    for name in ("robot_ctlNode_loop_ctl", "dual_arm_ctl_node_loop_ctl"):
+        controller["TransLoopCtlInte"][name]["TempTime"] = 1 / 300
+    controller_path = tmp_path / "controller.yaml"
+    controller_path.write_text(yaml.safe_dump(controller))
+    config["controller_config"] = str(controller_path)
     config_path = tmp_path / "deployment.yaml"
     config_path.write_text(yaml.safe_dump(config))
     args = SimpleNamespace(config=config_path, worker_host=None,
@@ -564,8 +577,11 @@ def test_close_cleans_up_after_ros_publication_is_unavailable(bridge):
     assert cleaned == ["inference", "client", "cameras"]
 
 
-@pytest.mark.parametrize("bridge", [{"interpolation": {"enabled": True, "publish_rate_hz": 300}}], indirect=True)
-def test_interpolated_bridge_publishes_between_source_ticks_and_holds(bridge):
+@pytest.mark.parametrize("bridge,rate", [
+    ({"interpolation": {"enabled": True, "publish_rate_hz": 50}}, 50),
+    ({"interpolation": {"enabled": True, "publish_rate_hz": 300}}, 300),
+], indirect=["bridge"])
+def test_interpolated_bridge_publishes_between_source_ticks_and_holds(bridge, rate):
     node, clock, feedback = bridge
     node.step()
     complete(node, value=0.01)
@@ -573,19 +589,19 @@ def test_interpolated_bridge_publishes_between_source_ticks_and_holds(bridge):
     feedback()
     node.step()
     assert node.control_timer.period == pytest.approx(1 / 30)
-    assert node.publish_timer.period == pytest.approx(1 / 300)
+    assert node.publish_timer.period == pytest.approx(1 / rate)
     assert not node.command_pub.messages
     node.publish_step()
     first = node.command_pub.messages[-1]
     assert first.l_arm_des_msg[0] == pytest.approx(0)
     assert first.if_init_use_ret == 1
     for _ in range(9):
-        clock[0] += 1 / 300
+        clock[0] += 1 / rate
         feedback()
         node.publish_step()
     assert len(node.command_pub.messages) == 10
     assert node.command_pub.messages[-1].l_arm_des_msg[0] > 0
-    assert node.gripper_pub.messages[-1].ctl_time == pytest.approx(1 / 300)
+    assert node.gripper_pub.messages[-1].ctl_time == pytest.approx(1 / rate)
     clock[0] += 0.3
     feedback()
     node.publish_step()  # A stalled observation loop must also stop the output.

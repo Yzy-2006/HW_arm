@@ -7,12 +7,15 @@
 // Query transport tests inspect PDO memory without opening any interface.
 extern int ecat_phys;
 static MotorBlock last_sent[CAN_CHANNELS][MOTORS_PER_CH]{};
+static int send_count = 0;
+static int response_wkc = 3;
 extern "C" int __wrap_ec_send_processdata(void) {
+    ++send_count;
     if (ecat_phys > 0 && ec_slave[ecat_phys].outputs)
         std::memcpy(last_sent, ec_slave[ecat_phys].outputs, ETC_PDO_SIZE);
     return 1;
 }
-extern "C" int __wrap_ec_receive_processdata(int) { return 3; }
+extern "C" int __wrap_ec_receive_processdata(int) { return response_wkc; }
 
 gripperCmd left_gripper_cmd, right_gripper_cmd;
 gripperFdb left_gripper_fdb, right_gripper_fdb;
@@ -97,6 +100,62 @@ void test_zero_session() {
     assert(not_zero.phase == Phase::failed);
 }
 
+void test_shutdown_damping() {
+    const auto saved_guard = arm_safety;
+    const auto saved_slave = ec_slave[1];
+    const int saved_physical = ecat_phys;
+    const int saved_expected_wkc = expectedWKC;
+    const int saved_wkc = wkc;
+    MotorBlock input[CAN_CHANNELS][MOTORS_PER_CH]{};
+    MotorBlock output[CAN_CHANNELS][MOTORS_PER_CH]{};
+    ecat_phys = 1;
+    ec_slave[1].inputs = reinterpret_cast<uint8*>(input);
+    ec_slave[1].outputs = reinterpret_cast<uint8*>(output);
+    ec_slave[1].Ibytes = ec_slave[1].Obytes = ETC_PDO_SIZE;
+    expectedWKC = 3;
+
+    for (bool speed_only : {false, true}) {
+        arm_safety = saved_guard;
+        arm_safety.limits.speed_only = speed_only;
+        const int sent_before = send_count;
+        assert(EtherCAT_ShutdownDamping());
+        assert(send_count == sent_before + 3);
+        assert(arm_safety.fault == "servo_shutdown");
+        for (int ch = 0; ch < 2; ++ch) {
+            for (int j = 0; j < 8; ++j) {
+                const auto& block = last_sent[ch][j];
+                assert(block.id == j + 1 && block.dlc == 8);
+                const int kp = (block.data[0] << 7) | (block.data[1] >> 1);
+                const int kd = ((block.data[1] & 1) << 8) | block.data[2];
+                const int q = (block.data[3] << 8) | block.data[4];
+                const int velocity = (block.data[5] << 4) | (block.data[6] >> 4);
+                const int torque = ((block.data[6] & 15) << 8) | block.data[7];
+                assert(kp == 0);
+                assert(kd == float_to_uint(j == 7 ? 2.2 : arm_safety.limits.damping,
+                                           KD_MIN, KD_MAX, 9));
+                assert(q == float_to_uint(0, POS_MIN, POS_MAX, 16));
+                assert(velocity == float_to_uint(0, SPD_MIN, SPD_MAX, 12));
+                assert(torque == float_to_uint(0, T_MIN, T_MAX, 12));
+            }
+        }
+    }
+
+    response_wkc = 0;
+    const int sent_before = send_count;
+    assert(!EtherCAT_ShutdownDamping());
+    assert(send_count == sent_before + 3);
+    response_wkc = 3;
+    ecat_phys = -1;
+    assert(!EtherCAT_ShutdownDamping());
+    assert(send_count == sent_before + 3);
+
+    arm_safety = saved_guard;
+    ec_slave[1] = saved_slave;
+    ecat_phys = saved_physical;
+    expectedWKC = saved_expected_wkc;
+    wkc = saved_wkc;
+}
+
 int main() {
     test_zero_session();
     // Never initialize SOEM or open a network interface. Inspect in-memory PDOs.
@@ -121,6 +180,7 @@ int main() {
     EtherCAT_Command_Set();
     assert(arm_safety.fault.empty());
     assert(pdo_tx[0][0].data[0] != 0);  // Healthy position gain was encoded.
+    test_shutdown_damping();
 
     {
         const auto saved_guard = arm_safety;

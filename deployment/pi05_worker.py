@@ -29,6 +29,7 @@ from pi05_common import decode_bytes, recv_packet, send_packet
 
 
 LOG = logging.getLogger("pi05_worker")
+OPENPI_INFERENCE_ENTRIES = ("inference.py", "inference_flat_towel.py", "inference_mix159.py")
 
 
 def _request_shutdown(_signum, _frame):
@@ -49,12 +50,12 @@ def _is_openpi_checkpoint(model_path: Path) -> bool:
 
 
 def _load_openpi_inference_module(model_path: Path, entry: str = "inference.py"):
-    if entry not in {"inference.py", "inference_flat_towel.py"}:
+    if entry not in OPENPI_INFERENCE_ENTRIES:
         raise ValueError(f"Unsupported OpenPI inference entry: {entry}")
     inference_path = model_path / entry
     if not inference_path.is_file():
         raise FileNotFoundError(f"OpenPI inference entry not found: {inference_path}")
-    # The flat-towel entry imports helpers from its sibling inference.py.
+    # Release-specific entries import helpers from their sibling inference.py.
     sys.path.insert(0, str(model_path.resolve()))
     spec = importlib.util.spec_from_file_location("downloaded_pi05_inference", inference_path)
     if spec is None or spec.loader is None:
@@ -328,7 +329,7 @@ def parse_args(argv=None):
     )
     parser.add_argument("--num-steps", type=int, help="Override worker.num_steps (default: 10)")
     parser.add_argument("--action-horizon", type=int, help="Override expected OpenPI action count (default: 50)")
-    parser.add_argument("--inference-entry", choices=("inference.py", "inference_flat_towel.py"),
+    parser.add_argument("--inference-entry", choices=OPENPI_INFERENCE_ENTRIES,
                         help="OpenPI entry filename inside --model; overrides worker.inference_entry")
     parser.add_argument(
         "--camera-map",
@@ -350,8 +351,8 @@ def parse_args(argv=None):
         worker_cfg = config.get("worker", {})
     if args.inference_entry is None:
         args.inference_entry = worker_cfg.get("inference_entry", "inference.py")
-    if args.inference_entry not in ("inference.py", "inference_flat_towel.py"):
-        parser.error("worker.inference_entry must be inference.py or inference_flat_towel.py")
+    if args.inference_entry not in OPENPI_INFERENCE_ENTRIES:
+        parser.error("worker.inference_entry must be one of: " + ", ".join(OPENPI_INFERENCE_ENTRIES))
     for name, default in (("num_steps", 10), ("action_horizon", 50)):
         value = getattr(args, name)
         if value is None:

@@ -61,6 +61,9 @@ make preview
 
 ## 部署 PI05
 
+混合 159 条数据的 10k 模型见 [部署混合 159 条数据的 10k 模型](PI05_DEPLOYMENT.md#部署混合-159-条数据的-10k-模型)，
+使用 `PI05_ARGS="--inference-entry inference_mix159.py --num-steps 10"`。
+
 下载并部署新平铺 B 模型的命令见 [更新到平铺起始 B 模型](PI05_DEPLOYMENT.md#更新到平铺起始-b-模型)。
 该模型需要 `inference_flat_towel.py`，使用 `PI05_ARGS="--inference-entry inference_flat_towel.py"`
 或 YAML 的 `worker.inference_entry` 选择。

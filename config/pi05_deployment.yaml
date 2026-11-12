@@ -30,7 +30,7 @@ bridge:
   action_rate_hz: 30
   interpolation:
     enabled: true
-    publish_rate_hz: 100
+    publish_rate_hz: 50
   # Replay only: immediate stop/damping for any arm joint, including speed_only mode.
   replay_max_tracking_error_rad: 0.3
   # Standalone feedback-to-first-frame segment for dataset replay only.

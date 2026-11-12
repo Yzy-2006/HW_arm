@@ -41,6 +41,54 @@ test -d "$MODEL/step-19999/params"
 
 `step-18000` 和 `step-19999` 都可以作为 `PI05_CHECKPOINT`，默认使用后者。
 
+## 部署混合 159 条数据的 10k 模型
+
+模型目录为 `$HOME/models/pi05-encos-fold-towel-93/mix100003-flat59-from-pi05-base-step-10000`。
+它使用 `inference_mix159.py` 和 checkpoint 内的
+`assets/encos_mix159_train125/norm_stats.json`。`PI05_MODEL` 应指向包含入口、runtime 和
+tokenizer 的父目录，`PI05_CHECKPOINT` 指向该 checkpoint 子目录，而不是把 checkpoint
+子目录直接用作 `PI05_MODEL`。
+
+本地只有权重目录、缺少根目录入口时，在已有的 Conda 环境中补下载：
+
+```bash
+conda activate pi05-openpi
+huggingface-cli download hw-arm-towel/pi05-encos-fold-towel-93 \
+  inference_mix159.py \
+  --revision 19fbdacae6a6fae1f26016a7792b5f391000eb2d \
+  --local-dir "$HOME/models/pi05-encos-fold-towel-93"
+```
+
+新版 CLI 可将 `huggingface-cli download` 换成 `hf download`。上面的提交来自本地
+`READY.json` 的 `payload_revision`；下载后须确认命令成功。
+先停止旧 bridge 和 worker，等待 worker 退出，然后在仓库根目录启动：
+
+```bash
+make pi05 PI05_MODEL="$HOME/models/pi05-encos-fold-towel-93" \
+  PI05_CHECKPOINT=mix100003-flat59-from-pi05-base-step-10000 \
+  PI05_ARGS="--inference-entry inference_mix159.py --num-steps 10"
+```
+
+显式指定 10 个积分步数与该模型发布的验证设置一致，覆盖 YAML 当前设置；输出仍为
+50 步、16 维动作。等待 GPU 与 listening 日志后，在已有底层控制链运行的前提下
+执行 `make bridge` 做 dry-run。停止 worker 后可离线测速：
+
+```bash
+make pi05-bench PI05_CHECKPOINT=mix100003-flat59-from-pi05-base-step-10000 \
+  BENCH_ARGS="--inference-entry inference_mix159.py --num-steps 10 --output outputs/mix159-benchmark.json"
+```
+
+该模型 README 说明：100 条新数据过滤后被重排为 30 FPS，50 个保留帧覆盖原采集时间的
+中位数约 6.63 秒；旧 59 条数据保留其原版导出序列。因此，按导出标注 30 Hz 执行
+不等同于恢复原始物理速度，也不能把全部混合数据统一解释成 6.63 秒一个 chunk。
+先做 dry-run，再独立评估动作时间间隔和实机行为。
+
+注意当前部署配置可能启用了 `protection_mode: speed_only`，该模式会将 bridge 的
+关节步长限制设为无限，此时 `PI05_SLOW_FACTOR=0.1` 不能保证实际慢放。
+若同时启用 `policy_disable_all_speed_checks`，模型流的速度检查也会被禁用；
+启动真机动作前需确认现场使用的实际保护配置，不能以 dry-run 成功作为运动保护已生效的依据。
+本次适配仅增加推理入口支持，不修改控制参数，也未运行新模型的 GPU 或真机推理。
+
 ## 更新到平铺起始 B 模型
 
 2026-11-06 查询发布仓库，新增模型为
@@ -178,7 +226,7 @@ make pi05 PI05_ARGS='--camera-map {"cam_high":"head","cam_left":"left_wrist","ca
 | 每步动作维度 | 16 | 左臂 7 关节 + 左夹爪 + 右臂 7 关节 + 右夹爪 |
 | 每次推理的积分步数 `num_steps` | **10 步** | YAML 的 `worker.num_steps`；Flow Matching 采样计算步数，可用 `--num-steps` 临时覆盖 |
 | bridge 观测和规划频率 `rate_hz` | 30 Hz | YAML 的 `bridge.rate_hz`；检查观测、处理推理结果 |
-| 插值后指令发布频率 | 300 Hz | `bridge.interpolation.publish_rate_hz`；minimum snap 关节插值 |
+| 插值后指令发布频率 | 50 Hz | `bridge.interpolation.publish_rate_hz`；minimum snap 关节插值 |
 | 动作序列时间频率 `action_rate_hz` | 30 Hz | YAML 的 `bridge.action_rate_hz`；用于 chunk 动作的时间索引，默认匹配数据集的 30 FPS |
 | 相邻预测动作的时间间隔 | 约 33.3 ms | `1 / action_rate_hz`；50 步对应约 1.67 秒的预测范围，不是每 33.3 ms 运行一次模型 |
 | 重规划间隔 `replan_interval_s` | 0.5 秒 | 有效 chunk 存在时，推理请求的最小发起间隔；上一次请求完成后才能发起下一次 |
@@ -208,7 +256,7 @@ bridge:
   action_rate_hz: 30
   interpolation:
     enabled: true
-    publish_rate_hz: 300
+    publish_rate_hz: 50
   replan_interval_s: 0.5
   max_action_age_s: 1.0
   max_joint_step_rad: 0.02
@@ -223,7 +271,7 @@ bridge:
 ```
 
 默认使用 [minimum snap 插值](MINIMUM_SNAP.md)：保持原始 30 Hz 动作时间轴，
-将 14 个关节目标插值到 300 Hz；夹爪仍按原始帧的二值状态切换。
+将 14 个关节目标插值到 50 Hz；夹爪仍按原始帧的二值状态切换。
 新 chunk 从最后一次成功发布的位置、速度、加速度和 jerk 衔接。
 规划和预检查完成后，轨迹在首次发布时才开始计时；第一条指令始终取轨迹起点，
 不会因为规划耗时跳过开头。夹爪动作使用相同的播放时间轴。

@@ -225,8 +225,8 @@ TransLoopCtlInte:
 
   #中层节点控制参数
   dual_arm_ctl_node_loop_ctl:
-    # Forward the 300 Hz minimum-snap joint stream without a 50 Hz bottleneck.
-    TempTime: 0.0033333333333333335
+    # Match the 50 Hz minimum-snap command stream.
+    TempTime: 0.02
     lArm_DOF: 7
     rArm_DOF: 7
 
@@ -239,7 +239,7 @@ TransLoopCtlInte:
 
   #顶层节点控制参数
   robot_ctlNode_loop_ctl:
-    TempTime: 0.0033333333333333335
+    TempTime: 0.02
     lArm_DOF: 7
     rArm_DOF: 7
 

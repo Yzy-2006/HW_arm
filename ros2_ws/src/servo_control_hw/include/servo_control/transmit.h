@@ -133,6 +133,7 @@ void CanChannelScanStep();
 void CanChannelScanPrintResult();
 
 void EtherCAT_Run();                    //EtherCAT运行主要流程代码
+bool EtherCAT_ShutdownDamping();
 void EtherCAT_Command_Set();            //EtherCAT运行主要流程成员函数 -- 设定EtherCAT命令
 
 void EtherCAT_transInp(std::vector<std::vector<joint_desMsg>> allJnt_desMsg);    //EtherCAT输入值传入函数

@@ -1,6 +1,6 @@
 #include"debugPublish/debugPublish.h"
 
-debugMsgPub::debugMsgPub(rclcpp::Node* node) : node_ptr_(node){
+debugMsgPub::debugMsgPub(rclcpp::Node* node, ServoRosPublisher* async) : node_ptr_(node), async_(async){
 
     //初始化消息发送函数
     debug_msg_send = node_ptr_->create_publisher<ctl_msgs_hw::msg::DbgInformation>(
@@ -32,7 +32,8 @@ void debugMsgPub::debug_msg_publish_1(std::vector<double> l_reserve, std::vector
         temp_debug_publish.float_reserve_b[i] = r_reserve[i];
     }
 
-    debug_msg_send->publish(temp_debug_publish);
+    if (async_) async_->publish(ServoPublishChannel::debug1, debug_msg_send, std::move(temp_debug_publish));
+    else debug_msg_send->publish(temp_debug_publish);
 }
 
 void debugMsgPub::debug_msg_publish_2(std::vector<double> l_reserve, std::vector<double> r_reserve){
@@ -47,7 +48,8 @@ void debugMsgPub::debug_msg_publish_2(std::vector<double> l_reserve, std::vector
         temp_debug_publish.float_reserve_b[i] = r_reserve[i];
     }
 
-    debug_msg_send_2->publish(temp_debug_publish);
+    if (async_) async_->publish(ServoPublishChannel::debug2, debug_msg_send_2, std::move(temp_debug_publish));
+    else debug_msg_send_2->publish(temp_debug_publish);
 }
 
 void debugMsgPub::debug_msg_publish_3(std::vector<double> l_reserve, std::vector<double> r_reserve){
@@ -62,7 +64,8 @@ void debugMsgPub::debug_msg_publish_3(std::vector<double> l_reserve, std::vector
         temp_debug_publish.float_reserve_b[i] = r_reserve[i];
     }
 
-    debug_msg_send_3->publish(temp_debug_publish);
+    if (async_) async_->publish(ServoPublishChannel::debug3, debug_msg_send_3, std::move(temp_debug_publish));
+    else debug_msg_send_3->publish(temp_debug_publish);
 }
 
 //-----------------------------------------------------------------------------------
