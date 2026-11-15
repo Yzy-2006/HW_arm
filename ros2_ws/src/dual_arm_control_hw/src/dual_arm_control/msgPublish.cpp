@@ -351,9 +351,9 @@ void ArmCtlNode::msg_publish()
     tempCtlData_pub.trajectory_sample = stream_sample_ && stream_sample_->derivatives_valid;
     tempCtlData_pub.handoff_epoch = control_handoff_.value();
     if (stream_sample_) tempCtlData_pub.trajectory_header = stream_sample_->trajectory_header;
-    tempCtlData_pub.policy_speed_checks_disabled = stream_sample_ &&
-        stream_sample_->policy_speed_checks_disabled &&
-        stream_sample_->trajectory_header.frame_id == "pi05_policy" && modCtlMsg_get.transMod == 3;
+    else if (policy_speed_override_source_)
+        tempCtlData_pub.trajectory_header = policy_speed_override_source_->trajectory_header;
+    tempCtlData_pub.policy_speed_checks_disabled = policy_speed_override_source_ && modCtlMsg_get.transMod == 3;
 
     //发送控制量
     tempCtlData_pub.runin_mod = runin_mod;
@@ -1744,6 +1744,12 @@ void ArmCtlNode::upperMonitor_msg_callback(const ctl_msgs_hw::msg::MidNodeCtlMsg
             RCLCPP_ERROR(get_logger(), "Rejected malformed bridge trajectory sample");
             return;
         }
+    }
+    // Keep the deployment setting even when the trajectory is held. A different
+    // controller source or an explicit false flag restores the configured limits.
+    policy_speed_override_source_ = msg->policy_speed_checks_disabled &&
+        msg->trajectory_header.frame_id == "pi05_policy" && msg->ctl_trans_mod == 3 ? msg : nullptr;
+    if (msg->bridge_joint_stream) {
         if (!control_handoff_.changed(source) && stream_sample_ &&
             stream_sample_->trajectory_header.stamp == msg->trajectory_header.stamp) return;
         stream_sample_ = msg;

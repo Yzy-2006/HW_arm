@@ -84,6 +84,43 @@ void check_tool_lock(bool enabled){
 int main(int argc, char** argv){
     assert(argc == 3);
     test_share = argv[1];
+    if(std::string(argv[2]) == "intervention_hold"){
+        xr_telepercation_ctl ctl;
+        ctl.init();
+        const std::vector<double> pose{0.2, 0.1, -0.3, 0.1, -0.2, 0.3};
+        ctl.update_desc_ret(pose, pose);
+        assert(ctl.reanchor_from_feedback());
+        const std::vector<double> joints(7, 0.25);
+        ctl.hold_current_joints_for_vr(joints, joints);
+        for(int i = 0; i < 1000; ++i){
+            const auto held = ctl.trans_and_outp();
+            assert(held.ctl_transMod == 1);
+            assert(held.ctlDesMsg.desPos_l_JointSpace == joints);
+            assert(held.ctlDesMsg.desPos_r_JointSpace == joints);
+        }
+        ctl.release_vr_joint_hold();
+        ctl.l_arm_end_delta[0] = 0.01;
+        const auto moving = ctl.trans_and_outp();
+        assert(moving.ctl_transMod == 4 && moving.ifUseRet == 1);
+        assert(std::abs(moving.ctlDesMsg.desPos_l_Descartes[0] - 0.21) < 1e-9);
+        return 0;
+    }
+    if(std::string(argv[2]) == "policy_home"){
+        xr_telepercation_ctl ctl;
+        ctl.init();
+        ctl.trigger_joint_return(true);
+        auto command = ctl.trans_and_outp();
+        assert(ctl.joint_return_active());
+        for(int i = 0; i < 1000; ++i) command = ctl.trans_and_outp();
+        assert(!ctl.joint_return_active() && !ctl.accepts_vr_input());
+        assert(command.ctl_transMod == 1);
+        assert(command.ctlDesMsg.desPos_l_JointSpace == lArm_zeroPos);
+        assert(command.ctlDesMsg.desPos_r_JointSpace == rArm_zeroPos);
+        ctl.trigger_joint_return();
+        for(int i = 0; i < 1000; ++i) command = ctl.trans_and_outp();
+        assert(command.ctl_transMod == 4 && ctl.accepts_vr_input());
+        return 0;
+    }
     if(std::string(argv[2]) == "handoff"){
         xr_telepercation_ctl ctl;
         ctl.init();

@@ -17,4 +17,7 @@ def drain_executor(executor):
                 if error is not None:
                     logging.getLogger(__name__).error('ROS callback failed during shutdown: %s', error)
     finally:
-        executor.shutdown(wait_for_threads=True)
+        if pool is not None:
+            executor.shutdown(wait_for_threads=True)
+        else:
+            executor.shutdown()

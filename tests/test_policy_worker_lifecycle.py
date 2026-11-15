@@ -5,6 +5,7 @@ import signal
 import socket
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -112,3 +113,78 @@ def test_worker_handles_shutdown_during_load_and_socket_accept(signum, phase):
         if process.poll() is None:
             process.kill()
         process.communicate(timeout=5)
+
+
+@pytest.mark.parametrize("ignore_signals", [False, True])
+@pytest.mark.parametrize("exit_method", ["signal", "shutdown"])
+def test_managed_launcher_stays_idle_reaps_worker_and_restarts_same_command(tmp_path, ignore_signals, exit_method):
+    from worker_lifecycle import WorkerLifecycleClient
+    with socket.socket() as reservation:
+        reservation.bind(("127.0.0.1", 0))
+        port = reservation.getsockname()[1]
+    worker_code = (
+        "import os, signal, time\n"
+        + ("signal.signal(signal.SIGTERM, signal.SIG_IGN)\n" if ignore_signals else "")
+        + "print(os.getpid(), flush=True)\nwhile True: time.sleep(1)\n"
+    )
+    command = [sys.executable, "-c", worker_code]
+    launcher_code = (
+        f"import sys; sys.path.insert(0, {str(ROOT / 'scripts')!r}); "
+        "from run_policy_worker import run_managed; "
+        "assert not {'torch', 'jax', 'numpy'}.intersection(sys.modules); "
+        f"sys.exit(run_managed({command!r}, '127.0.0.1', {port}, 'secret', .2))"
+    )
+    process = subprocess.Popen([sys.executable, "-c", launcher_code], stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True, start_new_session=True)
+    pids = []
+    try:
+        pids.append(read_ready(process))
+        client = WorkerLifecycleClient("127.0.0.1", port, "secret", timeout_s=2.)
+        deadline = time.monotonic() + 3
+        while True:
+            try:
+                assert client.request("status")["pid"] == pids[0]
+                break
+            except OSError:
+                assert time.monotonic() < deadline
+                time.sleep(.02)
+        with pytest.raises(RuntimeError, match="invalid token"):
+            WorkerLifecycleClient("127.0.0.1", port, "wrong").request("stop")
+        assert client.request("status")["running"]
+        assert not client.request("stop")["running"]
+        assert process.poll() is None, "Lightweight launcher must remain available without a model"
+        with pytest.raises(ProcessLookupError):
+            os.kill(pids[0], 0)
+        assert not client.request("stop")["running"]
+        result = client.request("start")
+        pids.append(read_ready(process))
+        assert result["pid"] == pids[1] and pids[0] != pids[1]
+        if exit_method == "shutdown":
+            assert not client.request("shutdown")["running"]
+        else:
+            process.send_signal(signal.SIGINT)
+        _, stderr = process.communicate(timeout=5)
+        assert process.returncode == 0, stderr
+        with pytest.raises(ProcessLookupError):
+            os.kill(pids[1], 0)
+    finally:
+        if process.poll() is None:
+            process.send_signal(signal.SIGTERM)
+            process.communicate(timeout=5)
+        for pid in pids:
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+def test_management_port_conflict_never_starts_a_worker(tmp_path):
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from run_policy_worker import run_managed
+    marker = tmp_path / "unexpected-start"
+    with socket.socket() as occupied:
+        occupied.bind(("127.0.0.1", 0))
+        occupied.listen(1)
+        command = [sys.executable, "-c", f"from pathlib import Path; Path({str(marker)!r}).touch()"]
+        assert run_managed(command, "127.0.0.1", occupied.getsockname()[1]) == 2
+    assert not marker.exists()

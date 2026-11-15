@@ -40,7 +40,69 @@ test -f "$MODEL/inference.py"
 test -d "$MODEL/step-19999/params"
 ```
 
-`step-18000` 和 `step-19999` 都可以作为 `PI05_CHECKPOINT`，默认使用后者。
+上述为旧模型布局；部署旧模型须同时指定旧模型目录、checkpoint 和 `inference.py` 入口。
+当前 `make pi05` 默认使用下述 full321 50k 模型。
+
+## 部署 full321 50k 模型
+
+2026-11-15 查询发布仓库，新增模型为
+[`full321003-resume10k-to50k-step-50000`](https://huggingface.co/hw-arm-towel/pi05-encos-fold-towel-93/tree/main/full321003-resume10k-to50k-step-50000)。
+它使用完整 321 条演示，其中 255 条训练数据计算归一化统计，从本批 10k 训练状态续训到 50k。
+配套入口为 `inference_full321.py`，统计为 checkpoint 下
+`assets/encos_full321_train255/norm_stats.json`，不能复用 mix159 的统计或入口。
+保持 50 步、16 维绝对关节/夹爪目标；发布验证使用 10 个 flow 积分步数。
+
+使用现有 `pi05-openpi` 环境，下载到独立目录，保留旧运行文件和模型以便回退：
+
+```bash
+conda activate pi05-openpi
+huggingface-cli download hw-arm-towel/pi05-encos-fold-towel-93 \
+  --revision 7b05c21743843bde4ab797d88d5ef14c307a926f \
+  --include "full321003-resume10k-to50k-step-50000/**" \
+    "inference_full321.py" "inference.py" "runtime/**" "tokenizer/**" \
+    "requirements-inference.txt" "README.md" "LICENSE*" "NOTICE" \
+  --local-dir "$HOME/models/pi05-full321-50k"
+```
+
+新版 CLI 可使用 `hf download`。约需下载 12.4 GB，包含入口和整个 checkpoint 的 params、assets；
+下载中断可重新执行同一命令。固定提交保证模型与运行文件一致，无需主动升级现有 JAX 环境。
+下载成功后可确认关键文件存在（不等于完整哈希校验）：
+
+```bash
+MODEL="$HOME/models/pi05-full321-50k"
+test -f "$MODEL/inference_full321.py" && \
+test -f "$MODEL/full321003-resume10k-to50k-step-50000/params/manifest.ocdbt" && \
+test -f "$MODEL/full321003-resume10k-to50k-step-50000/assets/encos_full321_train255/norm_stats.json" && \
+echo "Required entry, checkpoint manifest and normalization statistics found"
+```
+
+停止旧 bridge 和 worker，等待 `Worker process reaped` 后，在仓库根目录启动：
+
+```bash
+make pi05
+```
+
+默认模型目录为 `$HOME/models/pi05-full321-50k`，checkpoint 为
+`full321003-resume10k-to50k-step-50000`，入口为 `inference_full321.py`，推理积分为 20 步。
+可以继续通过 `PI05_MODEL`、`PI05_CHECKPOINT` 和 `PI05_ARGS` 临时覆盖。
+
+日志应显示新 checkpoint、`OpenPI inference entry: inference_full321.py`、CUDA 设备和 listening。
+已有控制链正常运行时，另开终端执行 `make bridge` 做 dry-run。
+新入口关闭 JAX 磁盘持久化编译缓存，但仍使用进程内 JIT，首次推理可能编译较久。
+该模型训练数据也经过筛选和时间轴压缩，按导出 30 Hz 执行不等于原始采集速度；
+50 个动作步对应的原采集时长随片段变化，需另行评估实机执行时间。
+当前 `speed_only` 会绕过 bridge 步长限制，`PI05_SLOW_FACTOR` 不保证慢放；
+`policy_disable_all_speed_checks: true` 还关闭了模型流速度检查，首次真机测试前需核对实际保护配置。
+
+仅测速时先停止 worker，再执行：
+
+```bash
+make pi05-bench PI05_MODEL="$HOME/models/pi05-full321-50k" \
+  PI05_CHECKPOINT=full321003-resume10k-to50k-step-50000 \
+  BENCH_ARGS="--inference-entry inference_full321.py --num-steps 10 --output outputs/full321-benchmark.json"
+```
+
+本次适配只增加入口支持并执行模拟加载测试，未下载完整权重或执行新模型 GPU/真机验证。
 
 ## 部署混合 159 条数据的 10k 模型
 
@@ -185,10 +247,11 @@ PI05 worker listening on 127.0.0.1:8765
 等价的手动命令是：
 
 ```bash
-python3 scripts/run_policy_worker.py --env pi05-openpi -- \
+python3 scripts/run_policy_worker.py --env pi05-openpi --manage -- \
   --config config/pi05_deployment.yaml \
-  --model "$HOME/models/pi05-encos-fold-towel-93" \
-  --checkpoint step-19999 \
+  --model "$HOME/models/pi05-full321-50k" \
+  --checkpoint full321003-resume10k-to50k-step-50000 \
+  --inference-entry inference_full321.py --num-steps 20 \
   --host 127.0.0.1 \
   --port 8765
 ```
@@ -230,16 +293,23 @@ make pi05 PI05_ARGS='--camera-map {"cam_high":"head","cam_left":"left_wrist","ca
 | 插值后指令发布频率 | 50 Hz | `bridge.interpolation.publish_rate_hz`；minimum snap 关节插值 |
 | 动作序列时间频率 `action_rate_hz` | 30 Hz | YAML 的 `bridge.action_rate_hz`；用于 chunk 动作的时间索引，默认匹配数据集的 30 FPS |
 | 相邻预测动作的时间间隔 | 约 33.3 ms | `1 / action_rate_hz`；50 步对应约 1.67 秒的预测范围，不是每 33.3 ms 运行一次模型 |
-| 重规划间隔 `replan_interval_s` | 0.5 秒 | 有效 chunk 存在时，推理请求的最小发起间隔；上一次请求完成后才能发起下一次 |
+| 重规划间隔 `replan_interval_s` | 1.0 秒（约 1 Hz） | 有效 chunk 存在时，推理请求的最小发起间隔；上一次请求完成后才能发起下一次 |
 | 动作最大有效年龄 `max_action_age_s` | 1.0 秒 | 仅 `full` 模式按观测时刻检查；当前 `speed_only` 不启用结果年龄拒绝 |
 | 每段 chunk 实际执行步数 | 不固定 | 当前没有独立的 `n_action_steps` 参数；取决于推理耗时、重规划间隔和观测有效性 |
 
 `make pi05` 自动读取 `config/pi05_deployment.yaml`（可用 `PI05_CONFIG=...` 指定其他文件）。
 修改 `worker.num_steps` 后重启 worker 生效；修改 `bridge` 参数后重启 bridge 生效。
+在 `make motion` 终端按 H 可暂停模型、平滑回零，在轨迹发送时段结束时闭合双夹爪，等待 3 秒自动恢复，不检查到位状态；
+参数和失败处理见[Motion 终端回零与自动恢复](DEPLOYMENT.md#motion-终端回零与自动恢复)。
+同时运行 `make vr-intervene` 可用左 A 丢弃键暂停部署并切入 VR，用左 B 进行补采；
+VR 接管时自动停止 GPU worker、管理进程和部署 bridge，切换为单线程遥操补采会话。
+保存结束后在原 motion 终端按 Ctrl+C 释放相机，再手动执行 `make pi05` 和 `make motion`。
+接管后 H 不再自动恢复模型。
+补采复用 bridge 相机，不另开 `make record`，见[VR 接管与补采](POLICY_INTERVENTION.md)。
 命令行参数优先于 YAML。例如，临时指定 10 步推理积分：
 
 ```bash
-make pi05 PI05_CHECKPOINT=step-49999 PI05_ARGS="--num-steps 10"
+make pi05 PI05_ARGS="--inference-entry inference_full321.py --num-steps 10"
 ```
 
 该命令仍然每次输出 50 步动作。新的有效 chunk 返回后可以替换旧 chunk，
@@ -259,7 +329,7 @@ bridge:
   interpolation:
     enabled: true
     publish_rate_hz: 50
-  replan_interval_s: 0.5
+  replan_interval_s: 1.0
   max_action_age_s: 1.0
   max_joint_step_rad: 0.02
   pd_level: mid
@@ -285,8 +355,10 @@ bridge:
 模型部署设置 `bridge.motion_safety.policy_disable_all_speed_checks: true`，关闭
 模型轨迹的速度预检查、相邻指令差分速度和解析速度检查，并随模型指令关闭
 servo 的指令速度、位置步进及实际反馈超速检查，双臂全部关节均适用。
-暂停保持、切换 VR/回放或模型源指令超过 0.25 秒未更新后，底层恢复原限速配置；
-重复转发旧指令不会延长此期限。启动回零仍按原配置限速。
+模型仍持有控制权时，等待新 chunk、暂停保持或模型动作包超时均不会恢复限速。
+动作包超时仍进入保持，不继续播放过期目标。切换 VR/回放后恢复原限速配置；
+servo 连续 0.25 秒未收到有效的中层控制消息，也会恢复原限速配置。
+这里检查的是控制消息时效，不是模型动作包或推理耗时。启动回零仍按原配置限速。
 数值有效性、协议范围、显式故障和停止仍保留，开关不会清除已经锁存的故障。
 要恢复部署限速，将上述开关设为 `false`，同时将
 `bridge.motion_safety.policy_command_speed_check` 设为 `true`，再重启 `make motion`。

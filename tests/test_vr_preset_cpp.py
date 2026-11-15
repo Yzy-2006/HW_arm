@@ -29,7 +29,7 @@ def preset_executable(tmp_path_factory):
     return executable
 
 
-@pytest.mark.parametrize("case", ["valid", "valid_no_feedback", "missing_file", "missing_joint", "nan", "malformed"])
+@pytest.mark.parametrize("case", ["valid", "valid_no_feedback", "missing_file", "missing_joint", "nan", "malformed", "policy_home", "intervention_hold"])
 def test_preset_selection_validation_and_hold(preset_executable, tmp_path, case):
     config = tmp_path / "config"
     config.mkdir()

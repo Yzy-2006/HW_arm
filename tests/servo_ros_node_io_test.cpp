@@ -22,6 +22,59 @@ struct ServoRosIoTest {
         arm_safety.limits.upper.fill(3);
         for (auto& feedback : arm_safety.feedback)
             feedback = {0, 0, arm_safety_now(), 0};
+        node.lArm_transMod.assign(7, 1);
+        node.rArm_transMod.assign(7, 1);
+        for (auto* values : {&node.l_posReceive_atRuninSt, &node.r_posReceive_atRuninSt,
+                &node.lArm_pos_receive, &node.rArm_pos_receive,
+                &node.lArm_vel_receive, &node.rArm_vel_receive,
+                &node.lArm_torComp_grav_receive, &node.rArm_torComp_grav_receive,
+                &node.lArm_torComp_interia_receive, &node.rArm_torComp_interia_receive,
+                &node.lArm_torComp_feedforward_receive, &node.rArm_torComp_feedforward_receive,
+                &node.lArm_Kp_receive, &node.rArm_Kp_receive,
+                &node.lArm_Kd_receive, &node.rArm_Kd_receive})
+            values->assign(7, 0);
+
+        // An old model sample may be held while the controller keeps publishing.
+        // The deployment setting follows controller ownership, not sample age.
+        auto policy = std::make_shared<ctl_msgs_hw::msg::CtlInformation>();
+        policy->temp_time = 1.0 / 300;
+        policy->base_rigidity_ctl_mode_l.assign(7, 0);
+        policy->base_rigidity_ctl_mode_r.assign(7, 0);
+        for (auto* values : {&policy->l_position_at_runin_st, &policy->r_position_at_runin_st,
+                &policy->l_position, &policy->r_position, &policy->l_speed, &policy->r_speed,
+                &policy->l_torque_grav_comp, &policy->r_torque_grav_comp,
+                &policy->l_torque_interia_comp, &policy->r_torque_interia_comp,
+                &policy->l_torque_feedforward, &policy->r_torque_feedforward,
+                &policy->l_kp, &policy->r_kp, &policy->l_kd, &policy->r_kd})
+            values->assign(7, 0);
+        policy->trajectory_header.frame_id = "pi05_policy";
+        policy->trajectory_header.stamp = node.now() - rclcpp::Duration::from_seconds(2);
+        policy->policy_speed_checks_disabled = true;
+        policy->header.stamp = node.now();
+        node.message_callback(policy);
+        assert(arm_safety.policy_speed_override_active());
+        arm_safety.check_command(10, {0, -5.347407295, 0, 100, 30}, arm_safety_now());
+        assert(arm_safety.fault.empty());
+        // A fresh controller packet cannot grant this override to VR/replay.
+        policy->trajectory_header.frame_id = "replay";
+        node.message_callback(policy);
+        assert(!arm_safety.policy_speed_override_active());
+        policy->trajectory_header.frame_id = "pi05_policy";
+        policy->policy_speed_checks_disabled = false;
+        node.message_callback(policy);
+        assert(!arm_safety.policy_speed_override_active());
+        // Loss of the controller transport still expires the override.
+        policy->policy_speed_checks_disabled = true;
+        policy->header.stamp = node.now() - rclcpp::Duration::from_seconds(.3);
+        arm_safety.limits.speed_only = true;
+        node.message_callback(policy);
+        assert(!arm_safety.policy_speed_override_active());
+        arm_safety.limits.speed_only = false;
+        arm_safety = ArmSafetyGuard{};
+        arm_safety.limits.lower.fill(-3);
+        arm_safety.limits.upper.fill(3);
+        for (auto& feedback : arm_safety.feedback)
+            feedback = {0, 0, arm_safety_now(), 0};
 
         auto gripper = std::make_shared<ctl_msgs_hw::msg::GripperCtl>();
         gripper->l_arm_gripper_tor = 1;

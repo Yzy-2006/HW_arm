@@ -183,16 +183,42 @@ void RobotCtlNode::xr_teleComu_init(){
     );
 
     xrTeleComuCtl.init();
+    home_gripper_pub_ = create_publisher<ctl_msgs_hw::msg::GripperCtl>("/gripper/ctl", rclcpp::QoS(1));
     safety_subscription_ = create_subscription<std_msgs::msg::String>("/towel/safety/state",
         rclcpp::QoS(1).transient_local(), [this](std_msgs::msg::String::ConstSharedPtr msg) {
             safety_received_ = std::chrono::steady_clock::now();
             safety_ready_ = msg->data == "ready";
             safety_fault_ = safety_fault_ || msg->data.rfind("fault:", 0) == 0;
         });
+    policy_home_service_ = this->create_service<std_srvs::srv::Trigger>(
+        "/dexbotCtl/policy_home",
+        [this](std_srvs::srv::Trigger::Request::SharedPtr,
+               std_srvs::srv::Trigger::Response::SharedPtr response) {
+            response->success = request_keyboard_home(true);
+            response->message = response->success ? "Policy home accepted; model control blocked"
+                : "Home rejected: check initialization, safety, feedback or an active home trajectory";
+        });
+    policy_intervention_service_ = create_service<std_srvs::srv::Trigger>(
+        "/dexbotCtl/policy_intervene",
+        [this](std_srvs::srv::Trigger::Request::SharedPtr,
+               std_srvs::srv::Trigger::Response::SharedPtr response) {
+            response->success = request_policy_intervention(response->message);
+        });
     vr_override_service = this->create_service<std_srvs::srv::SetBool>(
         "/dexbotCtl/vr_override",
         [this](const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
                std::shared_ptr<std_srvs::srv::SetBool::Response> response){
+            const bool policy_resume_ready = policy_home_.active && !request->data && policy_home_ready();
+            if (policy_home_.active && !policy_resume_ready) {
+                response->success = false;
+                response->message = "Policy home pending: wait for trajectory timing and the configured resume delay";
+                return;
+            }
+            if (keyboard_return_in_progress_ && !policy_resume_ready) {
+                response->success = false;
+                response->message = "Keyboard home trajectory is active; wait before changing ownership";
+                return;
+            }
             if (!motion_ready()) {
                 response->success = false;
                 response->message = "Handoff blocked by servo safety state; reset fault and restart controller";
@@ -219,6 +245,11 @@ void RobotCtlNode::xr_teleComu_init(){
                 }
             }
             bridge_transmit.set_vr_override(request->data);
+            if (policy_resume_ready) {
+                policy_home_.finish();
+                keyboard_return_in_progress_ = false;
+                RCLCPP_INFO(get_logger(), "Policy home trajectory timing and delay elapsed; awaiting fresh model actions");
+            }
             response->success = true;
             response->message = request->data ? "VR anchored to feedback" : "Bridge holding; awaiting fresh policy";
         });
@@ -227,11 +258,28 @@ void RobotCtlNode::xr_teleComu_init(){
 //遥操作数据转化并输出
 void RobotCtlNode::xr_teleComu_outp(){
     upperMonitor_dataSend = xrTeleComuCtl.trans_and_outp();
+    if (home_gripper_close_pending_ && !xrTeleComuCtl.joint_return_active()) {
+        home_gripper_close_pending_ = false;
+        if (motion_ready()) {
+            home_gripper_pub_->publish(home_gripper_close_);
+            RCLCPP_INFO(get_logger(), "Home trajectory timing ended; closing both grippers to calibrated targets");
+        } else {
+            RCLCPP_WARN(get_logger(), "Home gripper close skipped: servo safety is not ready");
+        }
+    }
+    if (policy_home_.active) policy_home_ready();
+    if (keyboard_return_in_progress_ && !xrTeleComuCtl.joint_return_active() &&
+        upperMonitor_dataSend.ctl_transMod == 4) {
+        keyboard_return_in_progress_ = false;
+        RCLCPP_INFO(get_logger(), "Keyboard home trajectory ended; VR control active, policy ownership remains blocked");
+    }
 }
 
 //四个遥操作消息回调函数
 void RobotCtlNode::lArm_xrTele_endPos_callback(const geometry_msgs::msg::Vector3::SharedPtr msg){
     if(!motion_ready() || bridge_transmit.active()){ return; }
+    if (std::isfinite(msg->x) && std::isfinite(msg->y) && std::isfinite(msg->z) &&
+        (msg->x != 0 || msg->y != 0 || msg->z != 0)) xrTeleComuCtl.release_vr_joint_hold();
 
     xrTeleComuCtl.apply_left_orientation_delta({
         msg->x, msg->y, msg->z
@@ -240,6 +288,8 @@ void RobotCtlNode::lArm_xrTele_endPos_callback(const geometry_msgs::msg::Vector3
 }
 void RobotCtlNode::rArm_xrTele_endPos_callback(const geometry_msgs::msg::Vector3::SharedPtr msg){
     if(!motion_ready() || bridge_transmit.active()){ return; }
+    if (std::isfinite(msg->x) && std::isfinite(msg->y) && std::isfinite(msg->z) &&
+        (msg->x != 0 || msg->y != 0 || msg->z != 0)) xrTeleComuCtl.release_vr_joint_hold();
 
     xrTeleComuCtl.apply_right_orientation_delta({
         msg->x, msg->y, msg->z
@@ -248,6 +298,8 @@ void RobotCtlNode::rArm_xrTele_endPos_callback(const geometry_msgs::msg::Vector3
 }
 void RobotCtlNode::lArm_xrTele_endDelta_callback(const geometry_msgs::msg::Vector3::SharedPtr msg){
     if(!motion_ready() || bridge_transmit.active() || !xrTeleComuCtl.accepts_vr_input()){ return; }
+    if (std::isfinite(msg->x) && std::isfinite(msg->y) && std::isfinite(msg->z) &&
+        (msg->x != 0 || msg->y != 0 || msg->z != 0)) xrTeleComuCtl.release_vr_joint_hold();
 
     xrTeleComuCtl.l_arm_end_delta[0] += msg->x;
     xrTeleComuCtl.l_arm_end_delta[1] += msg->y;
@@ -256,6 +308,8 @@ void RobotCtlNode::lArm_xrTele_endDelta_callback(const geometry_msgs::msg::Vecto
 }
 void RobotCtlNode::rArm_xrTele_endDelta_callback(const geometry_msgs::msg::Vector3::SharedPtr msg){
     if(!motion_ready() || bridge_transmit.active() || !xrTeleComuCtl.accepts_vr_input()){ return; }
+    if (std::isfinite(msg->x) && std::isfinite(msg->y) && std::isfinite(msg->z) &&
+        (msg->x != 0 || msg->y != 0 || msg->z != 0)) xrTeleComuCtl.release_vr_joint_hold();
 
 
     xrTeleComuCtl.r_arm_end_delta[0] += msg->x;
@@ -266,7 +320,7 @@ void RobotCtlNode::rArm_xrTele_endDelta_callback(const geometry_msgs::msg::Vecto
 
 //A 键回零触发回调：收到 True 后置位回零请求标志
 void RobotCtlNode::zeroReturnCmd_callback(const std_msgs::msg::Bool::SharedPtr msg){
-    if(!motion_ready() || bridge_transmit.active()){ return; }
+    if(!motion_ready() || bridge_transmit.active() || keyboard_return_in_progress_){ return; }
     if(msg->data){
         std::cout << " xr message get: A 键回零触发指令" << std::endl;
         xrTeleComuCtl.trigger_joint_return();

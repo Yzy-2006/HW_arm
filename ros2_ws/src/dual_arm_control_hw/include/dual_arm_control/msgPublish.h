@@ -392,6 +392,7 @@ class ArmCtlNode : public rclcpp::Node{
     private:
         //----------通讯变量----------
         ctl_msgs_hw::msg::MidNodeCtlMsgSend::SharedPtr stream_sample_;
+        ctl_msgs_hw::msg::MidNodeCtlMsgSend::SharedPtr policy_speed_override_source_;
         std::vector<double> stream_acceleration_;
         ControlHandoffEpoch control_handoff_;
 

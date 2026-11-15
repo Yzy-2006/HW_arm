@@ -80,6 +80,12 @@ make check
 `make preview` 也会占用三台相机，只用于开始前检查。它不能和 `make record` 或
 `make record-opencv` 同时运行。
 
+`config/recording.yaml` 的 `feedback_rate_hz: 120` 限制各 ROS 反馈话题进入 Python 的频率，
+队列只保留最新反馈；相机和保存采样仍为 30 Hz，底层控制循环频率不变。
+`diagnostics_interval_s: 0.0` 默认只在保存或报错时输出完整诊断，避免周期控制台输出阻塞采集。
+排查时可临时设置为 `2.0`。`capture_stage_ms(last/max)` 显示各采集阶段耗时，
+`receiver_step` 显示相机相邻接收帧号差；实际帧间隔仍按 100 ms 上限检查。
+
 ## 4. 录制一段有效示教
 
 1. 所有五个终端都稳定后，确认终端 4 的采集器和可选 OpenCV 窗口没有错误，且机器人

@@ -56,6 +56,15 @@ class StreamCache:
     def snapshot(self, now, max_age, max_skew, *, received_after=None):
         with self.lock:
             items = dict(self.items)
+        return self._snapshot(items, now, max_age, max_skew, received_after)
+
+    def capture(self, clock, max_age, max_skew, *, received_after=None):
+        with self.lock:
+            now, items = clock(), dict(self.items)
+        return now, self._snapshot(items, now, max_age, max_skew, received_after)
+
+    @staticmethod
+    def _snapshot(items, now, max_age, max_skew, received_after):
         missing = set(REQUIRED) - items.keys()
         if missing:
             raise ValueError(f"Missing streams: {sorted(missing)}")
@@ -162,6 +171,8 @@ class AsyncEpisodeWriter:
         self._write_last = self._write_total = self._write_max = 0.0
         self._camera_times = {}
         self._frame_camera_times = {}
+        self._enqueue_last = {}
+        self._enqueue_max = {}
         self.done = threading.Event()
         self._writer = EpisodeWriter(root, metadata, self._write_image)
         self.path = self._writer.path
@@ -180,21 +191,46 @@ class AsyncEpisodeWriter:
             if self._error is not None:
                 raise RuntimeError(self._error)
 
-    def add(self, sample, images, *, start_metadata=None):
-        with self._condition:
+    def _check_add(self, start_metadata):
+        self.check_error()
+        if self._terminal is not None:
+            raise RuntimeError("Episode is closing")
+        if len(self._queue) >= self.capacity:
+            self.abort(f"Writer queue full (capacity={self.capacity}); episode is incomplete")
             self.check_error()
-            if self._terminal is not None:
-                raise RuntimeError("Episode is closing")
-            if len(self._queue) >= self.capacity:
-                self.abort(f"Writer queue full (capacity={self.capacity}); episode is incomplete")
-                self.check_error()
-            # Own the queued data: camera/cache updates cannot change a captured frame.
-            if start_metadata is not None and self.frames:
-                raise RuntimeError("Capture start metadata must accompany the first frame")
-            self._queue.append((copy.deepcopy(sample), {name: img.copy() for name, img in images.items()},
-                                copy.deepcopy(start_metadata)))
+        if start_metadata is not None and self.frames:
+            raise RuntimeError("Capture start metadata must accompany the first frame")
+
+    def add(self, sample, images, *, start_metadata=None, copy_images=True):
+        started = time.monotonic()
+        with self._condition:
+            self._check_add(start_metadata)
+        timings = {"check_lock": time.monotonic() - started}
+        started = time.monotonic()
+        owned_sample, owned_start = copy.deepcopy(sample), copy.deepcopy(start_metadata)
+        timings["sample_copy"] = time.monotonic() - started
+        started = time.monotonic()
+        if copy_images:
+            owned_images = {name: img.copy() for name, img in images.items()}
+        else:
+            # Only the camera's owned, immutable snapshots may share storage.
+            # Keeping these references alive also keeps old exposures alive.
+            if any(img.flags.writeable or not img.flags.owndata for img in images.values()):
+                raise ValueError("Shared images must own their storage and be read-only")
+            owned_images = dict(images)
+        timings["image_prepare"] = time.monotonic() - started
+        started = time.monotonic()
+        with self._condition:
+            # Closing, abort or another producer may have changed the queue
+            # while snapshots were prepared outside the writer lock.
+            self._check_add(start_metadata)
+            self._queue.append((owned_sample, owned_images, owned_start))
             self.frames += 1
             self._high_water = max(self._high_water, len(self._queue))
+            timings["commit_lock"] = time.monotonic() - started
+            self._enqueue_last = timings
+            for name, elapsed in timings.items():
+                self._enqueue_max[name] = max(self._enqueue_max.get(name, 0.), elapsed)
             self._condition.notify()
 
     def stats(self):
@@ -202,7 +238,9 @@ class AsyncEpisodeWriter:
             return dict(accepted=self.frames, written=self._written, queued=len(self._queue),
                         capacity=self.capacity, high_water=self._high_water,
                         write_last=self._write_last, write_total=self._write_total,
-                        write_max=self._write_max, camera_times=dict(self._camera_times))
+                        write_max=self._write_max, camera_times=dict(self._camera_times),
+                        enqueue_times={name: (elapsed, self._enqueue_max[name])
+                                       for name, elapsed in self._enqueue_last.items()})
 
     def abort(self, reason):
         with self._condition:

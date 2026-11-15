@@ -1,7 +1,9 @@
 #include "robot_control/msgPublisher.h"
 #include "robot_control/startupPose.h"
+#include "robot_control/terminalKeys.h"
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <limits>
+#include <cstdlib>
 
 //===================================================================================
 //全局信息参量初始化
@@ -78,6 +80,7 @@ RobotCtlNode::RobotCtlNode() : Node("robot_upperMonitor") ,
     yaml_path_initCtlInte = ament_index_cpp::get_package_share_directory("ctl_msgs_hw") + "/config/controllerConfig.yaml";
     std::cout << " ===== 初始化控制流程参数配置 ===== " << std::endl;
     loadRobotCtlNodeFromYaml(yaml_path_initCtlInte);
+    policy_home_.load(YAML::LoadFile(yaml_path_initCtlInte));
     //全局变量赋值
     LARMDOF = msgPublish_ctl.lArm_Dof;
     RARMDOF = msgPublish_ctl.rArm_Dof;
@@ -431,6 +434,102 @@ void RobotCtlNode::fdback_get(){
     rclcpp::spin_some(this->get_node_base_interface());  // 非阻塞检查回调
 }
 
+void RobotCtlNode::prepare_home_gripper_close() {
+    const char* root = std::getenv("TOWEL_ROOT");
+    if (!root || !*root) throw std::runtime_error("TOWEL_ROOT missing; start with make robot");
+    const auto calibration = YAML::LoadFile(std::string(root) + "/teleop/VR_controller/config/grippers.yaml");
+    const auto controls = YAML::LoadFile(yaml_path_initCtlInte)["gripperControl"];
+    home_gripper_close_ = ctl_msgs_hw::msg::GripperCtl();
+    auto target = [&](const char* side, const char* key) {
+        const auto grip = calibration[side];
+        const auto control = controls[key];
+        const double closed = grip["closed_deg"].as<double>();
+        const double duration = grip["motion_time_s"].as<double>();
+        const double zero = control["zero_pos_deg"] ? control["zero_pos_deg"].as<double>() : 0.0;
+        const double lower = control["pos_min_deg"].as<double>();
+        const double upper = control["pos_max_deg"].as<double>();
+        if (!grip["calibrated"].as<bool>() || control["mode"].as<std::string>() != "position" ||
+            !std::isfinite(closed) || !std::isfinite(zero) || !std::isfinite(duration) || duration <= 0 ||
+            !std::isfinite(lower) || !std::isfinite(upper) || lower > upper || closed < lower || closed > upper)
+            throw std::runtime_error(std::string("Invalid home gripper calibration: ") + side);
+        home_gripper_close_.ctl_time = std::max(home_gripper_close_.ctl_time, duration);
+        return closed - zero;
+    };
+    home_gripper_close_.l_arm_gripper_pos = target("left", "l_gripper_ctl");
+    home_gripper_close_.r_arm_gripper_pos = target("right", "r_gripper_ctl");
+}
+
+bool RobotCtlNode::request_keyboard_home(bool resume_policy) {
+    if (shutdown_flag || shutting_down || ifInitTemp || ifForceToRetZero ||
+        keyboard_return_in_progress_ || policy_home_.active) {
+        RCLCPP_WARN(get_logger(), "H ignored: initialization, homing or shutdown is active");
+        return false;
+    }
+    const double age = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - last_joint_feedback_).count();
+    const auto finite_arm = [](const std::vector<double>& q) {
+        return q.size() == 7 && std::all_of(q.begin(), q.end(), [](double v) { return std::isfinite(v); });
+    };
+    if (!motion_ready() || !has_received_ret_ || age > 0.25 ||
+        !finite_arm(lArm_pos_fdback) || !finite_arm(rArm_pos_fdback)) {
+        RCLCPP_WARN(get_logger(), "H rejected: servo safety must be ready and joint feedback fresh/finite");
+        return false;
+    }
+    try {
+        prepare_home_gripper_close();
+    } catch (const std::exception& exc) {
+        RCLCPP_ERROR(get_logger(), "H rejected: cannot prepare gripper close: %s", exc.what());
+        return false;
+    }
+    // Latch ownership before requesting the existing smooth VR home trajectory.
+    bridge_transmit.set_vr_override(true);
+    xrTeleComuCtl.trigger_joint_return(resume_policy);
+    keyboard_return_in_progress_ = true;
+    home_gripper_close_pending_ = true;
+    if (resume_policy) {
+        policy_home_.begin();
+        RCLCPP_WARN(get_logger(), "Policy home: returning to zeropos.yaml; resuming %.1f s after trajectory timing ends (no arrival check)", policy_home_.resume_delay_s);
+    } else {
+        RCLCPP_WARN(get_logger(), "H: returning both arms to zeropos.yaml; policy blocked until explicit VR override release");
+    }
+    return true;
+}
+
+bool RobotCtlNode::policy_home_ready() {
+    const auto now = std::chrono::steady_clock::now();
+    return policy_home_.ready(std::chrono::duration<double>(now.time_since_epoch()).count(),
+        xrTeleComuCtl.joint_return_active());
+}
+
+bool RobotCtlNode::request_policy_intervention(std::string& reason) {
+    const auto now = std::chrono::steady_clock::now();
+    const double joint_age = std::chrono::duration<double>(now - last_joint_feedback_).count();
+    const double fk_age = std::chrono::duration<double>(now - last_desc_feedback).count();
+    const auto finite_arm = [](const std::vector<double>& q) {
+        return q.size() == 7 && std::all_of(q.begin(), q.end(), [](double v){ return std::isfinite(v); });
+    };
+    if (shutdown_flag || shutting_down || ifInitTemp || ifForceToRetZero ||
+        keyboard_return_in_progress_ || policy_home_.active) {
+        reason = "Initialization, home or shutdown is active";
+        return false;
+    }
+    if (!motion_ready() || !has_received_ret_ || joint_age > 0.25 ||
+        !finite_arm(lArm_pos_fdback) || !finite_arm(rArm_pos_fdback)) {
+        reason = "Servo safety and fresh finite joint feedback are required";
+        return false;
+    }
+    if (last_desc_feedback == std::chrono::steady_clock::time_point{} || fk_age > 0.25) {
+        reason = "Fresh FK feedback is required for VR intervention";
+        return false;
+    }
+    if (!xrTeleComuCtl.reanchor_from_feedback(&reason)) return false;
+    bridge_transmit.set_vr_override(true);
+    xrTeleComuCtl.hold_current_joints_for_vr(lArm_pos_fdback, rArm_pos_fdback);
+    reason = "VR takeover accepted; holding captured joints until new VR input";
+    RCLCPP_WARN(get_logger(), "%s", reason.c_str());
+    return true;
+}
+
 //--------------
 
 //-----辅助变量-----
@@ -466,12 +565,13 @@ void RobotCtlNode::run()
 
     int temp_i = 0;
 
-    // 键盘监听相关变量
+    TerminalKeys keyboard;
+    if (keyboard.enabled()) {
+        std::cout << "Keyboard: H = smooth home / take over policy; R = pause; E = resume (no Enter needed)" << std::endl;
+    } else {
+        RCLCPP_INFO(get_logger(), "No interactive terminal: keyboard controls disabled");
+    }
     bool is_paused = false;
-    bool key_pressed = false;
-    char last_key = '\0';
-    const int CHECK_INTERVAL = 10;  // 每10次循环检查一次键盘
-    int check_counter = 0;
 
 
     //开始ros2循环
@@ -481,45 +581,28 @@ void RobotCtlNode::run()
         //----------键盘监听代码----------
         //本代码段用于暂停程序执行
 
-        // 定期检查键盘输入（简化版本）
-        check_counter++;
-        if (check_counter >= CHECK_INTERVAL) {
-            check_counter = 0;
-            
-            // 使用非阻塞方式检查标准输入
-            struct timeval tv = {0, 0};
-            fd_set fds;
-            FD_ZERO(&fds);
-            FD_SET(STDIN_FILENO, &fds);
-            
-            int ready = select(STDIN_FILENO + 1, &fds, NULL, NULL, &tv);
-
-            
-            if (ready > 0) {
-                std::string input;
-                std::getline(std::cin, input);
-                
-                if (!input.empty()) {
-                    char ch = input[0];
-                    if (ch == 'r' || ch == 'R') {
-                        if (!is_paused) {
-                            is_paused = true;
-                            std::cout << "\n=== 程序已暂停 ===" << std::endl;
-                            std::cout << "按 E 键恢复输出" << std::endl;
-                        }
-                    } else if (ch == 'e' || ch == 'E') {
-                        if (is_paused) {
-                            is_paused = false;
-                            std::cout << "\n=== 程序已恢复 ===" << std::endl;
-                        }
-                    }
+        if (const auto key = keyboard.poll()) {
+            const char ch = *key;
+            if (ch == 'h' || ch == 'H') {
+                if (request_keyboard_home()) is_paused = false;
+            } else if (ch == 'r' || ch == 'R') {
+                if (!is_paused) {
+                    is_paused = true;
+                    std::cout << "\n=== 程序已暂停 ===" << std::endl;
+                    std::cout << "按 E 键恢复输出" << std::endl;
+                }
+            } else if (ch == 'e' || ch == 'E') {
+                if (is_paused) {
+                    is_paused = false;
+                    std::cout << "\n=== 程序已恢复 ===" << std::endl;
                 }
             }
         }
 
 
         //如果处于暂停状态，跳过控制输出
-        if (is_paused) {
+        if (policy_home_.active) is_paused = false;
+        if (is_paused && !shutdown_flag) {
             // 暂停状态下只处理必要的ROS回调
             rclcpp::spin_some(this->get_node_base_interface());
             loop_rate.sleep();
@@ -673,6 +756,7 @@ void RobotCtlNode::run()
 //通讯信息回调函数
 void RobotCtlNode::message_callback(const ctl_msgs_hw::msg::MidNodeCtlMsgRet::SharedPtr msg)
 {
+    last_joint_feedback_ = std::chrono::steady_clock::now();
     //关节信息反馈值装入
     for(int i = 0; i < LARMDOF; i++){
         lArm_pos_fdback[i] = msg->l_arm_pos_fdback[i];

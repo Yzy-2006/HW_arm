@@ -11,7 +11,8 @@ The sections below describe implemented protections; whether each is active depe
 - Python bridge/replay and servo use `protection_mode: speed_only`. Python heartbeat readiness/age,
   feedback/image age and skew, position/acceleration and feedback-relative target checks are bypassed.
 - Model deployment additionally sets `policy_disable_all_speed_checks: true`, bypassing Python
-  model speed checks and native command/feedback speed checks for fresh model commands.
+  model speed checks and native command/feedback speed checks while the policy owns control,
+  including policy holds and trajectory source timeouts.
   Homing, VR and replay retain their separately configured speed checks.
 - `slow_factor` only scales the feedback-relative target allowance. With that allowance disabled,
   it does not reduce trajectory speed. Replay `--speed` changes the source timeline.
@@ -348,9 +349,11 @@ The model bridge sets `policy_disable_all_speed_checks: true` in
 `bridge.motion_safety`. This disables policy velocity preflight, successive-command
 and analytic velocity checks, and carries a source-scoped override through the
 controllers to disable native command, position-step and feedback speed checks.
-The override requires a model command with an original timestamp less than 0.25 s
-old; forwarding the same packet does not extend its lifetime. Hold commands,
-VR/replay commands or source expiry restore the configured native speed mask.
+The setting follows policy ownership, including holds and expired trajectory samples.
+Expired samples still enter hold rather than continuing an old trajectory. The servo
+leases the override to the current controller packet timestamp, independently of the
+original trajectory timestamp. VR/replay takeover or 0.25 s without valid controller
+transport restores the configured native speed mask.
 Startup homing retains its configured limits. Non-finite data, protocol bounds
 and explicit stops remain enforced; the override cannot clear a latched fault.
 `policy_command_speed_check: false` only disables Python policy speed checks when

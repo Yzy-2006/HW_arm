@@ -19,7 +19,8 @@ RealSense + ROS2 feedback -> bridge -> TCP -> pi05 或 act worker
 | `make pi05-bench` | 离线测试 PI05 推理速度，不发送动作 | `pi05-openpi` |
 | `make act` | 启动 LeRobot/PyTorch ACT worker | `lerobot` |
 | `make bridge` | 启动通用 policy bridge，dry-run，不发机器人动作 | `.venv-robot` |
-| `make motion` | 启动通用 policy bridge 并允许真实动作 | `.venv-robot` |
+| `make motion` | 自动交还模型控制权，成功后启动 bridge 并允许真实动作 | `.venv-robot` |
+| `make vr-intervene` | 连接 VR 待命；丢弃键结束部署并接管，B 录制/保存，补采后手动重启部署 | `.venv-robot` |
 
 两个 worker 使用同一个默认端口 `127.0.0.1:8765`，同一时间只启动其中一个。
 
@@ -28,17 +29,81 @@ Thor 环境检查、离线测速和持续负载方法见 [Thor PI05 测速指南
 常用变量：
 
 ```bash
-make pi05 PI05_MODEL=$HOME/models/pi05-encos-fold-towel-93
-make pi05 PI05_CHECKPOINT=step-18000 PI05_PORT=8766
+make pi05
+make pi05 PI05_PORT=8766
 make act ACT_CHECKPOINT=/absolute/path/to/pretrained_model ACT_PORT=8766
 make motion PI05_SLOW_FACTOR=0.1
 ```
 
 `make bridge ARGS=...` 和 `make motion ARGS=...` 支持传递额外 bridge 参数。
+`make motion` 自动调用 `/dexbotCtl/vr_override`（`data: false`），仅在服务返回
+`success: true` 后启动 bridge。需先启动 `make servo`、`make arms`、`make robot` 并完成初始化；
+服务不可用、响应超时或拒绝切换时退出，不自动清除故障或重启控制节点。
 
-需要切换 VR 时，先用 `Ctrl+C` 退出 `make motion`，再启动 `make vr` 并执行
-`make vr-takeover`。需要补采时单独启动 `make record`，完整操作见
-[VR 接管与补采](POLICY_INTERVENTION.md)。部署与独立采集器不能同时占用相机。
+需要部署中接管时，保持 motion 运行，另开终端执行 `make vr-intervene`。
+左 A 丢弃键结束部署并接管，左 B 开始/保存补采。补采会话专用单线程执行器，
+结束后退出原 motion 终端里的录制会话，再手动执行 `make pi05` / `make act` 和 `make motion`。
+内置采集器共享部署相机，不另开 `make record`；完整操作见[VR 接管与补采](POLICY_INTERVENTION.md)。
+
+## Motion 终端回零与自动恢复
+
+仅在模型仍控制、尚未被 VR 接管时，在 `make motion` 前台终端按 `H` 或 `h`，无需回车：
+
+1. 暂停新的模型推理和机械臂、夹爪指令，丢弃旧 chunk 及回零期间完成的旧推理结果。
+2. 机器人接管双臂，复用 `vrJointReturn` 的平滑轨迹回到 `zeropos.yaml`，随后保持关节零位。
+3. 回零轨迹的发送计时结束时，按夹爪标定配置闭合双夹爪；再等待 3 秒，自动交还模型控制权，不检查机械臂或夹爪实际是否到位、静止。
+4. 从当前反馈与最新图像重新推理，重置 worker 的动作队列，再继续控制。
+
+回零和等待期间重复按 H 不重复触发。`make bridge` dry-run 不执行此按键动作；
+无交互终端时不监听键盘。`make vr-intervene` 可持续待命；普通 `make vr` 须停止，避免夹爪指令冲突。
+VR 接管后部署 H 键监听关闭，不再自动恢复模型；补采保存后手动重启部署。
+
+等待参数位于 `ros2_ws/src/ctl_msgs_hw/config/controllerConfig.yaml`：
+
+```yaml
+policyHome:
+  resume_delay_s: 3.0
+```
+
+3 秒从整段回零轨迹发送时段结束开始计时，不是从按下 H 开始计时。
+`config/pi05_deployment.yaml` 的 `bridge.keyboard_home.timeout_s: 30.0` 限定整次操作的等待时间。
+服务拒绝、底层故障或超时后模型保持暂停，不自动清除故障；Ctrl+C 退出时也不会恢复模型。
+当前仅更新并编译 robot 控制节点后才支持该流程；首次更新需重启 `make robot` 和 `make motion`。
+以后修改 `policyHome` 后更新安装配置并重启 robot；修改 bridge 超时后重启 motion。
+
+## Robot 终端键盘回零
+
+修改控制源码后，先停止正在运行的 `make robot`，编译更新再重新启动（编译不会发送动作）：
+
+```bash
+make build
+make robot
+```
+
+在 `make robot` 的前台终端按 `H` 或 `h`，无需回车。双臂复用 VR 右 A 键的平滑关节回零：
+目标是 `ctl_msgs_hw/config/zeropos.yaml`，并非把所有关节目标设为数值 0。
+轨迹参数读取 `controllerConfig.yaml` 的 `vrJointReturn`，当前运动段为 6 秒，另有起止驻留。
+该按键会执行真实动作，与 bridge 是否 dry-run 无关；轨迹发送计时结束时闭合双夹爪，不检查是否到位。
+两个入口的闭合角度均读取 `teleop/VR_controller/config/grippers.yaml` 的 `closed_deg`，
+按底层 `gripperControl` 的 `zero_pos_deg` 换算指令；夹爪须已标定且使用 position 模式。
+`make robot` 会设置读取配置所需的 `TOWEL_ROOT`；标定配置无效时 H 请求会在回零开始前被拒绝。
+
+如果 policy bridge 正在控制，H 会锁定 VR 控制权并清空缓存的 bridge 目标，避免模型覆盖回零。
+随后退出 `make motion`，避免它继续发布夹爪指令。回零轨迹时段结束后沿用 VR 流程恢复
+笛卡尔控制；若 VR 发布器仍运行，其后续输入可以继续控制机械臂。轨迹时段结束日志不代表
+已经通过反馈确认精确到达零位。
+
+初始化、回零或关机期间不重复触发；底层安全状态须 ready，关节反馈须有限且不超过 0.25 秒。
+回零期间拒绝控制权切换服务请求，结束后不会自动恢复模型。
+需要恢复部署时，先停止 VR 输入和旧 motion bridge，等待回零轨迹结束，再执行：
+
+```bash
+make motion
+```
+
+命令自动申请模型控制权，确认服务成功后启动 bridge。不需要重启推理 worker。
+原有 `R` 暂停输出、`E` 恢复输出也改为单键即时响应；它们不是急停。
+无交互 TTY（例如重定向输入）时禁用键盘监听，正常退出时恢复终端设置。
 
 ## 环境分工
 
@@ -65,6 +130,9 @@ make preview
 
 ## 部署 PI05
 
+完整 321 条数据续训到 50k 的新模型见 [部署 full321 50k 模型](PI05_DEPLOYMENT.md#部署-full321-50k-模型)，
+现在为默认模型，直接执行 `make pi05`，入口为 `inference_full321.py`，推理积分为 20 步。
+
 混合 159 条数据的 10k 模型见 [部署混合 159 条数据的 10k 模型](PI05_DEPLOYMENT.md#部署混合-159-条数据的-10k-模型)，
 使用 `PI05_ARGS="--inference-entry inference_mix159.py --num-steps 10"`。
 
@@ -72,11 +140,11 @@ make preview
 该模型需要 `inference_flat_towel.py`，使用 `PI05_ARGS="--inference-entry inference_flat_towel.py"`
 或 YAML 的 `worker.inference_entry` 选择。
 
-默认模型目录是 `$HOME/models/pi05-encos-fold-towel-93`，必须包含 `inference.py` 和
-`step-19999/params/`。首次安装环境：
+默认模型目录是 `$HOME/models/pi05-full321-50k`，必须包含 `inference_full321.py`、`inference.py` 和
+`full321003-resume10k-to50k-step-50000/params/` 及配套 assets。首次安装环境：
 
 ```bash
-MODEL=$HOME/models/pi05-encos-fold-towel-93
+MODEL=$HOME/models/pi05-full321-50k
 conda create -n pi05-openpi python=3.11 -y
 conda run --no-capture-output -n pi05-openpi \
   python -m pip install -r "$MODEL/requirements-inference.txt"
@@ -233,8 +301,14 @@ bridge 会使用 URDF 关节限位、每周期步长限制和已标定的夹爪 
 先停止 `make motion` / `make bridge`，再在 `make pi05` / `make act` 终端按
 `Ctrl+C`。停止 bridge 仅断开推理连接，worker 会继续保留模型，便于重连。
 
-worker 启动日志会显示 PID 和 Python 路径。启动器转发 `SIGINT` / `SIGTERM`；
-若 worker 5 秒后仍未退出，发送 `SIGTERM`，再等 5 秒后强制终止。等待
+VR 丢弃键接管时，自动停止 GPU worker 和管理进程，并关闭部署 bridge 的订阅、定时器和线程池。
+原 motion 终端只保留单线程遥操补采会话，等待日志 `VR recording-only session ready` 后开始录制。
+补采完成后保存、Ctrl+C 退出会话，再手动执行 `make pi05` / `make act` 和 `make motion`。
+默认管理端口为 `8766`。
+详细流程及配置见[部署转 VR 遥操作与补采](POLICY_INTERVENTION.md)。
+
+worker 启动日志会显示 PID 和 Python 路径。管理进程收到退出请求后向 worker 发送 `SIGTERM`；
+若 worker 5 秒后仍未退出，则强制终止。等待
 `Worker process reaped` 日志后再启动下一个模型。端口会在加载模型前预留，避免
 重复启动在占用显存后才发现端口冲突。
 

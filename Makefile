@@ -16,12 +16,12 @@ DATASET_ROOT ?= $(ROOT)/data/raw/fold_towel
 EXPORT_CONFIG ?= $(ROOT)/config/export_lerobot.yaml
 MIN_JOINT_DELTA_RAD ?= 0.02
 PI05_CONFIG ?= $(ROOT)/config/pi05_deployment.yaml
-PI05_MODEL ?= $(HOME)/models/pi05-encos-fold-towel-93
+PI05_MODEL ?= $(HOME)/models/pi05-full321-50k
 PI05_ENV ?= pi05-openpi
-PI05_CHECKPOINT ?= step-19999
+PI05_CHECKPOINT ?= full321003-resume10k-to50k-step-50000
 PI05_HOST ?= 127.0.0.1
 PI05_PORT ?= 8765
-PI05_ARGS ?=
+PI05_ARGS ?= --inference-entry inference_full321.py --num-steps 20
 BENCH_ARGS ?=
 ACT_CHECKPOINT ?= $(ROOT)/outputs/act_fold_towel_b12/checkpoints/100000/pretrained_model
 ACT_ENV ?= lerobot
@@ -45,7 +45,7 @@ endef
 
 .PHONY: help env check check-control check-record check-visualize build test launch visualize sim-check sim-demo sim teleop experiment teleop-watch preview camera-list servo arms robot vr vr-opencv vr-debug record record-opencv record-rviz watch watch-arm calibrate calibrate-arm-zero scan-arm-can save-arm-zero validate-data export-data filter-data pi05 pi05-bench act bridge motion replay clean-build
 
-.PHONY: vr-takeover
+.PHONY: vr-takeover vr-intervene
 
 help:
 	@echo "Towel task commands"
@@ -53,6 +53,7 @@ help:
 	@echo "  make build                  Build the ROS workspace"
 	@echo "  make vr-debug               Diagnose XR controller events without publishing control commands"
 	@echo "  make vr-takeover            Request VR ownership anchored to current feedback after stopping motion"
+	@echo "  make vr-intervene           Discard button ends deployment for VR-only capture; B records/saves; restart deployment manually"
 	@echo "  make vr-opencv              Compatibility alias for make vr; cameras come from make record"
 	@echo "  make watch                  Observe /towel/gripper_state (override WATCH_TOPIC=... )"
 	@echo "  make watch-arm SIDE=both RATE=3  Print one or both arms' joint angles at a controlled rate"
@@ -85,7 +86,8 @@ help:
 	@echo "  make pi05-bench                   Benchmark PI05 inference without robot hardware"
 	@echo "  make act                          Start the LeRobot ACT worker"
 	@echo "  make bridge                       Start the policy bridge in dry-run mode"
-	@echo "  make motion                       Start the policy bridge with motion enabled"
+	@echo "  make motion                       Request policy ownership, then start the motion bridge"
+	@echo "    H in motion terminal            Pause policy, return home, resume after trajectory timing + 3 s"
 	@echo "  make motion PI05_SLOW_FACTOR=0.1  Scale feedback-relative allowance (inactive in speed_only; not playback speed)"
 	@echo "  make vr                           Start standalone VR; after stopping motion run make vr-takeover"
 	@echo "  make record ARGS=\"--dataset-root data/raw/interventions\"  Record manual VR corrections"
@@ -255,6 +257,10 @@ vr-takeover:
 	@$(ROBOT_ENV)
 	@ros2 service call /dexbotCtl/vr_override std_srvs/srv/SetBool "{data: true}"
 
+vr-intervene:
+	@$(ROBOT_ENV)
+	@python3 "$(ROOT)/teleop/VR_controller/vr_pose_increment_publisher.py" --policy-intervention $(ARGS)
+
 vr-opencv:
 	@echo "相机窗口由 make record 启动；vr-opencv 现在只兼容转发到 make vr" >&2
 	@$(MAKE) --no-print-directory vr
@@ -284,7 +290,7 @@ pi05:
 	@if ! command -v conda >/dev/null 2>&1; then echo "conda command not found; initialize Conda before running make pi05" >&2; exit 2; fi
 	@if [[ ! -d "$(PI05_MODEL)/$(PI05_CHECKPOINT)/params" ]]; then echo "OpenPI checkpoint not found: $(PI05_MODEL)/$(PI05_CHECKPOINT)/params" >&2; exit 2; fi
 	cd "$(ROOT)"
-	exec python3 scripts/run_policy_worker.py --env "$(PI05_ENV)" -- --config "$(PI05_CONFIG)" --model "$(PI05_MODEL)" --checkpoint "$(PI05_CHECKPOINT)" --host "$(PI05_HOST)" --port "$(PI05_PORT)" $(PI05_ARGS)
+	exec python3 scripts/run_policy_worker.py --env "$(PI05_ENV)" --manage -- --config "$(PI05_CONFIG)" --model "$(PI05_MODEL)" --checkpoint "$(PI05_CHECKPOINT)" --host "$(PI05_HOST)" --port "$(PI05_PORT)" $(PI05_ARGS)
 
 pi05-bench:
 	set -e
@@ -298,6 +304,7 @@ bridge:
 motion:
 	@if [[ -n "$(PI05_SLOW_FACTOR)" && ( "$(PI05_SLOW_FACTOR)" == "0" || "$(PI05_SLOW_FACTOR)" == -* ) ]]; then echo "PI05_SLOW_FACTOR must be greater than 0" >&2; exit 2; fi
 	@$(ROBOT_ENV)
+	@python3 "$(ROOT)/scripts/request_policy_control.py" || exit $$?
 	@python3 "$(ROOT)/deployment/pi05_bridge.py" --config "$(PI05_CONFIG)" --motion $(if $(PI05_SLOW_FACTOR),--slow-factor $(PI05_SLOW_FACTOR),) $(ARGS)
 
 replay:
@@ -309,7 +316,7 @@ act:
 	@if ! command -v conda >/dev/null 2>&1; then echo "conda command not found; initialize Conda before running make act" >&2; exit 2; fi
 	@if [[ ! -f "$(ACT_CHECKPOINT)/config.json" ]]; then echo "ACT checkpoint not found: $(ACT_CHECKPOINT)" >&2; exit 2; fi
 	cd "$(ROOT)"
-	exec python3 scripts/run_policy_worker.py --env "$(ACT_ENV)" -- --model "$(ACT_CHECKPOINT)" --host "$(ACT_HOST)" --port "$(ACT_PORT)" $(ACT_ARGS)
+	exec python3 scripts/run_policy_worker.py --env "$(ACT_ENV)" --manage -- --config "$(PI05_CONFIG)" --model "$(ACT_CHECKPOINT)" --host "$(ACT_HOST)" --port "$(ACT_PORT)" $(ACT_ARGS)
 
 clean-build:
 	@echo "Build artifacts are not deleted automatically. Remove only the specific ros2_ws/build, install and log directories when intentional."

@@ -30,12 +30,14 @@
 #include <iomanip>        // std::setprecision
 
 #include "std_srvs/srv/set_bool.hpp"
+#include "std_srvs/srv/trigger.hpp"
 #include "ctl_msgs_hw/msg/ctl_information.hpp"
 #include "ctl_msgs_hw/msg/ret_information.hpp"
 #include "ctl_msgs_hw/msg/dbg_information.hpp"
 #include "ctl_msgs_hw/msg/mid_node_ctl_msg_send.hpp"
 #include "ctl_msgs_hw/msg/mid_node_ctl_msg_ret.hpp"
 #include "ctl_msgs_hw/msg/fk_data_pub.hpp"
+#include "ctl_msgs_hw/msg/gripper_ctl.hpp"
 
 #include "controller/upper_Transmit.h"
 #include "messageType/chassis_msgType.h"
@@ -48,6 +50,7 @@
 #include "controller/demoTraj.h"
 #include "controller/xrTelepercationCom.h"
 #include "controller/ctlTransmit.h"
+#include "robot_control/policyHomeGuard.h"
 
 #include <chrono>
 #include <thread>
@@ -180,6 +183,16 @@ class RobotCtlNode : public rclcpp::Node{
         rclcpp::Subscription<ctl_msgs_hw::msg::MidNodeCtlMsgRet>::SharedPtr upperMonitor_Msg_get;
 
         bool has_received_ret_;
+        std::chrono::steady_clock::time_point last_joint_feedback_{};
+        bool keyboard_return_in_progress_ = false;
+        bool home_gripper_close_pending_ = false;
+        ctl_msgs_hw::msg::GripperCtl home_gripper_close_;
+        rclcpp::Publisher<ctl_msgs_hw::msg::GripperCtl>::SharedPtr home_gripper_pub_;
+        PolicyHomeGuard policy_home_;
+        void prepare_home_gripper_close();
+        bool request_keyboard_home(bool resume_policy = false);
+        bool policy_home_ready();
+        bool request_policy_intervention(std::string& reason);
 
         //----------通讯信息处理变量----------
         //上层节点信息传输
@@ -224,6 +237,8 @@ class RobotCtlNode : public rclcpp::Node{
         //A 键回零触发订阅
         rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr zeroReturnCmd_sub;
         rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr vr_override_service;
+        rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr policy_home_service_;
+        rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr policy_intervention_service_;
         std::chrono::steady_clock::time_point last_desc_feedback{};
         //末端笛卡尔位姿反馈订阅（回零完成后重新锚定笛卡尔遥操作基准）
         rclcpp::Subscription<ctl_msgs_hw::msg::FkDataPub>::SharedPtr endDescPub_sub;

@@ -238,7 +238,7 @@ def test_recorder_callbacks_and_episode_boundaries(tmp_path,monkeypatch,diagnost
     class FakeNode:
         def __init__(self,name): self.callbacks={}
         def create_publisher(self,*args): return NS(publish=lambda msg:None)
-        def create_timer(self,*args): pass
+        def create_timer(self,*args,**kwargs): pass
         def create_service(self,*args): pass
         def create_subscription(self,typ,topic,callback,qos,**kwargs): self.callbacks[topic]=(typ,callback)
         def get_clock(self):return NS(now=lambda:NS(nanoseconds=1000000000))

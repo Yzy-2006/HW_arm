@@ -19,3 +19,13 @@ def test_shutdown_drains_queued_callbacks_before_destroying_guard():
 
     drain_executor(SimpleNamespace(_executor=pool, _futures=futures, shutdown=shutdown))
     assert events[-1] == 'destroy'
+
+
+def test_single_threaded_shutdown_uses_executor_without_thread_pool():
+    events = []
+
+    def shutdown():
+        events.append('destroy')
+
+    drain_executor(SimpleNamespace(_futures=[], shutdown=shutdown))
+    assert events == ['destroy']

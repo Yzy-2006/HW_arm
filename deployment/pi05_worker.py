@@ -29,7 +29,9 @@ from pi05_common import decode_bytes, recv_packet, send_packet
 
 
 LOG = logging.getLogger("pi05_worker")
-OPENPI_INFERENCE_ENTRIES = ("inference.py", "inference_flat_towel.py", "inference_mix159.py")
+OPENPI_INFERENCE_ENTRIES = (
+    "inference.py", "inference_flat_towel.py", "inference_mix159.py", "inference_full321.py",
+)
 
 
 def _request_shutdown(_signum, _frame):

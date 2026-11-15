@@ -1,6 +1,6 @@
 # PI05 deployment defaults. Keep this file separate from recording.yaml: the
-# bridge opens the cameras itself and must not start the passive recorder too.
-model_path: "$HOME/models/pi05-encos-fold-towel-93"
+# bridge owns the cameras; its intervention recorder shares those same streams.
+model_path: "$HOME/models/pi05-full321-50k"
 task: "fold a towel with both arms"
 
 # Paths may be absolute or relative to the repository root.
@@ -11,10 +11,11 @@ pd_config: ros2_ws/src/ctl_msgs_hw/config/initialPD.yaml
 urdf: ros2_ws/src/dual_arm_hw/urdf/dual_arm.urdf
 
 worker:
-  # New flat-towel B model uses inference_flat_towel.py instead.
-  inference_entry: inference.py
+  # Full321 50k uses its matching normalization statistics.
+  inference_entry: inference_full321.py
   host: 127.0.0.1
   port: 8765
+  control_port: null  # null uses inference port + 1; lightweight process manager.
   token: ""
   timeout_s: 5.0
   # Flow-matching integration steps per inference, not output action count.
@@ -24,6 +25,14 @@ worker:
   action_horizon: 50
 
 bridge:
+  intervention:
+    enabled: true
+    dataset_root: data/raw/interventions
+    takeover_timeout_s: 5.0
+    stop_worker: true  # Exit worker/manager, then destroy deployment bridge for VR-only recording.
+    worker_stop_timeout_s: 15.0
+  keyboard_home:
+    timeout_s: 30.0  # H pauses policy commands until home and automatic handoff succeed.
   rate_hz: 30
   # Time spacing of predicted actions is 1 / action_rate_hz seconds.
   # Keep 30 to match the dataset; independent of the bridge control timer.
@@ -45,21 +54,21 @@ bridge:
     settle_time_s: 0.2
     settle_timeout_s: 10.0
   motion_safety:
-    policy_disable_all_speed_checks: true  # Model stream only, including servo command/feedback checks.
+    policy_disable_all_speed_checks: true  # Policy ownership, including holds and servo command/feedback checks.
     policy_command_speed_check: false  # Model bridge only; replay and servo limits remain configured separately.
     protection_mode: speed_only  # Disable non-speed software trips; explicit faults/stops remain latched.
     speed_limit_enabled_per_arm: [true, true, true, true, false, false, false]
     check_position_limits: false  # Disable absolute joint position checks and URDF clipping.
-    max_velocity_rad_s: 5.0
+    max_velocity_rad_s: 10.0
     max_acceleration_rad_s2: null  # Disable acceleration trips; velocity checks remain active.
     max_tracking_error_rad: 0.3
     tracking_timeout_s: 0.1
   state_timeout_s: 0.25  # Used in full mode; speed_only accepts cached finite feedback.
   # Refresh the horizon asynchronously; control and feedback never wait for it.
-  replan_interval_s: 0.5
+  replan_interval_s: 0.8 # Approximately 1 inference request per second.
   # Full mode only: reject actions older than this observation age.
   max_action_age_s: 1.0
-  jpeg_quality: 80
+  jpeg_quality: 90
   # Policy deployment defaults.
   pd_level: mid
   rigidity_mode: 2

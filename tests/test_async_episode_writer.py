@@ -122,3 +122,99 @@ def test_too_short_stays_partial_and_nonfinite_samples_are_rejected(tmp_path):
     writer.add({'timestamp_s': float('nan')}, {})
     assert writer.done.wait(2)
     assert read_metadata(writer)['status'] == 'aborted'
+
+
+def test_owned_read_only_camera_images_are_retained_without_another_copy(tmp_path):
+    class CameraImage(np.ndarray):
+        def copy(self, *args, **kwargs):
+            pytest.fail("An immutable camera exposure must not be copied again during capture")
+
+    image = np.ndarray.__new__(CameraImage, shape=(2, 2, 3), dtype=np.uint8)
+    image.fill(7)
+    image.setflags(write=False)
+    entered, release = threading.Event(), threading.Event()
+    written = []
+
+    def write(path, pixels):
+        entered.set()
+        assert release.wait(2)
+        written.append(pixels)
+        return True
+
+    writer = AsyncEpisodeWriter(tmp_path, {}, write)
+    images = {'head': image}
+    sample = {'timestamp_s': 0., 'nested': {'q': [1.]}}
+    try:
+        writer.add(sample, images, copy_images=False)
+        assert entered.wait(1)
+        images['head'] = np.zeros((2, 2, 3), np.uint8)
+        sample['nested']['q'][0] = 9.
+        with pytest.raises(ValueError):
+            image[:] = 3
+        release.set()
+        path = writer.finish()
+        assert written[0] is image and np.all(written[0] == 7)
+        row = json.loads((path / 'frames.jsonl').read_text().strip())
+        assert row['nested']['q'] == [1.]
+        assert set(writer.stats()['enqueue_times']) == {
+            'check_lock', 'sample_copy', 'image_prepare', 'commit_lock'}
+    finally:
+        release.set()
+        writer.abort('test cleanup')
+        assert writer.done.wait(2)
+
+
+@pytest.mark.parametrize('kind', ['mutable', 'aliased_view'])
+def test_shared_images_reject_mutable_or_aliased_storage(tmp_path, kind):
+    owner = np.zeros((2, 2, 3), np.uint8)
+    image = owner if kind == 'mutable' else owner.view()
+    if kind == 'aliased_view':
+        image.setflags(write=False)
+    writer = AsyncEpisodeWriter(tmp_path, {}, lambda *args: True)
+    try:
+        with pytest.raises(ValueError, match='own their storage and be read-only'):
+            writer.add({}, {'head': image}, copy_images=False)
+        assert writer.frames == 0
+    finally:
+        writer.abort('test cleanup')
+        assert writer.done.wait(2)
+
+
+def test_slow_image_preparation_does_not_hold_writer_lock_and_abort_wins(tmp_path):
+    entered, release, accessed = threading.Event(), threading.Event(), threading.Event()
+    errors = []
+
+    class SlowImage:
+        def copy(self):
+            entered.set()
+            assert release.wait(2)
+            return np.zeros((2, 2, 3), np.uint8)
+
+    writer = AsyncEpisodeWriter(tmp_path, {}, lambda *args: True)
+
+    def add():
+        try:
+            writer.add({}, {'head': SlowImage()})
+        except RuntimeError as exc:
+            errors.append(str(exc))
+
+    def abort():
+        writer.stats()
+        writer.abort('cancel during image preparation')
+        accessed.set()
+
+    adding, aborting = threading.Thread(target=add), threading.Thread(target=abort)
+    try:
+        adding.start()
+        assert entered.wait(1)
+        aborting.start()
+        assert accessed.wait(1), 'Image copying must not block writer stats or cancellation'
+    finally:
+        release.set()
+        adding.join(2)
+        if aborting.ident is not None:
+            aborting.join(2)
+        writer.abort('test cleanup')
+        assert writer.done.wait(2)
+    assert errors == ['cancel during image preparation']
+    assert writer.frames == 0 and read_metadata(writer)['status'] == 'aborted'

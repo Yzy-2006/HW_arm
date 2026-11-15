@@ -1304,11 +1304,13 @@ void ServoNode::message_callback(const ctl_msgs_hw::msg::CtlInformation::SharedP
     }
 
     const bool speed_override_before = arm_safety.policy_speed_override_active();
+    // A policy hold can outlive its source sample. Lease this setting to the
+    // live controller transport, while retaining source identity for takeover.
     arm_safety.policy_speed_override(
         msg->policy_speed_checks_disabled && msg->trajectory_header.frame_id == "pi05_policy",
-        (now - msg->trajectory_header.stamp).seconds(), arm_safety_now());
+        latency.seconds(), arm_safety_now());
     if (speed_override_before != arm_safety.policy_speed_override_active())
-        log_async(RCUTILS_LOG_SEVERITY_WARN, "Policy software speed checks: %s (source-scoped override)",
+        log_async(RCUTILS_LOG_SEVERITY_WARN, "Policy software speed checks: %s (controller ownership override)",
                     arm_safety.policy_speed_override_active() ? "disabled" : "restored");
 
     if (homing_handoff_.receive_epoch(msg->handoff_epoch, servo_desMsg_orig, arm_safety)) {

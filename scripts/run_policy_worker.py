@@ -9,10 +9,44 @@ import os
 from pathlib import Path
 import signal
 import subprocess
+import sys
+import threading
 
 
 LOG = logging.getLogger("policy_worker_launcher")
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "deployment"))
+
+from worker_lifecycle import WorkerManagementServer, WorkerProcess
+
+
+def run_managed(command, host, port, token="", shutdown_timeout=5.0):
+    worker = WorkerProcess(command, shutdown_timeout)
+    requested_signal = threading.Event()
+    previous_handlers = {sig: signal.signal(sig, lambda *_: requested_signal.set())
+                         for sig in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        # Reserve management before spawning a model, so duplicate launchers
+        # cannot allocate a second GPU context for the same endpoint.
+        with WorkerManagementServer((host, port), worker, token, on_shutdown=requested_signal.set) as server:
+            worker.start()
+            thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": .1}, daemon=True)
+            thread.start()
+            LOG.info("Worker management listening on %s:%d; VR takeover shuts worker and manager down", host, port)
+            try:
+                requested_signal.wait()
+            finally:
+                server.shutdown()
+                worker.close()
+                thread.join()
+    except OSError:
+        LOG.exception("Cannot start worker manager")
+        return 2
+    finally:
+        worker.close()
+        for sig, handler in previous_handlers.items():
+            signal.signal(sig, handler)
+    return 0
 
 
 def run_supervised(command: list[str], shutdown_timeout: float = 5.0) -> int:
@@ -71,6 +105,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--env", required=True, help="Conda environment name")
     parser.add_argument("--benchmark", action="store_true", help="Run the offline PI05 benchmark instead of the server")
+    parser.add_argument("--manage", action="store_true", help="Expose worker management; VR takeover exits worker and manager")
+    parser.add_argument("--control-port", type=int, help="Management TCP port (default: inference port + 1)")
     parser.add_argument("--shutdown-timeout", type=float, default=5.0)
     parser.add_argument("worker_args", nargs=argparse.REMAINDER)
     args = parser.parse_args()
@@ -94,6 +130,23 @@ def main() -> int:
         "policy-worker", conda_base, args.env,
         str(ROOT / "deployment" / ("benchmark_pi05.py" if args.benchmark else "pi05_worker.py")), *worker_args,
     ]
+    if args.manage and not args.benchmark:
+        endpoint_parser = argparse.ArgumentParser(add_help=False)
+        endpoint_parser.add_argument("--host", default="127.0.0.1")
+        endpoint_parser.add_argument("--port", type=int, default=8765)
+        endpoint_parser.add_argument("--token", default="")
+        endpoint_parser.add_argument("--config")
+        endpoint, _ = endpoint_parser.parse_known_args(worker_args)
+        control_port = args.control_port
+        if control_port is None and endpoint.config:
+            import yaml
+            config = yaml.safe_load(Path(endpoint.config).expanduser().read_text())
+            control_port = config.get("worker", {}).get("control_port")
+        if control_port is None:
+            control_port = endpoint.port + 1
+        if type(control_port) is not int or not 1 <= control_port <= 65535 or control_port == endpoint.port:
+            parser.error("Management port must be in 1..65535 and different from the inference port")
+        return run_managed(command, endpoint.host, control_port, endpoint.token, args.shutdown_timeout)
     return run_supervised(command, args.shutdown_timeout)
 
 

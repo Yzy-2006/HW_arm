@@ -35,7 +35,7 @@ def recorder(monkeypatch, tmp_path):
     modules = {
         'rclpy': {}, 'rclpy.node': {'Node': Node},
         'rclpy.callback_groups': {'MutuallyExclusiveCallbackGroup': object},
-        'rclpy.qos': {'qos_profile_sensor_data': object()},
+        'rclpy.qos': {'qos_profile_sensor_data': NS(depth=5)},
         'ctl_msgs_hw': {}, 'ctl_msgs_hw.msg': {name: NS for name in (
             'CtlInformation', 'FkDataPub', 'MidNodeCtlMsgRet', 'MidNodeCtlMsgSend')},
         'std_msgs': {}, 'std_msgs.msg': {'Int8MultiArray': NS, 'Bool': NS},
@@ -200,6 +200,18 @@ def test_cancel_preparing_does_not_leave_writer_or_start_next_capture_early(reco
     assert node.episode.frames == 0 and node.start_time is None
 
 
+def test_deployment_recording_guard_blocks_start_without_creating_episode(recorder):
+    node, clock, camera, feed, messages = recorder
+    node.start_guard = lambda: "VR ownership required"
+    response = node.record(NS(data=True), NS())
+    assert not response.success and response.message == "VR ownership required"
+    assert not node.busy() and node.episode is None
+    node.start_guard = lambda: None
+    assert node.record(NS(data=True), NS()).success and node.busy()
+    assert node.discard(NS(), NS()).success
+    assert not node.busy()
+
+
 def test_cache_snapshot_does_not_expose_mutable_values():
     cache = StreamCache()
     for key, size in REQUIRED.items():
@@ -207,6 +219,59 @@ def test_cache_snapshot_does_not_expose_mutable_values():
     snapshot = cache.snapshot(1., .2, .1)
     snapshot['q'][0] = 99.
     assert cache.snapshot(1., .2, .1)['q'][0] == 0.
+
+
+def test_periodic_diagnostics_skip_writer_stats_when_disabled_or_not_due(recorder, monkeypatch):
+    node, clock, _, feed, messages = recorder
+    assert node.record(NS(data=True), NS()).success
+    clock[0] += .01
+    feed()
+    node.sample()
+    episode = node.episode
+    stats = episode.stats
+
+    def unexpected_stats():
+        pytest.fail("Quiet capture must not acquire writer stats for a skipped log")
+
+    monkeypatch.setattr(episode, "stats", unexpected_stats)
+    clock[0] += .03
+    node.log_diagnostics()
+    node.diagnostics_interval_s = 2.
+    node.log_diagnostics()
+    monkeypatch.setattr(episode, "stats", stats)
+    clock[0] += 2.1
+    node.log_diagnostics()
+    assert any("Capture diagnostics:" in message for message in messages)
+    monkeypatch.setattr(episode, "stats", unexpected_stats)
+    node.log_diagnostics()
+    monkeypatch.setattr(episode, "stats", stats)
+    node.diagnostics_interval_s = 0.
+    assert node.record(NS(data=False), NS()).success
+    assert sum("Capture diagnostics:" in message for message in messages) == 2
+
+
+def test_recorder_hands_off_immutable_camera_storage_without_copying(recorder, monkeypatch):
+    node, clock, camera, feed, _ = recorder
+    camera.frames_immutable = True
+    snapshot = camera.snapshot
+    frames = []
+
+    def immutable_snapshot(now):
+        images, metadata = snapshot(now)
+        for image in images.values():
+            image.setflags(write=False)
+        frames.append(images['head'])
+        return images, metadata
+
+    monkeypatch.setattr(camera, "snapshot", immutable_snapshot)
+    assert node.record(NS(data=True), NS()).success
+    written = []
+    monkeypatch.setattr(node.episode, "_image_write", lambda path, image: written.append(image) or True)
+    clock[0] += .01
+    feed()
+    node.sample()
+    assert node.record(NS(data=False), NS()).success
+    assert len(written) == 1 and written[0] is frames[0]
 
 
 def test_ros_executor_receives_feedback_while_recorder_prepares(tmp_path):

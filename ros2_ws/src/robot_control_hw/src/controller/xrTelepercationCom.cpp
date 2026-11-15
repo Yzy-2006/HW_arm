@@ -644,8 +644,10 @@ void xr_telepercation_ctl::trans_and_outp_core(){
     mdataSend.ctlDesMsg = ctlDesMsg;
 }
 
-void xr_telepercation_ctl::trigger_joint_return(){
+void xr_telepercation_ctl::trigger_joint_return(bool hold_after){
+    vr_joint_holding = false;
     use_preset_target = false;
+    hold_after_joint_return = hold_after;
     returnRequested = true;
 }
 
@@ -700,6 +702,7 @@ bool xr_telepercation_ctl::reanchor_from_feedback(std::string* rejection_reason)
     r_arm_quat_accum = {1.0, 0.0, 0.0, 0.0};
     last_arm_zyx_valid = false;
     returnRequested = returning = preset_holding = false;
+    vr_joint_holding = false;
     ifFirstOutp = false;
     zero_outputTimes = total_zeroTimes;
     mdataSend.ctl_transMod = 4;
@@ -709,6 +712,29 @@ bool xr_telepercation_ctl::reanchor_from_feedback(std::string* rejection_reason)
     mdataSend.TrajTime[1].assign(RARMDOF, 0.20);
     handoff_pending = true;
     return true;
+}
+
+void xr_telepercation_ctl::hold_current_joints_for_vr(
+    const std::vector<double>& left, const std::vector<double>& right){
+    vr_joint_holding = true;
+    build_joint_return_cmd();
+    mdataSend.ctlDesMsg.desPos_l_JointSpace = left;
+    mdataSend.ctlDesMsg.desPos_r_JointSpace = right;
+    mdataSend.TrajTime[0].assign(LARMDOF, 0.2);
+    mdataSend.TrajTime[1].assign(RARMDOF, 0.2);
+    for(auto& arm : mdataSend.m_stabMsg){
+        for(auto& joint : arm){
+            joint.start_stabTimes = joint.des_stabTimes = 0;
+        }
+    }
+}
+
+void xr_telepercation_ctl::release_vr_joint_hold(){
+    if(!vr_joint_holding) return;
+    vr_joint_holding = false;
+    mdataSend.ctl_transMod = 4;
+    mdataSend.runinMod = 1;
+    handoff_pending = true;
 }
 
 void xr_telepercation_ctl::trigger_preset_pose(){
@@ -794,6 +820,7 @@ void xr_telepercation_ctl::build_joint_return_cmd(){
 
 
 dataSendWrap xr_telepercation_ctl::trans_and_outp(){
+    if(vr_joint_holding) return mdataSend;
     if(handoff_pending){
         handoff_pending = false;
         mdataSend.ifUseRet = 1;
@@ -864,12 +891,12 @@ dataSendWrap xr_telepercation_ctl::trans_and_outp(){
         if(joint_return_remaining_cycles-- > 0){
             return mdataSend;
         }
-        if(use_preset_target){
+        if(use_preset_target || hold_after_joint_return){
             returning = false;
             preset_holding = true;
             std::fill(l_arm_end_delta.begin(), l_arm_end_delta.end(), 0.0);
             std::fill(r_arm_end_delta.begin(), r_arm_end_delta.end(), 0.0);
-            std::cout << "[遥操作] 预设轨迹时段结束：保持预设关节目标，暂停 VR 位姿控制；右 A 回零后恢复" << std::endl;
+            std::cout << "[遥操作] 关节轨迹时段结束：保持关节目标，暂停 VR 位姿控制" << std::endl;
             return mdataSend;
         }
         // 完成：用末端反馈的当前笛卡尔位姿重新锚定遥操作基准，再恢复笛卡尔遥操作。

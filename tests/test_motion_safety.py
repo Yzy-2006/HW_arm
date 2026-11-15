@@ -405,7 +405,7 @@ def test_active_config_disables_position_and_acceleration_trips():
     config = yaml.safe_load((ROOT / "config/pi05_deployment.yaml").read_text())["bridge"]
     guard = CommandSafety(config, np.full(14, -3), np.full(14, 3))
     assert guard.max_acceleration is None
-    assert guard.max_velocity == 5.
+    assert guard.max_velocity == 10.
     assert config["replay_approach"]["max_velocity_rad_s"] == 5.
     assert np.isneginf(guard.lower).all() and np.isposinf(guard.upper).all()
     assert config["replay_approach"]["max_acceleration_rad_s2"] == 1.

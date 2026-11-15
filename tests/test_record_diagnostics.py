@@ -23,6 +23,8 @@ def test_diagnostics_rate_limit_and_timing_summary():
     diagnostics.previous_ids = {'head': 7}
     diagnostics.duplicate_skips = 1
     diagnostics.motion_skips = 2
+    diagnostics.stage('robot_snapshot', .002)
+    diagnostics.stage('robot_snapshot', .001)
     assert diagnostics.report(11.0, 2) is None
     message = diagnostics.report(12.02, 2)
     assert 'callback_interval_ms(avg/max)=50.0/50.0' in message
@@ -31,6 +33,7 @@ def test_diagnostics_rate_limit_and_timing_summary():
     assert 'jpeg_write_ms=[head=15.0]' in message
     assert 'duplicate_skips=1' in message
     assert 'motion_skips=2' in message
+    assert 'capture_stage_ms(last/max)=[robot_snapshot=1.0/2.0]' in message
     assert 'head(frame=7, previous_saved=7, step=0, age_ms=20.0)' in message
     assert diagnostics.report(12.03, 2) is None
     assert diagnostics.report(12.03, 2, force=True) is not None
@@ -74,6 +77,9 @@ def test_receiver_tracks_host_arrivals_device_timestamps_and_frame_gaps(monkeypa
     assert meta['arrival_interval_max_ms'] == pytest.approx(117.)
     assert meta['device_interval_ms'] == 67.
     assert meta['receiver_frame_gaps'] == 1
+    assert meta['receiver_frame_step'] == 2
+    image = camera.latest['head'][0]
+    assert image.flags.owndata and not image.flags.writeable
 
 
 @pytest.mark.parametrize('slow_write', [True, False])
@@ -103,7 +109,7 @@ def test_capture_survives_blocked_writer_but_rejects_repeated_camera(tmp_path, m
     modules = {
         'rclpy': {}, 'rclpy.node': {'Node': FakeNode},
         'rclpy.callback_groups': {'MutuallyExclusiveCallbackGroup': object},
-        'rclpy.qos': {'qos_profile_sensor_data': object()},
+        'rclpy.qos': {'qos_profile_sensor_data': ns(depth=5)},
         'ctl_msgs_hw': {}, 'ctl_msgs_hw.msg': {name: ns for name in (
             'CtlInformation', 'FkDataPub', 'MidNodeCtlMsgRet', 'MidNodeCtlMsgSend')},
         'std_msgs': {}, 'std_msgs.msg': {'Int8MultiArray': ns, 'Bool': ns},
@@ -214,7 +220,7 @@ def test_stationary_joint_samples_are_skipped_until_motion_or_gripper_change(tmp
     modules = {
         'rclpy': {}, 'rclpy.node': {'Node': FakeNode},
         'rclpy.callback_groups': {'MutuallyExclusiveCallbackGroup': object},
-        'rclpy.qos': {'qos_profile_sensor_data': object()},
+        'rclpy.qos': {'qos_profile_sensor_data': ns(depth=5)},
         'ctl_msgs_hw': {}, 'ctl_msgs_hw.msg': {name: ns for name in (
             'CtlInformation', 'FkDataPub', 'MidNodeCtlMsgRet', 'MidNodeCtlMsgSend')},
         'std_msgs': {}, 'std_msgs.msg': {'Int8MultiArray': ns, 'Bool': ns},

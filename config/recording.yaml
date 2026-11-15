@@ -1,6 +1,8 @@
 task: "fold a towel with both arms"
 dataset_root: data/raw/fold_towel
 fps: 30
+# Coalesce latest ROS telemetry before Python dispatch; native control rates stay unchanged.
+feedback_rate_hz: 120
 width: 640
 height: 480
 min_episode_frames: 30
@@ -13,6 +15,8 @@ max_frame_gap_s: 0.10
 # Pending captured frames (three images each), plus one frame being written.
 writer_queue_frames: 16
 writer_finish_timeout_s: 10.0
+# 0 prints diagnostics only on save/error; synchronous console output can stall capture.
+diagnostics_interval_s: 0.0
 # Starts after directory/metadata preparation; recording time starts at first capture.
 startup_timeout_s: 3.0
 # Drop samples whose largest absolute joint-position change from the last

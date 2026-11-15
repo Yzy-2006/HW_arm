@@ -42,7 +42,8 @@
 | [数据集约定](DATASET.md) | 原始格式、时间对齐、质量检查、LeRobot 导出和离线筛选 |
 | [PI05 训练](../training/README_PI05.md) | 微调环境与示例；示例仍需真实数据和 GPU 验证 |
 | [PI05/ACT 部署](DEPLOYMENT.md) | 共用 bridge、worker 启动、相机占用与停止 |
-| [PI05 部署参考](PI05_DEPLOYMENT.md) | Checkpoint 格式、模型变体、动作与推理时序 |
+| [PI05 部署参考](PI05
+_DEPLOYMENT.md) | Checkpoint 格式、模型变体、动作与推理时序 |
 | [部署转 VR 与补采](POLICY_INTERVENTION.md) | 停止 bridge、显式交接控制权、独立补采 |
 | [数据集回放](DATASET_REPLAY_WORKFLOW.md) | dry-run、RViz、真机短片段、接近段和日志 |
 | [Minimum Snap 插值](MINIMUM_SNAP.md) | 30 Hz 源动作到 50 Hz 指令、轨迹边界和保护模式 |

@@ -154,11 +154,13 @@ class xr_telepercation_ctl{
         void load_preset_pose();
         //是否正在执行关节空间回零轨迹
         bool returning = false;
+        bool hold_after_joint_return = false;
         bool preset_holding = false;
         // Synchronize once from feedback when Cartesian teleoperation resumes
         // after A-key joint return, then go back to planner-state tracking.
         bool use_feedback_once_after_return = false;
         bool handoff_pending = false;
+        bool vr_joint_holding = false;
         //末端笛卡尔位姿反馈缓存（回零完成后重新锚定笛卡尔遥操作基准）
         std::vector<double> l_desc_ret_cache;
         std::vector<double> r_desc_ret_cache;
@@ -188,8 +190,11 @@ class xr_telepercation_ctl{
         std::vector<double> r_arm_end_delta;
 
         //A 键触发关节空间回零（由回零触发回调调用，仅置位请求标志）
-        void trigger_joint_return();
+        void trigger_joint_return(bool hold_after = false);
+        bool joint_return_active() const { return returnRequested || returning; }
         bool reanchor_from_feedback(std::string* rejection_reason = nullptr);
+        void hold_current_joints_for_vr(const std::vector<double>& left, const std::vector<double>& right);
+        void release_vr_joint_hold();
         void trigger_preset_pose();
         bool accepts_vr_input() const {
             return !returnRequested && !returning && !preset_holding;

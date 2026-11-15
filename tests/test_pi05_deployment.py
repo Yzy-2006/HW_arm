@@ -70,6 +70,7 @@ def test_yaml_integration_steps_reach_openpi_loader_and_horizon_is_checked(tmp_p
 @pytest.mark.parametrize("entry,stats", [
     ("inference_flat_towel.py", "encos_flat_train45"),
     ("inference_mix159.py", "encos_mix159_train125"),
+    ("inference_full321.py", "encos_full321_train255"),
 ])
 def test_release_entry_imports_sibling_and_reaches_policy_loader(tmp_path, monkeypatch, entry, stats):
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -206,7 +207,7 @@ class FakePool:
     "protection_mode": "speed_only", "policy_command_speed_check": True,
     "policy_disable_all_speed_checks": True, "max_velocity_rad_s": 5.,
 }}], indirect=True)
-def test_all_policy_speed_override_is_scoped_to_non_hold_packets(bridge):
+def test_all_policy_speed_override_survives_policy_hold_and_blocks_explicit_fault(bridge):
     node, clock, feedback = bridge
     assert np.isposinf(node.command_safety.velocity_limits).all()
     node.step()
@@ -218,7 +219,7 @@ def test_all_policy_speed_override_is_scoped_to_non_hold_packets(bridge):
     assert msg.policy_speed_checks_disabled and msg.header.frame_id == "pi05_policy"
     node._hold()
     hold = node.command_pub.messages[-1]
-    assert hold.hold_position and not hold.policy_speed_checks_disabled
+    assert hold.hold_position and hold.policy_speed_checks_disabled
     node.safety.receive("fault:operator_stop")
     count = len(node.command_pub.messages)
     node.step()
@@ -249,7 +250,7 @@ def test_policy_speed_override_covers_preflight_and_commands_without_disabling_r
     trajectory.validate_limits(guard.lower, guard.upper, guard.velocity_limits, guard.max_acceleration)
     cfg = yaml.safe_load((ROOT / "config/pi05_deployment.yaml").read_text())["bridge"]
     replay_guard = CommandSafety(cfg, [-3.] * 14, [3.] * 14)
-    assert replay_guard.velocity_limits[0] == 5
+    assert replay_guard.velocity_limits[0] == 10
     with pytest.raises(MotionFault, match="derivative 1"):
         trajectory.validate_limits(replay_guard.lower, replay_guard.upper,
                                    replay_guard.velocity_limits, replay_guard.max_acceleration)
@@ -268,24 +269,40 @@ def bridge(monkeypatch, tmp_path, request):
     clock = [10.0]
 
     class Message:
-        def __init__(self):
+        def __init__(self, **kwargs):
             self.header = SimpleNamespace(stamp=None)
             self.hold_position = False
             self.policy_speed_checks_disabled = False
+            self.__dict__.update(kwargs)
 
     class Node:
         def __init__(self, name):
+            self.default_callback_group = object()
             self.subscriptions = []
             self.logs = []
+            self.services = {}
+
+        def create_service(self, typ, name, callback):
+            self.services[name] = callback
 
         def create_publisher(self, *args):
             messages = []
             return SimpleNamespace(messages=messages, publish=messages.append)
 
+        def create_client(self, service_type, service_name):
+            requests = []
+
+            def call(request):
+                future = Future()
+                requests.append((request, future))
+                return future
+
+            return SimpleNamespace(requests=requests, call_async=call, service_is_ready=lambda: True)
+
         def create_subscription(self, *args, **kwargs):
             self.subscriptions.append(kwargs)
 
-        def create_timer(self, period, callback):
+        def create_timer(self, period, callback, **kwargs):
             timer = SimpleNamespace(period=period, cancelled=False)
             timer.cancel = lambda: setattr(timer, "cancelled", True)
             timer.reset = lambda: setattr(timer, "cancelled", False)
@@ -310,13 +327,24 @@ def bridge(monkeypatch, tmp_path, request):
         def close(self):
             pass
 
+    def make_recorder(config, cameras, **kwargs):
+        recorder = SimpleNamespace(config=config, cameras=cameras, options=kwargs,
+                                   active=False, closed=False)
+        recorder.busy = lambda: recorder.active
+        recorder.close = lambda: setattr(recorder, "closed", True)
+        return recorder
+
     for name, mod in {
         "rclpy.callback_groups": SimpleNamespace(MutuallyExclusiveCallbackGroup=object),
         "rclpy.node": SimpleNamespace(Node=Node),
-        "rclpy.qos": SimpleNamespace(qos_profile_sensor_data=object()),
+        "rclpy.qos": SimpleNamespace(qos_profile_sensor_data=SimpleNamespace(depth=5),
+            QoSProfile=lambda **kwargs: SimpleNamespace(**kwargs),
+            DurabilityPolicy=SimpleNamespace(TRANSIENT_LOCAL=object())),
         "ctl_msgs_hw.msg": SimpleNamespace(BridgeCtlMsg=Message, GripperCtl=Message, MidNodeCtlMsgRet=Message),
-        "std_msgs.msg": SimpleNamespace(Float64MultiArray=Message),
-        "record": SimpleNamespace(Cameras=Cameras),
+        "std_msgs.msg": SimpleNamespace(Float64MultiArray=Message, String=Message),
+        "record": SimpleNamespace(Cameras=Cameras, make_node=make_recorder),
+        "std_srvs.srv": SimpleNamespace(SetBool=SimpleNamespace(Request=SimpleNamespace),
+                                       Trigger=SimpleNamespace(Request=SimpleNamespace)),
     }.items():
         monkeypatch.setitem(sys.modules, name, mod)
     monkeypatch.setattr(module, "ThreadPoolExecutor", FakePool)
@@ -342,6 +370,7 @@ def bridge(monkeypatch, tmp_path, request):
     config["bridge"]["max_joint_step_rad"] = 0.02
     config["bridge"]["interpolation"] = {"enabled": False}
     config["bridge"]["replan_interval_s"] = 0.25
+    config["bridge"]["intervention"] = {"enabled": False}
     # These tests isolate inference timing, not physical motion limits.
     config["bridge"]["motion_safety"] = {"max_velocity_rad_s": 100, "max_acceleration_rad_s2": 100000}
     options = dict(getattr(request, "param", {}))
@@ -395,6 +424,214 @@ def complete(node, value=1.0):
     actions = np.full((50, 16), value)
     actions[:, [4 - 1, 9]] *= -1  # Left elbow and right shoulder roll have nonpositive ranges.
     node.pending.set_result({"actions": actions.tolist()})
+
+
+@pytest.mark.parametrize("bridge", [{"motion_safety": {"protection_mode": "speed_only"}}], indirect=True)
+def test_motion_home_blocks_arms_grippers_and_old_inference_then_restarts_with_fresh_state(bridge):
+    node, clock, feedback = bridge
+    node.step()
+    complete(node, .001)
+    node.step()
+    clock[0] += .3
+    feedback()
+    node.step()
+    old_pending = node.pending
+    keys = ["H"]
+    node.keyboard.close()
+    node.keyboard = SimpleNamespace(poll=lambda: keys.pop(0) if keys else None, close=lambda: None)
+    node.step()
+    assert node.home_session.active and node.chunk is None and node.last_command is None
+    assert len(node.home_client.requests) == 1
+    counts = (len(node.command_pub.messages), len(node.gripper_pub.messages))
+    complete(node, .5)  # A pre-home request finishes while the robot is returning.
+    assert old_pending.done()
+    node.publish_step()
+    node.step()
+    assert not node._publish_command(np.ones(16))
+    assert counts == (len(node.command_pub.messages), len(node.gripper_pub.messages))
+    node.home_client.requests[-1][1].set_result(SimpleNamespace(success=True, message="accepted"))
+    node.step()
+    clock[0] += .3
+    node.step()
+    assert node.resume_client.requests[-1][0].data is False
+    node.resume_client.requests[-1][1].set_result(SimpleNamespace(success=False, message="returning"))
+    node.step()
+    clock[0] += .3
+    node.step()
+    node.resume_client.requests[-1][1].set_result(SimpleNamespace(success=True))
+    node.step()
+    assert not node.home_session.active and not node.startup_ready
+    assert counts == (len(node.command_pub.messages), len(node.gripper_pub.messages))
+    feedback()
+    node.step()
+    assert node.pending is not old_pending and node.inference_pool.calls[-1][1][-1] is True
+    assert node.chunk is None
+    complete(node, .002)
+    node.step()
+    assert node.command_pub.messages[-1].if_init_use_ret == 1
+    assert node.last_command[0] == pytest.approx(.002)
+
+
+def test_motion_home_rejection_keeps_model_paused_and_prevents_shutdown_hold(bridge):
+    node, clock, feedback = bridge
+    node.request_home()
+    node.home_client.requests[-1][1].set_result(SimpleNamespace(success=False, message="safety fault"))
+    node.step()
+    assert node.home_session.phase == "failed"
+    counts = (len(node.command_pub.messages), len(node.gripper_pub.messages))
+    node.last_command = np.ones(16)
+    node.publish_step()
+    node._hold()
+    node.step()
+    assert counts == (len(node.command_pub.messages), len(node.gripper_pub.messages))
+
+
+@pytest.mark.parametrize("bridge", [{"intervention": {"enabled": True},
+    "motion_safety": {"protection_mode": "speed_only"}}], indirect=True)
+def test_vr_intervention_pauses_commands_and_requests_recording_only_runtime(bridge):
+    node, clock, feedback = bridge
+    assert node.recorder.cameras is node.cameras
+    assert node.recorder.options["control_callback_group"] is node.default_callback_group
+    assert node.recording_guard() is not None
+    node.step()
+    complete(node, .001)
+    node.step()
+    clock[0] += .3
+    feedback()
+    node.step()
+    old_pending = node.pending
+    response = node.request_intervention(None, SimpleNamespace())
+    assert response.success and node.control_mode == "requesting_vr"
+    assert node.command_pub.messages[-1].hold_position and node.chunk is None
+    counts = len(node.command_pub.messages), len(node.gripper_pub.messages)
+    old_pending.set_result({"actions": np.ones((50, 16)).tolist()})
+    node.publish_step()
+    node.step()
+    assert not node._publish_command(np.ones(16))
+    assert counts == (len(node.command_pub.messages), len(node.gripper_pub.messages))
+    node.request_home()
+    assert not node.home_client.requests, "Home must not race the pending takeover"
+    node.takeover_client.requests[-1][1].set_result(SimpleNamespace(success=True, message="holding"))
+    node.step()
+    assert node.control_mode == "vr" and node.recording_only_requested
+    assert "dedicated" in node.recording_guard()
+    assert node.mode_pub.messages[-1].data == "vr"
+    node.cameras.error = True
+    clock[0] += 1.
+    feedback()
+    node.step()
+    node.publish_step()
+    assert node.control_mode == "vr" and counts == (len(node.command_pub.messages), len(node.gripper_pub.messages))
+    node.recorder.active = True
+    node.request_home()
+    assert not node.home_client.requests
+    node.recorder.active = False
+    node.request_home()
+    assert not node.home_client.requests and not node.resume_client.requests
+    assert node.control_mode == "vr" and node.chunk is None and node.last_command is None
+
+
+@pytest.mark.parametrize("bridge", [{"intervention": {"enabled": True}}], indirect=True)
+@pytest.mark.parametrize("failure", ["unavailable", "rejected", "timeout"])
+def test_intervention_failures_keep_policy_blocked_without_silent_resume(bridge, failure):
+    node, clock, feedback = bridge
+    node.last_command = np.zeros(16)
+    if failure == "unavailable":
+        node.takeover_client.service_is_ready = lambda: False
+    response = node.request_intervention(None, SimpleNamespace())
+    if failure == "rejected":
+        node.takeover_client.requests[-1][1].set_result(SimpleNamespace(success=False, message="stale FK"))
+    elif failure == "timeout":
+        clock[0] += 6.
+    node.step()
+    assert node.control_mode == "failed"
+    counts = len(node.command_pub.messages), len(node.gripper_pub.messages)
+    feedback()
+    node.step()
+    node._hold()
+    assert node.pending is None and node.recording_guard() is not None
+    assert counts == (len(node.command_pub.messages), len(node.gripper_pub.messages))
+
+
+@pytest.mark.parametrize("bridge", [{"intervention": {"enabled": True}}], indirect=True)
+def test_failed_initial_hold_still_pauses_policy_and_requests_native_hold(bridge):
+    node, _, _ = bridge
+    node.last_command = np.zeros(16)
+
+    def failed_publish(msg):
+        raise RuntimeError("publisher unavailable")
+
+    node.command_pub.publish = failed_publish
+    response = node.request_intervention(None, SimpleNamespace())
+    assert response.success and node.control_mode == "requesting_vr"
+    assert node.last_command is None and len(node.takeover_client.requests) == 1
+    assert not node._publish_command(np.zeros(16))
+
+
+@pytest.mark.parametrize("bridge", [{"intervention": {"enabled": True, "stop_worker": True},
+    "motion_safety": {"protection_mode": "speed_only"}}], indirect=True)
+def test_worker_exit_gates_recording_only_handoff_and_h_never_restarts_policy(bridge):
+    node, clock, feedback = bridge
+    node.step()
+    old_pending = node.pending
+    assert node.request_intervention(None, SimpleNamespace()).success
+    assert node.lifecycle_operation == "stop"
+    node.takeover_client.requests[-1][1].set_result(SimpleNamespace(success=True))
+    node.step()
+    assert node.control_mode == "vr" and node.recording_guard() is not None
+    old_pending.set_exception(ConnectionError("worker exited"))
+    node.lifecycle_pending.set_result(None)
+    node.step()
+    assert node.worker_suspended and node.pending is None and node.recording_only_requested
+    assert "dedicated" in node.recording_guard()
+    node.request_home()
+    counts = len(node.command_pub.messages), len(node.gripper_pub.messages)
+    node.publish_step()
+    node.step()
+    assert not node._publish_command(np.zeros(16)) and node.recording_guard() is not None
+    node.request_home()
+    assert not node.home_client.requests and not node.resume_client.requests
+    assert counts == (len(node.command_pub.messages), len(node.gripper_pub.messages))
+    feedback()
+    node.step()
+    assert node.control_mode == "vr" and node.pending is None
+    assert len(node.inference_pool.calls) == 1
+
+
+@pytest.mark.parametrize("bridge", [{"intervention": {"enabled": True, "stop_worker": True}}], indirect=True)
+def test_failed_worker_exit_blocks_recording_until_retry(bridge):
+    node, _, _ = bridge
+    node.request_intervention(None, SimpleNamespace())
+    node.takeover_client.requests[-1][1].set_result(SimpleNamespace(success=True))
+    node.lifecycle_pending.set_exception(ConnectionError("manager unavailable"))
+    node.step()
+    assert node.control_mode == "vr" and node.worker_lifecycle_error
+    node.recording_guard()
+    assert not node.home_client.requests and node.lifecycle_operation == "stop"
+    node.lifecycle_pending.set_result(None)
+    node.step()
+    assert node.worker_suspended and node.recording_only_requested
+    assert "dedicated" in node.recording_guard()
+
+
+@pytest.mark.parametrize("bridge", [{"intervention": {"enabled": True, "stop_worker": True}}], indirect=True)
+def test_worker_shutdown_drains_old_inference_and_never_requests_a_restart(bridge):
+    node, _, _ = bridge
+    operations = []
+    node.worker_lifecycle = SimpleNamespace(request=lambda action: operations.append(action) or {"running": False})
+    node.pending = Future()
+    node.pending.set_exception(ConnectionError("worker exited"))
+    node._stop_worker()
+    assert operations == ["shutdown"]
+    with pytest.raises(ValueError, match="restart deployment manually"):
+        node._begin_worker_operation("start")
+
+
+@pytest.mark.parametrize("bridge", [{"intervention": {"enabled": True, "stop_worker": True}}], indirect=True)
+def test_recording_only_handoff_requires_acknowledged_worker_exit(bridge):
+    node, _, _ = bridge
+    with pytest.raises(RuntimeError, match="handoff and worker shutdown"):
+        node.release_to_recording_only()
 
 
 @pytest.mark.parametrize("bridge", [{"rate_hz": 60, "action_rate_hz": 15}], indirect=True)

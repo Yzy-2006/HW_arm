@@ -23,6 +23,10 @@ vrTeleoperationLimit:
     rpy_min: [-2.20, -2.20, -2.57]
     rpy_max: [ 2.20,  2.20,  2.57]
 
+# make motion H: wait after home trajectory timing ends, without checking arrival.
+policyHome:
+  resume_delay_s: 3.0
+
 #============================================
 # VR A 键关节空间回零参数
 # trajectory_time_sec 为从当前反馈关节角到 zeropos.yaml 的运动时间。

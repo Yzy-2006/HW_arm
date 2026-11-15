@@ -23,9 +23,9 @@ from pose_mapping import (
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, QoSHistoryPolicy, QoSReliabilityPolicy
+from rclpy.qos import QoSProfile, QoSHistoryPolicy, QoSReliabilityPolicy, DurabilityPolicy
 from geometry_msgs.msg import Vector3
-from std_msgs.msg import Bool, Float64MultiArray, Int8MultiArray
+from std_msgs.msg import Bool, Float64MultiArray, Int8MultiArray, String
 from std_srvs.srv import SetBool, Trigger
 from ctl_msgs_hw.msg import GripperCtl
 from ament_index_python.packages import get_package_share_directory
@@ -73,6 +73,12 @@ def run_vr_tick(node, tv_wrapper, debug_controller_input=False):
     telemetry = tv_wrapper.get_motion_state_data()
     if debug_controller_input:
         node.report_controller_debug(tv_wrapper.controller_debug_snapshot())
+        return
+    if getattr(node, "policy_intervention", False):
+        # Process takeover buttons before permitting this frame's motion.
+        node.update_gripper(telemetry)
+        if node._vr_enabled:
+            node.publish_increment(telemetry)
         return
     node.publish_increment(telemetry)
     node.update_gripper(telemetry)
@@ -209,8 +215,15 @@ def load_gripper_config():
 class VRPoseIncrementPublisher(Node):
     """订阅(内部)VR 数据，逐帧计算位姿增量，并按扳机门控发布到 ROS2 话题。"""
 
-    def __init__(self):
+    def __init__(self, *, policy_intervention=False):
         super().__init__('vr_pose_increment_publisher')
+        self.policy_intervention = policy_intervention
+        self.policy_mode = "unknown"
+        self.policy_mode_received_at = -float("inf")
+        self._vr_enabled = False
+        self._await_controls_release = True
+        self._intervention_future = None
+        self._intervention_requested_at = 0.0
 
         # Increment topics are a latest-sample stream.  A deep reliable queue
         # replays stale per-frame deltas after a scheduling hiccup, producing
@@ -352,6 +365,11 @@ class VRPoseIncrementPublisher(Node):
         self.discard_service_name = "/towel/discard"
         self.discard_service_client = self.create_client(Trigger, self.discard_service_name)
         self._discard_service_warned = False
+        if self.policy_intervention:
+            self.intervention_client = self.create_client(Trigger, "/towel/intervene")
+            self.create_subscription(String, "/towel/policy_mode", self._policy_mode_callback,
+                QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+            self.get_logger().info("部署接管待命：左 A 丢弃键接管；部署和回零期间不发送 VR 控制指令")
 
         self.get_logger().info("双夹爪位控：左/右 squeeze 分别切换左/右夹爪；未标定侧不更新位置目标")
         self.get_logger().info(
@@ -377,6 +395,8 @@ class VRPoseIncrementPublisher(Node):
 
     def publish_increment(self, teleData):
         """逐帧计算位姿增量并发布。未扣扳机时发布零增量。"""
+        if getattr(self, "policy_intervention", False) and not self._vr_enabled:
+            return
         if teleData is None or teleData.head_pose is None:
             return
 
@@ -589,16 +609,92 @@ class VRPoseIncrementPublisher(Node):
     def _gripper_fdb_callback(self, msg):
         self.dual_grippers.feedback(msg.data, time.monotonic())
 
+    def _reset_intervention_tracking(self):
+        self._vr_enabled = False
+        self._await_controls_release = True
+        self.first_frame = True
+        self._last_sample_time = None
+        for grip in self.dual_grippers.sides.values():
+            grip.invalidate()
+        self.dual_grippers.last_feedback = None
+
+    def _policy_mode_callback(self, msg):
+        self.policy_mode_received_at = time.monotonic()
+        if self.policy_mode != msg.data:
+            self.policy_mode = msg.data
+            self._reset_intervention_tracking()
+            self.get_logger().info(f"部署控制状态：{msg.data}")
+            if msg.data == "vr":
+                self.get_logger().info("VR 接管完成；先松开双手扳机和 squeeze，再扣动控制。左 B 开始/保存采集")
+
+    def _request_intervention(self):
+        if self._intervention_future is not None:
+            return
+        if not self.intervention_client.service_is_ready():
+            self.get_logger().error("未发现 /towel/intervene，请保持 make motion 运行并启用 intervention")
+            return
+        self._reset_intervention_tracking()
+        self._intervention_requested_at = time.monotonic()
+        self._intervention_future = self.intervention_client.call_async(Trigger.Request())
+
+    def _managed_controls_ready(self, state):
+        now = time.monotonic()
+        if self._intervention_future is not None:
+            future = self._intervention_future
+            if future.done():
+                self._intervention_future = None
+                try:
+                    response = future.result()
+                    if response is None or not response.success:
+                        raise RuntimeError(getattr(response, "message", "empty response"))
+                    self.get_logger().info(response.message)
+                except Exception as exc:
+                    self.get_logger().error(f"接管请求失败：{exc}")
+            elif now - self._intervention_requested_at > 5.0:
+                future.cancel()
+                self._intervention_future = None
+                self.get_logger().error("接管请求响应超时；请检查 motion 终端的控制状态")
+        confirmed = self.policy_mode == "vr" and now - self.policy_mode_received_at <= 0.6
+        if not confirmed or self._intervention_future is not None:
+            if self._vr_enabled:
+                self._reset_intervention_tracking()
+            return False
+        if state is None:
+            return False
+        if self._await_controls_release:
+            held = any(bool(getattr(state, key, False)) for key in (
+                "left_trigger_state", "right_trigger_state",
+                "left_squeeze_ctrl_state", "right_squeeze_ctrl_state", "right_aButton"))
+            if held:
+                return False
+            self._await_controls_release = False
+        return True
+
     def update_gripper(self, teleData):
         state = teleData.tele_state if teleData is not None else None
         record_button = bool(getattr(state, LEFT_RECORD_BUTTON_ATTR, False))
         discard_button = bool(getattr(state, LEFT_DISCARD_BUTTON_ATTR, False))
         left_button = bool(getattr(state, "left_squeeze_ctrl_state", False))
         right_button = bool(getattr(state, "right_squeeze_ctrl_state", False))
-        if record_button and not self.prev_record_button:
-            self.toggle_recording()
-        if discard_button and not self.prev_discard_button:
-            self.discard_recording()
+        managed = getattr(self, "policy_intervention", False)
+        if managed:
+            self._vr_enabled = self._managed_controls_ready(state)
+            if discard_button and not self.prev_discard_button:
+                if self._vr_enabled:
+                    self.discard_recording()
+                elif self.policy_mode in ("policy", "failed"):
+                    self._request_intervention()
+            elif record_button and not self.prev_record_button and self._vr_enabled:
+                self.toggle_recording()
+        else:
+            if record_button and not self.prev_record_button:
+                self.toggle_recording()
+            if discard_button and not self.prev_discard_button:
+                self.discard_recording()
+        if managed and not self._vr_enabled:
+            self.prev_record_button, self.prev_discard_button = record_button, discard_button
+            self.prev_left_gripper_button, self.prev_right_gripper_button = left_button, right_button
+            return
         positions, states = self.dual_grippers.step(time.monotonic(), {
             "left": left_button and not self.prev_left_gripper_button,
             "right": right_button and not self.prev_right_gripper_button,
@@ -625,8 +721,9 @@ class VRPoseIncrementPublisher(Node):
             return
         if not self.record_service_client.service_is_ready():
             if not self._record_service_warned:
+                hint = "请检查 make motion 的内置采集器" if self.policy_intervention else "请先启动 collection/record.py"
                 self.get_logger().warning(
-                    f"左 B 键录制切换不可用：未发现 {self.record_service_name}，请先启动 collection/record.py"
+                    f"左 B 键录制切换不可用：未发现 {self.record_service_name}，{hint}"
                 )
                 self._record_service_warned = True
             return
@@ -660,8 +757,9 @@ class VRPoseIncrementPublisher(Node):
             return
         if not self.discard_service_client.service_is_ready():
             if not self._discard_service_warned:
+                hint = "请检查 make motion 的内置采集器" if self.policy_intervention else "请先启动 collection/record.py"
                 self.get_logger().warning(
-                    f"A 键丢弃录制不可用：未发现 {self.discard_service_name}，请先启动 collection/record.py"
+                    f"A 键丢弃录制不可用：未发现 {self.discard_service_name}，{hint}"
                 )
                 self._discard_service_warned = True
             return
@@ -701,6 +799,10 @@ class VRPoseIncrementPublisher(Node):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--policy-intervention", action="store_true",
+        help="stand by during deployment; left discard button requests VR takeover through make motion",
+    )
+    parser.add_argument(
         "--debug-controller-input",
         action="store_true",
         help="print raw XR controller status without publishing control commands",
@@ -730,7 +832,7 @@ def main():
 
     # 4. ROS2 节点
     rclpy.init()
-    node = VRPoseIncrementPublisher()
+    node = VRPoseIncrementPublisher(policy_intervention=args.policy_intervention)
 
     try:
         input("请先用 XR 设备浏览器打开 https://<本机IP>:8012?ws=wss://<本机IP>:8012，"
@@ -740,6 +842,8 @@ def main():
             node.get_logger().warning(
                 "开始 XR 控制器输入诊断：不会发布机械臂、夹爪、回零或力前馈命令"
             )
+        elif args.policy_intervention:
+            node.get_logger().info("VR 待命：按左 A 丢弃键接管正在运行的模型部署")
         else:
             node.get_logger().info("开始发布位姿增量（扣动扳机生效）")
         target_fps = 50

@@ -2,8 +2,8 @@
 """ROS2 bridge between the ENCOS robot and the PI05 worker process.
 
 The bridge assembles observations and publishes the existing ``BridgeCtlMsg``
-control path. Motion requires ``--motion``. Stop this bridge before manually
-handing control to VR with ``make vr-takeover``.
+control path. Motion requires ``--motion``. Optional VR intervention pauses
+policy commands and records corrections using the same camera streams.
 """
 
 from __future__ import annotations
@@ -28,6 +28,8 @@ import yaml
 
 from pi05_common import encode_bytes, recv_packet, send_packet
 from minimum_snap import ChunkInterpolator, interpolation_settings, validate_controller_rate
+from policy_home import PolicyHomeSession, TerminalKeys
+from worker_lifecycle import WorkerLifecycleClient
 
 
 LOG = logging.getLogger("pi05_bridge")
@@ -233,14 +235,32 @@ class PolicyClient:
             finally:
                 self.sock = None
 
-    def _connect(self) -> None:
+    def _connect(self, timeout_s=None) -> None:
         self.close()
-        self.sock = socket.create_connection(self.address, timeout=self.timeout_s)
-        self.sock.settimeout(self.timeout_s)
+        timeout_s = self.timeout_s if timeout_s is None else timeout_s
+        self.sock = socket.create_connection(self.address, timeout=timeout_s)
+        self.sock.settimeout(timeout_s)
         send_packet(self.sock, {"type": "health", "token": self.token})
         response = recv_packet(self.sock)
         if not response.get("ok"):
             raise RuntimeError(response.get("error", "worker health check failed"))
+        self.sock.settimeout(self.timeout_s)
+
+    def health(self):
+        with self.lock:
+            try:
+                if self.sock is None:
+                    self._connect(timeout_s=0.5)
+                else:
+                    self.sock.settimeout(0.5)
+                    send_packet(self.sock, {"type": "health", "token": self.token})
+                    response = recv_packet(self.sock)
+                    if not response.get("ok"):
+                        raise RuntimeError(response.get("error", "worker health check failed"))
+                    self.sock.settimeout(self.timeout_s)
+            except Exception:
+                self.close()
+                raise
 
     def infer(self, state: np.ndarray, images: dict[str, str], task: str, request_id: int,
               reset: bool = False) -> dict[str, Any]:
@@ -318,8 +338,14 @@ def run_bridge(node_factory):
     try:
         node = node_factory()
         executor.add_node(node)
+        for companion in getattr(node, "companion_nodes", ()):
+            executor.add_node(companion)
         while rclpy.ok() and not stop_requested.is_set():
             executor.spin_once(timeout_sec=0.05)
+            if getattr(node, "recording_only_requested", False):
+                from vr_recording import switch_to_recording_only
+
+                executor, node = switch_to_recording_only(executor, node)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
@@ -343,6 +369,22 @@ def create_bridge_node(args):
     config_path = Path(args.config).expanduser().resolve()
     config = _read_yaml(config_path)
     bridge_cfg = config.get("bridge", {})
+    intervention_cfg = bridge_cfg.get("intervention", {})
+    intervention_enabled = intervention_cfg.get("enabled", False)
+    if not isinstance(intervention_enabled, bool):
+        raise ValueError("bridge.intervention.enabled must be a boolean")
+    stop_worker = intervention_cfg.get("stop_worker", False)
+    if not isinstance(stop_worker, bool):
+        raise ValueError("bridge.intervention.stop_worker must be a boolean")
+    worker_stop_timeout_s = float(intervention_cfg.get("worker_stop_timeout_s", 15.0))
+    if not np.isfinite(worker_stop_timeout_s) or worker_stop_timeout_s <= 0:
+        raise ValueError("bridge.intervention.worker_stop_timeout_s must be finite and positive")
+    takeover_timeout_s = float(intervention_cfg.get("takeover_timeout_s", 5.0))
+    if not np.isfinite(takeover_timeout_s) or takeover_timeout_s <= 0:
+        raise ValueError("bridge.intervention.takeover_timeout_s must be finite and positive")
+    home_timeout_s = float(bridge_cfg.get("keyboard_home", {}).get("timeout_s", 30.0))
+    if not np.isfinite(home_timeout_s) or home_timeout_s <= 0:
+        raise ValueError("bridge.keyboard_home.timeout_s must be finite and positive")
     speed_only = speed_only_mode(bridge_cfg)
     policy_disable_all_speed_checks = bridge_cfg.get("motion_safety", {}).get("policy_disable_all_speed_checks", False)
     if not isinstance(policy_disable_all_speed_checks, bool):
@@ -369,6 +411,11 @@ def create_bridge_node(args):
 
     worker_host = args.worker_host or str(worker_cfg.get("host", "127.0.0.1"))
     worker_port = args.worker_port or int(worker_cfg.get("port", 8765))
+    control_port = worker_cfg.get("control_port")
+    if control_port is None:
+        control_port = worker_port + 1
+    if stop_worker and (type(control_port) is not int or not 1 <= control_port <= 65535 or control_port == worker_port):
+        raise ValueError("worker.control_port must be in 1..65535 and different from the inference port")
     token = args.token if args.token is not None else str(worker_cfg.get("token", ""))
     task = str(config.get("task", camera_cfg.get("task", "fold a towel with both arms")))
     rate_hz = float(bridge_cfg.get("rate_hz", camera_cfg.get("fps", 30)))
@@ -425,7 +472,6 @@ def create_bridge_node(args):
 
     from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
     from rclpy.node import Node
-    from rclpy.qos import qos_profile_sensor_data
     from ctl_msgs_hw.msg import BridgeCtlMsg, GripperCtl, MidNodeCtlMsgRet
     from std_msgs.msg import Float64MultiArray
 
@@ -436,11 +482,28 @@ def create_bridge_node(args):
 
     sys.path.insert(0, str(ROOT / "collection"))
     from record import Cameras
+    from ros_capture import feedback_qos, make_feedback_group
 
     class BridgeNode(Node):
         def __init__(self):
             super().__init__("pi05_encos_bridge")
             self.motion = bool(args.motion)
+            self.keyboard = None
+            self.home_session = None
+            self.control_mode = "policy"
+            self.recording_only_requested = False
+            self.companion_nodes = []
+            self.recorder = None
+            self.mode_pub = None
+            self.takeover_pending = None
+            self.takeover_started_at = 0.0
+            self.worker_lifecycle = None
+            self.lifecycle_pool = None
+            self.lifecycle_pending = None
+            self.lifecycle_operation = None
+            self.lifecycle_cancel = threading.Event()
+            self.worker_suspended = False
+            self.worker_lifecycle_error = ""
             self.safety = None
             self.command_safety = CommandSafety(policy_safety_cfg, lower, upper, now=time.monotonic)
             self.sample_velocity = self.sample_acceleration = None
@@ -469,7 +532,7 @@ def create_bridge_node(args):
             self.reanchor_next_command = True
             self.request_id = 0
             self.last_log = 0.0
-            self.feedback_group = MutuallyExclusiveCallbackGroup()
+            self.feedback_group = make_feedback_group(self, camera_cfg.get("feedback_rate_hz", 120))
             self.safety_receive_group = MutuallyExclusiveCallbackGroup()
             self.command_pub = self.create_publisher(BridgeCtlMsg, "/dexbotCtl/bridge_ctl_msg", 1)
             self.gripper_pub = self.create_publisher(GripperCtl, "/gripper/ctl", 10)
@@ -477,11 +540,11 @@ def create_bridge_node(args):
                 MidNodeCtlMsgRet,
                 "/dexbotCtl/midMonitor_msg_send",
                 self._joint_callback,
-                qos_profile_sensor_data,
+                feedback_qos(),
                 callback_group=self.feedback_group,
             )
             self.create_subscription(Float64MultiArray, "/gripper/fdb", self._gripper_callback,
-                                     qos_profile_sensor_data, callback_group=self.feedback_group)
+                                     feedback_qos(), callback_group=self.feedback_group)
             self.control_timer = self.create_timer(1.0 / rate_hz, self.step)
             self.publish_timer = self.create_timer(1.0 / publish_rate_hz, self.publish_step) if interpolate else None
             if self.motion:
@@ -500,9 +563,206 @@ def create_bridge_node(args):
                 f"policy_command_speed_check={policy_speed_check}"
             )
             if self.motion and policy_disable_all_speed_checks:
-                self.get_logger().warning("All policy software speed checks disabled, including servo command/feedback; hold, VR, replay or source timeout restores configured servo limits")
+                self.get_logger().warning("All policy software speed checks disabled, including servo command/feedback and policy holds; VR/replay takeover or controller transport timeout restores configured servo limits")
             elif self.motion and not policy_speed_check:
                 self.get_logger().warning("Policy command speed checks disabled (preflight and publication); servo speed guards remain active")
+            if self.motion:
+                from std_srvs.srv import SetBool, Trigger
+
+                self.home_client = self.create_client(Trigger, "/dexbotCtl/policy_home")
+                self.resume_client = self.create_client(SetBool, "/dexbotCtl/vr_override")
+
+                def request_home():
+                    if not self.home_client.service_is_ready():
+                        raise RuntimeError("/dexbotCtl/policy_home unavailable; rebuild and restart make robot")
+                    return self.home_client.call_async(Trigger.Request())
+
+                def request_resume():
+                    if not self.resume_client.service_is_ready():
+                        raise RuntimeError("/dexbotCtl/vr_override unavailable")
+                    request = SetBool.Request()
+                    request.data = False
+                    return self.resume_client.call_async(request)
+
+                self.home_session = PolicyHomeSession(request_home, request_resume, time.monotonic,
+                    self.get_logger().warning, home_timeout_s)
+                self.keyboard = TerminalKeys()
+                if self.keyboard.enabled:
+                    self.get_logger().info("H: pause model, return home, then automatically resume after the configured delay")
+                if intervention_enabled:
+                    from rclpy.qos import QoSProfile, DurabilityPolicy
+                    from std_msgs.msg import String
+                    from record import make_node
+
+                    if stop_worker:
+                        self.worker_lifecycle = WorkerLifecycleClient(worker_host, control_port, token, worker_stop_timeout_s)
+                        self.lifecycle_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="worker-lifecycle")
+
+                    self.mode_message = String
+                    self.mode_pub = self.create_publisher(String, "/towel/policy_mode",
+                        QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+                    self.takeover_client = self.create_client(Trigger, "/dexbotCtl/policy_intervene")
+                    self.create_service(Trigger, "/towel/intervene", self.request_intervention)
+                    self.create_timer(0.2, self.publish_mode)
+                    recording_cfg = dict(camera_cfg)
+                    recording_cfg["dataset_root"] = str(_resolve_path(
+                        intervention_cfg.get("dataset_root"), ROOT / "data/raw/interventions"))
+                    recording_cfg["task"] = task
+                    recording_cfg["episode_metadata"] = {"source": "vr_policy_intervention"}
+                    self.recorder = make_node(recording_cfg, self.cameras,
+                        start_guard=self.recording_guard, control_callback_group=self.default_callback_group)
+                    self.companion_nodes.append(self.recorder)
+                    self.publish_mode()
+                    self.get_logger().info(f"VR intervention ready; shared-camera recorder: {recording_cfg['dataset_root']}")
+
+        def publish_mode(self):
+            if self.mode_pub is not None:
+                self.mode_pub.publish(self.mode_message(data=self.control_mode))
+
+        def _set_mode(self, mode):
+            self.control_mode = mode
+            self.publish_mode()
+
+        def recording_guard(self):
+            if self.control_mode != "vr":
+                return "Recording requires acknowledged VR intervention ownership"
+            if self.worker_lifecycle is not None and not self.worker_suspended:
+                if self.worker_lifecycle_error and self.lifecycle_pending is None:
+                    self._begin_worker_operation("stop")
+                return self.worker_lifecycle_error or "Waiting for GPU worker to exit before recording; press B again when stopped"
+            if self.safety is not None and not self.safety.ready():
+                return "Recording blocked by servo safety state"
+            return "Waiting for dedicated VR recording-only runtime; press B again when ready"
+
+        def _stop_worker(self):
+            result = self.worker_lifecycle.request("shutdown")
+            if result.get("running") is not False:
+                raise RuntimeError("Worker manager has not confirmed GPU process exit")
+            # Stop also interrupts an inference already in flight. Drain that
+            # future before closing its socket; none of its results may be reused.
+            if self.pending is not None:
+                try:
+                    self.pending.result(timeout=worker_stop_timeout_s)
+                except Exception:
+                    if not self.pending.done():
+                        raise RuntimeError("Old inference thread did not exit after worker stop")
+            self.client.close()
+
+        def _begin_worker_operation(self, operation):
+            if operation != "stop":
+                raise ValueError("VR intervention only shuts workers down; restart deployment manually")
+            self.worker_lifecycle_error = ""
+            self.lifecycle_operation = operation
+            self.lifecycle_pending = self.lifecycle_pool.submit(self._stop_worker)
+
+        def _poll_worker_operation(self):
+            if self.lifecycle_pending is None or not self.lifecycle_pending.done():
+                return
+            future, operation = self.lifecycle_pending, self.lifecycle_operation
+            self.lifecycle_pending = self.lifecycle_operation = None
+            try:
+                future.result()
+                if operation == "stop":
+                    self.pending = None
+                    self.worker_suspended = True
+                    self.get_logger().warning("GPU worker exited; preparing dedicated VR recording-only runtime")
+            except Exception as exc:
+                self.worker_lifecycle_error = f"Worker {operation} failed: {exc}; check make pi05/make act terminal"
+                self.get_logger().error(self.worker_lifecycle_error)
+
+        def release_to_recording_only(self):
+            if not self.recording_only_requested:
+                raise RuntimeError("VR handoff and worker shutdown must finish before detaching deployment")
+            from vr_recording import make_recording_session
+
+            self.control_timer.cancel()
+            if self.publish_timer is not None:
+                self.publish_timer.cancel()
+            if self.keyboard is not None:
+                self.keyboard.close()
+            if self.home_session is not None:
+                self.home_session.close()
+            self.inference_pool.shutdown(wait=True, cancel_futures=True)
+            if self.lifecycle_pool is not None:
+                self.lifecycle_pool.shutdown(wait=True, cancel_futures=True)
+            self.client.close()
+            session = make_recording_session(self.recorder, self.cameras)
+            self.recorder = self.cameras = None
+            self.companion_nodes.clear()
+            return session
+
+        def _reset_policy(self):
+            self._invalidate()
+            self.command_safety.reset()
+            self.last_command = None
+            self.sample_velocity = self.sample_acceleration = None
+            self.startup_ready = False
+            self.reanchor_next_command = True
+            self.last_observation_check = -float("inf")
+
+        def request_intervention(self, request, response):
+            if self.control_mode == "vr":
+                if self.worker_lifecycle is not None and not self.worker_suspended and self.lifecycle_pending is None:
+                    self._begin_worker_operation("stop")
+                response.success, response.message = True, "VR already owns control"
+                return response
+            if self.control_mode not in ("policy", "failed") or (
+                    self.home_session is not None and self.home_session.active):
+                response.success, response.message = False, "Control handoff or home is already active"
+                return response
+            # Stop publications and invalidate any result still in flight before
+            # requesting the native controller's feedback-anchored joint hold.
+            try:
+                self._hold()
+                with self.state_lock:
+                    gripper_positions = self.gripper_feedback[[0, 4]].copy()
+                    gripper_age = time.monotonic() - self.gripper_received_at
+                if (np.isfinite(gripper_positions).all() and gripper_age <= 0.25 and
+                        self.safety is not None):
+                    hold_grippers = GripperCtl()
+                    hold_grippers.ctl_time = 1.0 / publish_rate_hz
+                    hold_grippers.l_arm_gripper_pos, hold_grippers.r_arm_gripper_pos = (
+                        gripper_positions - zero_deg).tolist()
+                    self.safety.publish_if_ready(lambda: self.gripper_pub.publish(hold_grippers))
+            except Exception as exc:
+                self.get_logger().warning(f"Initial intervention hold failed; requesting native hold: {exc}")
+            self._reset_policy()
+            self._set_mode("requesting_vr")
+            if self.worker_lifecycle is not None:
+                self._begin_worker_operation("stop")
+            try:
+                if not self.takeover_client.service_is_ready():
+                    raise RuntimeError("/dexbotCtl/policy_intervene unavailable; rebuild and restart make robot")
+                from std_srvs.srv import Trigger
+                self.takeover_started_at = time.monotonic()
+                self.takeover_pending = self.takeover_client.call_async(Trigger.Request())
+                response.success, response.message = True, "Policy paused; VR handoff requested"
+            except Exception as exc:
+                self._set_mode("failed")
+                response.success, response.message = False, str(exc)
+                self.get_logger().error(f"Intervention failed; policy remains paused: {exc}")
+            return response
+
+        def _poll_intervention(self):
+            if self.takeover_pending is None:
+                return
+            try:
+                if not self.takeover_pending.done():
+                    if time.monotonic() - self.takeover_started_at < takeover_timeout_s:
+                        return
+                    self.takeover_pending.cancel()
+                    raise TimeoutError("VR handoff timed out; policy remains paused")
+                response = self.takeover_pending.result()
+                if response is None or not response.success:
+                    raise RuntimeError(getattr(response, "message", "Empty VR handoff response"))
+                self._set_mode("vr")
+                self.get_logger().warning("VR owns control; deployment will shut down. Finish recording, then restart make pi05 and make motion manually")
+            except Exception as exc:
+                self._set_mode("failed")
+                self.get_logger().error(f"Intervention failed; policy remains paused: {exc}")
+            finally:
+                if self.control_mode != "requesting_vr":
+                    self.takeover_pending = None
 
         def _joint_callback(self, msg):
             left = np.asarray(msg.l_arm_pos_fdback, dtype=np.float64)
@@ -542,6 +802,10 @@ def create_bridge_node(args):
                     f"observation_check_age_s={observation_age} state_timeout_s={state_timeout_s:.3f}")
 
         def _publish_command(self, action: np.ndarray, hold: bool = False):
+            if self.control_mode != "policy":
+                return False
+            if self.home_session is not None and self.home_session.active:
+                return False
             if self.safety is not None and not self.safety.ready():
                 return False
             joints_l = action[:7].tolist()
@@ -549,7 +813,7 @@ def create_bridge_node(args):
             bridge_msg = BridgeCtlMsg()
             bridge_msg.header.stamp = self.get_clock().now().to_msg()
             bridge_msg.header.frame_id = "pi05_policy"
-            bridge_msg.policy_speed_checks_disabled = policy_disable_all_speed_checks and not hold
+            bridge_msg.policy_speed_checks_disabled = policy_disable_all_speed_checks
             bridge_msg.ctl_trans_mod = 3
             bridge_msg.torque_feedforward_ctl = 0
             bridge_msg.if_reach_end = False
@@ -617,6 +881,10 @@ def create_bridge_node(args):
             self.generation += 1
 
         def publish_step(self):
+            if self.control_mode != "policy":
+                return
+            if self.home_session is not None and self.home_session.active:
+                return
             if self.safety is not None and not self.safety.ready():
                 return
             if not self.startup_ready:
@@ -673,9 +941,27 @@ def create_bridge_node(args):
             return self.chunk.at(now)
 
         def step(self):
+            if self.keyboard is not None:
+                key = self.keyboard.poll()
+                if key in ("h", "H"):
+                    self.request_home()
+            self._poll_intervention()
+            self._poll_worker_operation()
+            if self.control_mode == "vr" and (self.worker_lifecycle is None or self.worker_suspended):
+                self.recording_only_requested = True
+                return
+            if self.control_mode in ("requesting_vr", "vr", "failed", "stopped"):
+                return
             if self.safety is not None and not self.safety.ready():
                 if not self.startup_ready and not self.safety.fault:
                     self._warn(f"Waiting for startup servo safety; {self.safety.diagnostics()}; {self._input_diagnostics()}")
+                return
+            if self.home_session is not None and self.home_session.active:
+                if self.home_session.tick():
+                    self._reset_policy()
+                    self._set_mode("policy")
+                elif self.home_session.phase == "failed":
+                    self._set_mode("failed")
                 return
             try:
                 state = self._snapshot_state()
@@ -763,6 +1049,30 @@ def create_bridge_node(args):
                 self._warn(f"PI05 step failed: {exc}; {self._input_diagnostics()}")
                 self._hold()
 
+        def request_home(self):
+            if self.control_mode == "vr" or self.worker_suspended:
+                self.get_logger().warning("H disabled after VR intervention; save/discard, exit this session, and restart deployment manually")
+                return
+            if self.home_session is None or self.home_session.phase not in ("idle", "failed"):
+                return
+            if self.lifecycle_pending is not None:
+                self.get_logger().warning("H ignored: worker shutdown is still pending")
+                return
+            if self.worker_lifecycle is not None and self.worker_lifecycle_error and not self.worker_suspended:
+                self._begin_worker_operation("stop")
+                self.get_logger().warning("H deferred: retrying unconfirmed worker stop; press H again after the worker has exited")
+                return
+            if self.takeover_pending is not None:
+                self.get_logger().warning("H ignored: VR ownership handoff is pending")
+                return
+            if self.recorder is not None and self.recorder.busy():
+                self.get_logger().warning("H ignored: save or discard the recording and wait for its writer to finish")
+                return
+            self._hold()
+            self._reset_policy()
+            self._set_mode("home")
+            self.home_session.begin()
+
         def _trip_safety(self, reason):
             if self.safety is not None:
                 self.safety.trip(str(reason))
@@ -781,6 +1091,13 @@ def create_bridge_node(args):
                 self.get_logger().warning(message)
 
         def close(self):
+            self.lifecycle_cancel.set()
+            if self.keyboard is not None:
+                self.keyboard.close()
+            if self.home_session is not None:
+                self.home_session.close()
+            if self.takeover_pending is not None:
+                self.takeover_pending.cancel()
             self.control_timer.cancel()
             if self.publish_timer is not None:
                 self.publish_timer.cancel()
@@ -795,9 +1112,26 @@ def create_bridge_node(args):
                 # still holds the arms when this stream disappears.
                 LOG.warning("Could not publish shutdown hold: %s", exc)
             finally:
-                self.inference_pool.shutdown(wait=True, cancel_futures=True)
-                self.client.close()
-                self.cameras.close()
+                try:
+                    self._set_mode("stopped")
+                except Exception as exc:
+                    LOG.warning("Could not publish stopped mode: %s", exc)
+                try:
+                    for companion in self.companion_nodes:
+                        companion.close()
+                finally:
+                    self.companion_nodes.clear()
+                    try:
+                        if self.lifecycle_pool is not None:
+                            self.lifecycle_pool.shutdown(wait=True, cancel_futures=True)
+                    finally:
+                        try:
+                            self.inference_pool.shutdown(wait=True, cancel_futures=True)
+                        finally:
+                            try:
+                                self.client.close()
+                            finally:
+                                self.cameras.close()
 
     return BridgeNode()
 
