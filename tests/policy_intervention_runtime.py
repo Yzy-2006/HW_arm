@@ -25,7 +25,7 @@ import record
 import pi05_bridge
 from ros_shutdown import drain_executor
 from worker_lifecycle import WorkerManagementServer, WorkerProcess
-from vr_recording import switch_to_recording_only
+from vr_recording import switch_to_recording_only, switch_to_policy
 
 sys.modules["televuer"] = NS(TeleVuerWrapper=object)
 from vr_pose_increment_publisher import VRPoseIncrementPublisher, run_vr_tick
@@ -52,18 +52,23 @@ class Cameras:
 
 
 class Policy:
+    health_error = False
+
     def __init__(self, *args):
         self.resets = []
+        self.states = []
 
     def infer(self, state, images, task, request_id, *, reset):
         self.resets.append(reset)
+        self.states.append(np.asarray(state).copy())
         return {"actions": np.repeat(np.asarray(state)[None, :], 50, axis=0).tolist()}
 
     def close(self):
         pass
 
     def health(self):
-        pass
+        if self.health_error:
+            raise ConnectionError("synthetic Thor disconnect")
 
 
 class Keyboard:
@@ -88,6 +93,7 @@ class Hardware(Node):
         self.home_requests = 0
         self.resume_at = 0.
         self.commands = []
+        self.resume_requests = []
         self.create_service(Trigger, "/dexbotCtl/policy_intervene", self.takeover)
         self.create_service(Trigger, "/dexbotCtl/policy_home", self.home)
         self.create_service(SetBool, "/dexbotCtl/vr_override", self.resume)
@@ -125,6 +131,7 @@ class Hardware(Node):
         return response
 
     def resume(self, request, response):
+        self.resume_requests.append(request.data)
         response.success = time.monotonic() >= self.resume_at
         response.message = "ready" if response.success else "home timing pending"
         return response
@@ -133,6 +140,7 @@ class Hardware(Node):
 def main():
     assert os.environ["ROS_DOMAIN_ID"] == "220"
     destination = Path(sys.argv[1])
+    roundtrip = len(sys.argv) > 2 and sys.argv[2] == "roundtrip"
     config = yaml.safe_load((ROOT / "config/pi05_deployment.yaml").read_text())
     camera_cfg = yaml.safe_load((ROOT / "config/recording.yaml").read_text())
     camera_cfg.update(min_episode_frames=2, min_joint_delta_rad=0., max_frame_gap_s=.5,
@@ -144,7 +152,7 @@ def main():
     manager_stopped = threading.Event()
     manager = WorkerManagementServer(("127.0.0.1", 0), worker, on_shutdown=manager_stopped.set)
     config["worker"]["control_port"] = manager.server_address[1]
-    config["bridge"]["intervention"] = dict(enabled=True, stop_worker=True, dataset_root=str(destination / "data"))
+    config["bridge"]["intervention"] = dict(enabled=True, stop_worker=not roundtrip, dataset_root=str(destination / "data"))
     config_path = destination / "deployment.yaml"
     config_path.write_text(yaml.safe_dump(config))
     record.Cameras, pi05_bridge.PolicyClient, pi05_bridge.TerminalKeys = Cameras, Policy, Keyboard
@@ -168,12 +176,15 @@ def main():
         wrapper = NS(get_motion_state_data=lambda: data)
 
         def spin(duration):
-            nonlocal executor, session
+            nonlocal executor, session, bridge
             end = time.monotonic() + duration
             while time.monotonic() < end:
                 executor.spin_once(timeout_sec=.01)
                 if session is None and bridge.recording_only_requested:
                     executor, session = switch_to_recording_only(executor, bridge)
+                elif session is not None and session.resume_policy_requested:
+                    executor, bridge = switch_to_policy(executor, session)
+                    session = None
                 run_vr_tick(vr, wrapper)
                 time.sleep(.005)
 
@@ -191,6 +202,56 @@ def main():
 
         until(lambda: bool(hardware.commands))
         assert bridge.control_mode == "policy" and not vr._vr_enabled
+        if roundtrip:
+            cameras = bridge.cameras
+            for cycle in range(2):
+                old_bridge = bridge
+                press("left_aButton")
+                until(lambda: session is not None and vr._vr_enabled)
+                assert type(executor).__name__ == "SingleThreadedExecutor"
+                assert session.cameras is cameras and not cameras.closed
+                assert worker.status()["pid"] == original_pid and not worker.closed
+                assert all(not thread.is_alive() for thread in old_bridge.inference_pool._threads)
+                count, inference_count = len(hardware.commands), len(old_bridge.client.resets)
+                press("left_bButton")
+                until(lambda: session.recorder.start_time is not None)
+                spin(.2)
+                if cycle == 0:
+                    press("left_bButton")
+                else:
+                    press("left_aButton")
+                until(lambda: not session.recorder.busy())
+                spin(.8)
+                assert session is not None and vr._vr_enabled
+                assert len(hardware.commands) == count and len(old_bridge.client.resets) == inference_count
+                busy = session.recorder.busy
+                session.recorder.busy = lambda: True
+                press("left_aButton")
+                spin(.8)
+                assert session is not None and not session.resume_policy_requested and not hardware.home_requests
+                assert len(hardware.resume_requests) == cycle
+                session.recorder.busy = busy
+                if cycle == 0:
+                    Policy.health_error = True
+                    press("left_aButton")
+                    until(lambda: session is not None and session.resume_started_at is None and vr._vr_enabled)
+                    assert not hardware.resume_requests and len(hardware.commands) == count
+                    Policy.health_error = False
+                for _, message in hardware.streams:
+                    if isinstance(message, MidNodeCtlMsgRet):
+                        message.l_arm_pos_fdback[0] = .15 + cycle * .05
+                press("left_aButton")
+                assert session is not None and session.recording_guard() == "Recording blocked while resuming policy"
+                until(lambda: session is None and bool(bridge.client.resets))
+                until(lambda: not vr._vr_enabled)
+                assert bridge.cameras is cameras and not cameras.closed
+                assert bridge.client.resets[0] is True
+                assert np.isclose(bridge.client.states[0][0], .15 + cycle * .05)
+                assert hardware.home_requests == 0 and hardware.resume_requests == [False] * (cycle + 1)
+                assert worker.status()["pid"] == original_pid and not manager_stopped.is_set()
+            assert len(list((destination / "data").glob("*/episode.json"))) == 1
+            print("workflow_passed: Thor retained -> single-thread VR save/discard -> idle discard resumes fresh policy without home")
+            return
         press("left_aButton")
         until(lambda: bridge.control_mode == "vr" and vr._vr_enabled)
         until(lambda: bridge.worker_suspended)

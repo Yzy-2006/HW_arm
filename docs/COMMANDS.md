@@ -81,7 +81,7 @@ make filter-data DATASET=/absolute/path/to/lerobot_data OUTPUT=/absolute/path/to
 | `make pi05-bench` | 离线推理测速，不启动机器人；参数用 `BENCH_ARGS="..."` |
 | `make bridge` | 机器人环境的 dry-run bridge；打开相机，不发机器人动作 |
 | `make motion` | 允许 bridge 发布真实动作，先按[部署指南](DEPLOYMENT.md)预检 |
-| `make vr-intervene` | 丢弃键结束部署并接管，自动关闭 worker 与部署 bridge，B 录制/保存；补采后手动重启部署 |
+| `make vr-intervene` | 丢弃键接管进入单线程补采；B 录制/保存；录制中 A 丢弃，空闲 A 从当前状态恢复部署 |
 | `make vr-takeover` | 请求 VR 控制权并锚定当前反馈；先退出 motion，见[接管流程](POLICY_INTERVENTION.md) |
 | `make replay ARGS="--episode 0 --max-frames 90"` | 数据回放，默认 dry-run，不需要 worker |
 | `make replay ARGS="--episode 0 --max-frames 90 --rviz"` | RViz 回放预览 |

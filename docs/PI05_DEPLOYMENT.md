@@ -302,9 +302,9 @@ make pi05 PI05_ARGS='--camera-map {"cam_high":"head","cam_left":"left_wrist","ca
 在 `make motion` 终端按 H 可暂停模型、平滑回零，在轨迹发送时段结束时闭合双夹爪，等待 3 秒自动恢复，不检查到位状态；
 参数和失败处理见[Motion 终端回零与自动恢复](DEPLOYMENT.md#motion-终端回零与自动恢复)。
 同时运行 `make vr-intervene` 可用左 A 丢弃键暂停部署并切入 VR，用左 B 进行补采；
-VR 接管时自动停止 GPU worker、管理进程和部署 bridge，切换为单线程遥操补采会话。
-保存结束后在原 motion 终端按 Ctrl+C 释放相机，再手动执行 `make pi05` 和 `make motion`。
-接管后 H 不再自动恢复模型。
+VR 接管时默认保留 Thor worker，关闭本机部署 bridge，切换为单线程遥操补采会话。
+录制中左 A 只丢弃当前录制，未录制时再次按左 A，从当前姿态恢复模型，不回零、不主动闭合夹爪。
+恢复时重新申请控制权，清空旧动作并使用新的观测；无需重启 worker/motion，H 不参与恢复。
 补采复用 bridge 相机，不另开 `make record`，见[VR 接管与补采](POLICY_INTERVENTION.md)。
 命令行参数优先于 YAML。例如，临时指定 10 步推理积分：
 

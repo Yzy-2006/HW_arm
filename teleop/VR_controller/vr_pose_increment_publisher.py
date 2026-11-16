@@ -625,10 +625,10 @@ class VRPoseIncrementPublisher(Node):
             self._reset_intervention_tracking()
             self.get_logger().info(f"部署控制状态：{msg.data}")
             if msg.data == "vr":
-                self.get_logger().info("VR 接管完成；先松开双手扳机和 squeeze，再扣动控制。左 B 开始/保存采集")
+                self.get_logger().info("VR 接管完成；先松开双手扳机和 squeeze，再扣动控制。左 B 开始/保存；左 A 录制中丢弃、空闲时恢复模型（默认保留 worker 模式）")
 
     def _request_intervention(self):
-        if self._intervention_future is not None:
+        if self._intervention_future is not None or self._record_request_pending:
             return
         if not self.intervention_client.service_is_ready():
             self.get_logger().error("未发现 /towel/intervene，请保持 make motion 运行并启用 intervention")
@@ -681,7 +681,7 @@ class VRPoseIncrementPublisher(Node):
             self._vr_enabled = self._managed_controls_ready(state)
             if discard_button and not self.prev_discard_button:
                 if self._vr_enabled:
-                    self.discard_recording()
+                    self._request_intervention()
                 elif self.policy_mode in ("policy", "failed"):
                     self._request_intervention()
             elif record_button and not self.prev_record_button and self._vr_enabled:

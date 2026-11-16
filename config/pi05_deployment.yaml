@@ -29,7 +29,7 @@ bridge:
     enabled: true
     dataset_root: data/raw/interventions
     takeover_timeout_s: 5.0
-    stop_worker: true  # Exit worker/manager, then destroy deployment bridge for VR-only recording.
+    stop_worker: false  # Keep Thor worker loaded; idle VR discard resumes policy without homing.
     worker_stop_timeout_s: 15.0
   keyboard_home:
     timeout_s: 30.0  # H pauses policy commands until home and automatic handoff succeed.

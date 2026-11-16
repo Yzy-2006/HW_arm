@@ -24,6 +24,7 @@ def managed_vr(monkeypatch):
     node = NS(policy_intervention=True, policy_mode="unknown", policy_mode_received_at=-float("inf"),
               _vr_enabled=False, _await_controls_release=True, _intervention_future=None,
               _intervention_requested_at=0., first_frame=True, _last_sample_time=None,
+              _record_request_pending=False,
               prev_record_button=False, prev_discard_button=False,
               prev_left_gripper_button=False, prev_right_gripper_button=False,
               dual_grippers=grippers,
@@ -90,7 +91,9 @@ def test_vr_records_discards_and_stops_outputs_for_home_and_lost_heartbeat(manag
     vr.tick()
     vr.buttons.left_aButton = True
     vr.tick()
-    assert vr.recording == ["record", "record", "discard"]
+    assert vr.recording == ["record", "record"]
+    assert len(vr.requests) == 1
+    vr.requests[0].set_result(NS(success=True, message="discarded"))
     counts = len(vr.commands), len(vr.increments)
     vr.mode("home")
     vr.tick()
@@ -114,6 +117,24 @@ def test_missing_takeover_service_does_not_enable_vr(managed_vr):
     vr.tick()
     assert not vr.requests and not vr.commands and not vr.increments
     assert vr.logs
+
+
+def test_discard_during_pending_record_request_cannot_resume_policy(managed_vr):
+    vr = managed_vr
+    vr.mode("vr")
+    vr.tick()
+    vr.node._record_request_pending = True
+    vr.buttons.left_aButton = True
+    vr.tick()
+    assert not vr.requests
+    vr.node._record_request_pending = False
+    vr.tick()
+    assert not vr.requests, "Held discard must not become a second action after the save finishes"
+    vr.buttons.left_aButton = False
+    vr.tick()
+    vr.buttons.left_aButton = True
+    vr.tick()
+    assert len(vr.requests) == 1
 
 
 def test_make_vr_intervene_starts_managed_vr_only():

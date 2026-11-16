@@ -346,6 +346,10 @@ def run_bridge(node_factory):
                 from vr_recording import switch_to_recording_only
 
                 executor, node = switch_to_recording_only(executor, node)
+            elif getattr(node, "resume_policy_requested", False):
+                from vr_recording import switch_to_policy
+
+                executor, node = switch_to_policy(executor, node)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
@@ -364,7 +368,7 @@ def run_bridge(node_factory):
     return 0
 
 
-def create_bridge_node(args):
+def create_bridge_node(args, cameras=None, recorder=None):
 
     config_path = Path(args.config).expanduser().resolve()
     config = _read_yaml(config_path)
@@ -492,6 +496,9 @@ def create_bridge_node(args):
             self.home_session = None
             self.control_mode = "policy"
             self.recording_only_requested = False
+            self.policy_resume_pending = None
+            self.policy_resume_started_at = 0.
+            self.resume_observations_after = None
             self.companion_nodes = []
             self.recorder = None
             self.mode_pub = None
@@ -509,7 +516,7 @@ def create_bridge_node(args):
             self.sample_velocity = self.sample_acceleration = None
             self.last_sample_derivatives = None
             self.client = PolicyClient(worker_host, worker_port, token, float(worker_cfg.get("timeout_s", 5.0)))
-            self.cameras = Cameras(camera_cfg)
+            self.cameras = cameras if cameras is not None else Cameras(camera_cfg)
             self.state_lock = threading.Lock()
             self.joints = None
             self.joint_received_at = 0.0
@@ -609,8 +616,9 @@ def create_bridge_node(args):
                         intervention_cfg.get("dataset_root"), ROOT / "data/raw/interventions"))
                     recording_cfg["task"] = task
                     recording_cfg["episode_metadata"] = {"source": "vr_policy_intervention"}
-                    self.recorder = make_node(recording_cfg, self.cameras,
+                    self.recorder = recorder if recorder is not None else make_node(recording_cfg, self.cameras,
                         start_guard=self.recording_guard, control_callback_group=self.default_callback_group)
+                    self.recorder.start_guard = self.recording_guard
                     self.companion_nodes.append(self.recorder)
                     self.publish_mode()
                     self.get_logger().info(f"VR intervention ready; shared-camera recorder: {recording_cfg['dataset_root']}")
@@ -686,7 +694,17 @@ def create_bridge_node(args):
             if self.lifecycle_pool is not None:
                 self.lifecycle_pool.shutdown(wait=True, cancel_futures=True)
             self.client.close()
-            session = make_recording_session(self.recorder, self.cameras)
+            resume_factory = None if stop_worker else lambda cameras, recorder: create_bridge_node(args, cameras, recorder)
+            client = self.client
+
+            def check_worker():
+                try:
+                    client.health()
+                finally:
+                    client.close()
+
+            session = make_recording_session(self.recorder, self.cameras,
+                resume_factory=resume_factory, check_worker=check_worker if not stop_worker else None)
             self.recorder = self.cameras = None
             self.companion_nodes.clear()
             return session
@@ -699,6 +717,43 @@ def create_bridge_node(args):
             self.startup_ready = False
             self.reanchor_next_command = True
             self.last_observation_check = -float("inf")
+
+        def resume_from_vr(self):
+            from std_srvs.srv import SetBool
+
+            self._reset_policy()
+            self._set_mode("resuming_policy")
+            self.policy_resume_started_at = time.monotonic()
+            try:
+                if not self.resume_client.service_is_ready():
+                    raise RuntimeError("/dexbotCtl/vr_override unavailable")
+                self.policy_resume_pending = self.resume_client.call_async(SetBool.Request(data=False))
+            except Exception as exc:
+                self._set_mode("failed")
+                self.get_logger().error(f"Policy resume blocked: {exc}; discard requests VR takeover again")
+
+        def _poll_policy_resume(self):
+            try:
+                future = self.policy_resume_pending
+                if future is None:
+                    return
+                if not future.done():
+                    if time.monotonic() - self.policy_resume_started_at < takeover_timeout_s:
+                        return
+                    future.cancel()
+                    raise TimeoutError("Policy ownership response timed out")
+                response = future.result()
+                if response is None or not response.success:
+                    raise RuntimeError(getattr(response, "message", "Empty policy ownership response"))
+                self.policy_resume_pending = None
+                self._reset_policy()
+                self.resume_observations_after = time.monotonic()
+                self._set_mode("policy")
+                self.get_logger().info("Policy resumed from current observations; old chunks cleared; no home trajectory")
+            except Exception as exc:
+                self.policy_resume_pending = None
+                self._set_mode("failed")
+                self.get_logger().error(f"Policy resume blocked: {exc}; discard requests VR takeover again")
 
         def request_intervention(self, request, response):
             if self.control_mode == "vr":
@@ -756,7 +811,9 @@ def create_bridge_node(args):
                 if response is None or not response.success:
                     raise RuntimeError(getattr(response, "message", "Empty VR handoff response"))
                 self._set_mode("vr")
-                self.get_logger().warning("VR owns control; deployment will shut down. Finish recording, then restart make pi05 and make motion manually")
+                self.get_logger().warning("VR owns control; switching to single-thread recording. " +
+                    ("Finish recording, then restart deployment manually" if stop_worker else
+                     "Discard while idle resumes policy from current feedback without homing"))
             except Exception as exc:
                 self._set_mode("failed")
                 self.get_logger().error(f"Intervention failed; policy remains paused: {exc}")
@@ -941,6 +998,9 @@ def create_bridge_node(args):
             return self.chunk.at(now)
 
         def step(self):
+            if self.control_mode == "resuming_policy":
+                self._poll_policy_resume()
+                return
             if self.keyboard is not None:
                 key = self.keyboard.poll()
                 if key in ("h", "H"):
@@ -973,7 +1033,14 @@ def create_bridge_node(args):
                         return
                     raise ValueError(f"Waiting for fresh joint and gripper feedback; {self._input_diagnostics()}")
                 now = time.monotonic()
-                images, _ = self.cameras.snapshot(now)
+                images, camera_meta = self.cameras.snapshot(now)
+                if self.resume_observations_after is not None:
+                    if (self.joint_received_at <= self.resume_observations_after or
+                            self.gripper_received_at <= self.resume_observations_after or
+                            any(camera_meta.get(name, {}).get("receive_monotonic_s", -float("inf")) <=
+                                self.resume_observations_after for name in images)):
+                        return
+                    self.resume_observations_after = None
                 self.last_observation_check = now
                 if not self.startup_ready:
                     self.startup_ready = True
@@ -1098,6 +1165,8 @@ def create_bridge_node(args):
                 self.home_session.close()
             if self.takeover_pending is not None:
                 self.takeover_pending.cancel()
+            if self.policy_resume_pending is not None:
+                self.policy_resume_pending.cancel()
             self.control_timer.cancel()
             if self.publish_timer is not None:
                 self.publish_timer.cancel()

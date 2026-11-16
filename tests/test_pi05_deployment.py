@@ -426,6 +426,40 @@ def complete(node, value=1.0):
     node.pending.set_result({"actions": actions.tolist()})
 
 
+@pytest.mark.parametrize("result", ["accepted", "rejected", "timeout"])
+def test_vr_resume_requires_native_ack_and_post_resume_feedback_without_homing(bridge, result):
+    node, clock, feedback = bridge
+    node.resume_from_vr()
+    assert node.control_mode == "resuming_policy" and node.chunk is None
+    assert not node.home_client.requests
+    request, future = node.resume_client.requests[-1]
+    assert request.data is False
+    node.step()
+    node.publish_step()
+    assert node.pending is None and not node.command_pub.messages and not node.gripper_pub.messages
+    if result == "timeout":
+        clock[0] += 6.
+    else:
+        future.set_result(SimpleNamespace(success=result == "accepted", message="synthetic result"))
+    node.step()
+    if result != "accepted":
+        assert node.control_mode == "failed" and node.pending is None
+        return
+    assert node.control_mode == "policy"
+    camera_time = [clock[0]]
+    node.cameras.snapshot = lambda now: ({"head": np.zeros((2, 2, 3), np.uint8)},
+        {"head": {"receive_monotonic_s": camera_time[0]}})
+    node.step()
+    assert node.pending is None, "Pre-resume feedback must not reach inference"
+    clock[0] += .01
+    feedback(.1)
+    node.step()
+    assert node.pending is None, "Pre-resume images must not reach inference"
+    camera_time[0] = clock[0]
+    node.step()
+    assert node.pending is not None and node.chunk is None and not node.home_client.requests
+
+
 @pytest.mark.parametrize("bridge", [{"motion_safety": {"protection_mode": "speed_only"}}], indirect=True)
 def test_motion_home_blocks_arms_grippers_and_old_inference_then_restarts_with_fresh_state(bridge):
     node, clock, feedback = bridge

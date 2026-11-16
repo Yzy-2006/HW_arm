@@ -22,6 +22,11 @@ PI05_CHECKPOINT ?= full321003-resume10k-to50k-step-50000
 PI05_HOST ?= 127.0.0.1
 PI05_PORT ?= 8765
 PI05_ARGS ?= --inference-entry inference_full321.py --num-steps 20
+THOR_HOST ?= 192.168.3.251
+THOR_USER ?= nico
+# Paths relative to the remote user's home, never the laptop's HOME.
+THOR_PROJECT ?= towel_task
+THOR_CONDA_ROOT ?= anaconda3
 BENCH_ARGS ?=
 ACT_CHECKPOINT ?= $(ROOT)/outputs/act_fold_towel_b12/checkpoints/100000/pretrained_model
 ACT_ENV ?= lerobot
@@ -46,6 +51,7 @@ endef
 .PHONY: help env check check-control check-record check-visualize build test launch visualize sim-check sim-demo sim teleop experiment teleop-watch preview camera-list servo arms robot vr vr-opencv vr-debug record record-opencv record-rviz watch watch-arm calibrate calibrate-arm-zero scan-arm-can save-arm-zero validate-data export-data filter-data pi05 pi05-bench act bridge motion replay clean-build
 
 .PHONY: vr-takeover vr-intervene
+.PHONY: pi05-thor bridge-thor motion-thor
 
 help:
 	@echo "Towel task commands"
@@ -53,7 +59,7 @@ help:
 	@echo "  make build                  Build the ROS workspace"
 	@echo "  make vr-debug               Diagnose XR controller events without publishing control commands"
 	@echo "  make vr-takeover            Request VR ownership anchored to current feedback after stopping motion"
-	@echo "  make vr-intervene           Discard button ends deployment for VR-only capture; B records/saves; restart deployment manually"
+	@echo "  make vr-intervene           A: take over/discard recording/resume idle policy; B: record/save; no home on resume"
 	@echo "  make vr-opencv              Compatibility alias for make vr; cameras come from make record"
 	@echo "  make watch                  Observe /towel/gripper_state (override WATCH_TOPIC=... )"
 	@echo "  make watch-arm SIDE=both RATE=3  Print one or both arms' joint angles at a controlled rate"
@@ -83,10 +89,13 @@ help:
 	@echo "  make export-data OUTPUT=/absolute/output [EXPORT_CONFIG=...]  Export with the training environment"
 	@echo "  make filter-data DATASET=/path/to/lerobot OUTPUT=/new/path MIN_JOINT_DELTA_RAD=0.02  Offline motion filtering (training environment; ARGS=--dry-run for counts only)"
 	@echo "  make pi05                         Start the OpenPI PI05 worker"
+	@echo "  make pi05-thor                    SSH to $(THOR_USER)@$(THOR_HOST) and start the Thor PI05 worker"
 	@echo "  make pi05-bench                   Benchmark PI05 inference without robot hardware"
 	@echo "  make act                          Start the LeRobot ACT worker"
 	@echo "  make bridge                       Start the policy bridge in dry-run mode"
 	@echo "  make motion                       Request policy ownership, then start the motion bridge"
+	@echo "  make bridge-thor                  Local dry-run bridge using Thor inference at $(THOR_HOST)"
+	@echo "  make motion-thor                  Local motion bridge using Thor inference at $(THOR_HOST)"
 	@echo "    H in motion terminal            Pause policy, return home, resume after trajectory timing + 3 s"
 	@echo "  make motion PI05_SLOW_FACTOR=0.1  Scale feedback-relative allowance (inactive in speed_only; not playback speed)"
 	@echo "  make vr                           Start standalone VR; after stopping motion run make vr-takeover"
@@ -292,6 +301,10 @@ pi05:
 	cd "$(ROOT)"
 	exec python3 scripts/run_policy_worker.py --env "$(PI05_ENV)" --manage -- --config "$(PI05_CONFIG)" --model "$(PI05_MODEL)" --checkpoint "$(PI05_CHECKPOINT)" --host "$(PI05_HOST)" --port "$(PI05_PORT)" $(PI05_ARGS)
 
+pi05-thor:
+	@printf -v remote_command '%q ' bash -lc 'set -e; source "$$HOME/$(THOR_CONDA_ROOT)/etc/profile.d/conda.sh"; conda activate base; cd "$$HOME/$(THOR_PROJECT)"; exec make pi05 PI05_HOST=0.0.0.0'
+	@exec ssh -t "$(THOR_USER)@$(THOR_HOST)" "$$remote_command"
+
 pi05-bench:
 	set -e
 	cd "$(ROOT)"
@@ -300,6 +313,12 @@ pi05-bench:
 bridge:
 	@$(ROBOT_ENV)
 	@python3 "$(ROOT)/deployment/pi05_bridge.py" --config "$(PI05_CONFIG)" $(ARGS)
+
+bridge-thor:
+	@$(MAKE) --no-print-directory bridge ARGS="--worker-host $(THOR_HOST) $(ARGS)"
+
+motion-thor:
+	@$(MAKE) --no-print-directory motion ARGS="--worker-host $(THOR_HOST) $(ARGS)"
 
 motion:
 	@if [[ -n "$(PI05_SLOW_FACTOR)" && ( "$(PI05_SLOW_FACTOR)" == "0" || "$(PI05_SLOW_FACTOR)" == -* ) ]]; then echo "PI05_SLOW_FACTOR must be greater than 0" >&2; exit 2; fi

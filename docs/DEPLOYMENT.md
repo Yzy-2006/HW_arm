@@ -20,11 +20,45 @@ RealSense + ROS2 feedback -> bridge -> TCP -> pi05 或 act worker
 | `make act` | 启动 LeRobot/PyTorch ACT worker | `lerobot` |
 | `make bridge` | 启动通用 policy bridge，dry-run，不发机器人动作 | `.venv-robot` |
 | `make motion` | 自动交还模型控制权，成功后启动 bridge 并允许真实动作 | `.venv-robot` |
-| `make vr-intervene` | 连接 VR 待命；丢弃键结束部署并接管，B 录制/保存，补采后手动重启部署 | `.venv-robot` |
+| `make vr-intervene` | 丢弃键接管；B 录制/保存；录制中丢弃、空闲时恢复模型，无需回零 | `.venv-robot` |
 
 两个 worker 使用同一个默认端口 `127.0.0.1:8765`，同一时间只启动其中一个。
 
 Thor 环境检查、离线测速和持续负载方法见 [Thor PI05 测速指南](PI05_THOR_BENCHMARK.md)。
+
+### 笔记本连接 Thor 推理
+
+以下命令均在笔记本项目目录运行，分别使用不同终端：
+
+```bash
+make pi05-thor
+make bridge-thor
+```
+
+`pi05-thor` 通过 SSH 连接 `nico@192.168.3.251`，加载 Thor 的
+`~/anaconda3/etc/profile.d/conda.sh`，激活 base 后进入 `~/towel_task`，执行
+`make pi05 PI05_HOST=0.0.0.0`。模型和推理环境使用 Thor 上原有 Makefile 的默认配置。
+保持 SSH 终端运行；Ctrl+C 可停止远程 worker。首次连接可能需要确认主机指纹并输入密码。
+
+`bridge-thor` 在笔记本运行 dry-run，连接 Thor 的推理服务。验证完成后先 Ctrl+C
+退出 dry-run、释放相机，再在已启动 `make servo`、`make arms`、`make robot` 的前提下执行：
+
+```bash
+make motion-thor
+```
+
+`motion-thor` 复用本地 `motion` 的控制权申请和真实动作流程。
+VR 继续在笔记本执行 `make vr-intervene`；默认 `stop_worker: false`，只需推理端口 8765 可达。
+接管后 Thor 模型保持加载，本机切为单线程补采。未录制时再次按丢弃键，从当前状态恢复部署，
+不必重启 worker 或 motion。`stop_worker: true` 的手动重启模式还需要管理端口 8766。
+
+远程主机可通过 `THOR_HOST`、`THOR_USER` 覆盖；`THOR_PROJECT` 和
+`THOR_CONDA_ROOT` 分别是远程用户主目录下的项目和 Conda 目录名。
+本地 bridge 继续支持 `ARGS`、`PI05_CONFIG` 等现有变量，例如：
+
+```bash
+make bridge-thor THOR_HOST=192.168.3.251 ARGS="--worker-port 8765"
+```
 
 常用变量：
 
@@ -41,8 +75,8 @@ make motion PI05_SLOW_FACTOR=0.1
 服务不可用、响应超时或拒绝切换时退出，不自动清除故障或重启控制节点。
 
 需要部署中接管时，保持 motion 运行，另开终端执行 `make vr-intervene`。
-左 A 丢弃键结束部署并接管，左 B 开始/保存补采。补采会话专用单线程执行器，
-结束后退出原 motion 终端里的录制会话，再手动执行 `make pi05` / `make act` 和 `make motion`。
+左 A 丢弃键暂停部署并接管，左 B 开始/保存补采。补采会话专用单线程执行器，
+录制中左 A 只丢弃，未录制时左 A 从当前状态恢复模型，不回零、不主动闭合夹爪。
 内置采集器共享部署相机，不另开 `make record`；完整操作见[VR 接管与补采](POLICY_INTERVENTION.md)。
 
 ## Motion 终端回零与自动恢复
@@ -56,7 +90,7 @@ make motion PI05_SLOW_FACTOR=0.1
 
 回零和等待期间重复按 H 不重复触发。`make bridge` dry-run 不执行此按键动作；
 无交互终端时不监听键盘。`make vr-intervene` 可持续待命；普通 `make vr` 须停止，避免夹爪指令冲突。
-VR 接管后部署 H 键监听关闭，不再自动恢复模型；补采保存后手动重启部署。
+VR 接管后部署 H 键监听关闭；未录制时通过 VR 左 A 恢复，不执行 H 的回零流程。
 
 等待参数位于 `ros2_ws/src/ctl_msgs_hw/config/controllerConfig.yaml`：
 
@@ -301,10 +335,11 @@ bridge 会使用 URDF 关节限位、每周期步长限制和已标定的夹爪 
 先停止 `make motion` / `make bridge`，再在 `make pi05` / `make act` 终端按
 `Ctrl+C`。停止 bridge 仅断开推理连接，worker 会继续保留模型，便于重连。
 
-VR 丢弃键接管时，自动停止 GPU worker 和管理进程，并关闭部署 bridge 的订阅、定时器和线程池。
+VR 丢弃键接管时，默认保持 Thor worker 和管理进程存活，关闭本机部署 bridge 的订阅、定时器和线程池。
 原 motion 终端只保留单线程遥操补采会话，等待日志 `VR recording-only session ready` 后开始录制。
-补采完成后保存、Ctrl+C 退出会话，再手动执行 `make pi05` / `make act` 和 `make motion`。
-默认管理端口为 `8766`。
+补采完成后保存，未录制时按左 A，从当前状态恢复部署，不回零。
+如设 `stop_worker: true`，才会通过管理端口（默认 `8766`）停止 worker 并回收进程，
+此模式需在补采结束后手动重启 worker/motion。
 详细流程及配置见[部署转 VR 遥操作与补采](POLICY_INTERVENTION.md)。
 
 worker 启动日志会显示 PID 和 Python 路径。管理进程收到退出请求后向 worker 发送 `SIGTERM`；
