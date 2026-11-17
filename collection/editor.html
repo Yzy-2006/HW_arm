@@ -1,0 +1,1225 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>数据集剪辑</title>
+<style>
+:root {
+  font-family: system-ui, sans-serif;
+  color: #202826;
+  background: #f5f7f6;
+  font-size: 14px;
+  letter-spacing: 0
+}
+
+* {
+  box-sizing: border-box
+}
+
+body {
+  margin: 0
+}
+
+button,
+input,
+select {
+  font: inherit
+}
+
+button,
+input,
+select {
+  border: 1px solid #cbd3cf;
+  border-radius: 4px;
+  background: white;
+  color: inherit;
+  min-height: 36px;
+  padding: 6px 10px
+}
+
+button {
+  cursor: pointer;
+  white-space: nowrap
+}
+
+button:hover {
+  background: #e7eee9
+}
+
+button:disabled {
+  opacity: .45;
+  cursor: default
+}
+
+button.primary {
+  background: #17684c;
+  color: white;
+  border-color: #17684c
+}
+
+button.danger {
+  color: #ad303a
+}
+
+button.icon {
+  width: 38px;
+  flex: none;
+  font-size: 18px;
+  padding: 4px
+}
+
+input {
+  min-width: 0
+}
+
+input[type=checkbox] {
+  min-height: initial;
+  accent-color: #17684c
+}
+
+input[type=number] {
+  width: 100px
+}
+
+input[type=range] {
+  accent-color: #17684c;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent
+}
+
+label {
+  display: flex;
+  align-items: center;
+  gap: 8px
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 24px;
+  border-bottom: 1px solid #d9dfdc;
+  background: #fff;
+  gap: 16px
+}
+
+h1 {
+  font-size: 20px;
+  margin: 0;
+  font-weight: 650
+}
+
+h2 {
+  font-size: 14px;
+  margin: 0 0 12px
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap
+}
+
+.grow {
+  flex: 1
+}
+
+.muted {
+  color: #617069;
+  font-size: 12px
+}
+
+.path {
+  width: 100%;
+  flex: 1;
+  min-width: 180px
+}
+
+main {
+  max-width: 1600px;
+  margin: auto;
+  padding: 20px 24px
+}
+
+.source {
+  margin-bottom: 20px;
+  display: flex;
+  gap: 8px
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 24px
+}
+
+.viewbar {
+  margin-bottom: 12px;
+  justify-content: space-between
+}
+
+.cameras {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px
+}
+
+.camera {
+  margin: 0;
+  min-width: 0;
+  background: #171d1b;
+  border-radius: 4px;
+  overflow: hidden
+}
+
+.camera img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4/3;
+  object-fit: contain
+}
+
+.camera figcaption {
+  padding: 8px 10px;
+  color: #dae2dd;
+  font-size: 12px
+}
+
+.transport {
+  padding: 16px 0;
+  border-bottom: 1px solid #d9dfdc
+}
+
+.position {
+  min-width: 180px;
+  font-variant-numeric: tabular-nums
+}
+
+.timeline {
+  position: relative;
+  margin-top: 14px;
+  height: 44px;
+  padding-top: 8px
+}
+
+.marks {
+  height: 8px;
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  background: #dce4df;
+  border-radius: 2px;
+  overflow: hidden
+}
+
+.marks span {
+  position: absolute;
+  height: 100%;
+  background: #c44e56
+}
+
+.selection {
+  background: #daae39 !important;
+  height: 3px !important;
+  top: 5px
+}
+
+.selection-inputs {
+  padding: 18px 0;
+  display: flex;
+  align-items: end;
+  gap: 12px;
+  flex-wrap: wrap
+}
+
+.selection-inputs label {
+  display: grid;
+  gap: 6px
+}
+
+.selection-inputs button {
+  min-height: 36px
+}
+
+.intervals {
+  padding: 0;
+  margin: 0;
+  list-style: none
+}
+
+.intervals li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0;
+  border-bottom: 1px solid #e0e5e2;
+  font-variant-numeric: tabular-nums
+}
+
+.intervals li .jump {
+  flex: 1;
+  text-align: left;
+  border: 0;
+  background: none;
+  padding-left: 0;
+  white-space: normal;
+  font-size: 13px
+}
+
+.sidebar {
+  border-left: 1px solid #d9dfdc;
+  padding-left: 24px;
+  min-width: 0
+}
+
+.sidebar header {
+  padding: 0 0 12px;
+  background: none;
+  border: 0
+}
+
+footer {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid #d9dfdc
+}
+
+.export {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px
+}
+
+.message {
+  min-height: 24px;
+  margin: 12px 0 0;
+  overflow-wrap: anywhere
+}
+
+.error {
+  color: #a62b36
+}
+
+.summary {
+  display: flex;
+  gap: 24px;
+  margin-top: 18px;
+  font-size: 13px
+}
+
+.summary strong {
+  font-size: 20px;
+  display: block;
+  margin-top: 3px;
+  font-variant-numeric: tabular-nums
+}
+
+.empty {
+  padding: 12px 0;
+  color: #617069
+}
+
+#filename {
+  display: none
+}
+
+#busy {
+  color: #986c10
+}
+
+select {
+  max-width: 100%
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid #248660;
+  outline-offset: 2px
+}
+
+@media(min-width:1500px) {
+  .camera img {
+    aspect-ratio: 4/3
+  }
+}
+
+@media(max-width:1000px) {
+  .cameras {
+    grid-template-columns: repeat(2, minmax(0, 1fr))
+  }
+
+  .camera:first-child {
+    grid-column: 1/-1
+  }
+
+  .camera:first-child img {
+    aspect-ratio: 16/9
+  }
+
+  .workspace {
+    grid-template-columns: minmax(0, 1fr) 260px
+  }
+
+  .sidebar {
+    padding-left: 16px
+  }
+}
+
+@media(max-width:700px) {
+  header {
+    padding: 14px 16px;
+    flex-wrap: wrap
+  }
+
+  main {
+    padding: 16px
+  }
+
+  .workspace {
+    grid-template-columns: 1fr;
+    gap: 12px
+  }
+
+  .sidebar {
+    border-left: 0;
+    border-top: 1px solid #d9dfdc;
+    padding: 16px 0 0
+  }
+
+  .cameras {
+    gap: 6px
+  }
+
+  .camera figcaption {
+    padding: 6px;
+    font-size: 11px
+  }
+
+  .source,
+  .export {
+    flex-wrap: wrap
+  }
+
+  .source input,
+  .export input {
+    flex-basis: 100%
+  }
+
+  .selection-inputs {
+    gap: 8px
+  }
+
+  .selection-inputs input {
+    width: 88px
+  }
+
+  .position {
+    min-width: 150px
+  }
+
+  .summary {
+    gap: 16px
+  }
+
+  .viewbar label {
+    max-width: 100%
+  }
+}
+</style>
+<style>
+.collaboration {
+  padding: 0 0 18px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid #d9dfdc
+}
+
+.collaboration .row {
+  margin-bottom: 10px
+}
+
+#reviewer {
+  width: 160px
+}
+
+#coverage {
+  overflow-wrap: anywhere;
+  line-height: 1.7
+}
+
+#identity {
+  margin-bottom: 12px;
+  overflow-wrap: anywhere
+}
+
+dialog {
+  border: 1px solid #cbd3cf;
+  border-radius: 6px;
+  width: min(680px, 95%);
+  max-height: 85vh;
+  padding: 24px
+}
+
+dialog::backdrop {
+  background: #0006
+}
+
+#conflicts {
+  overflow-y: auto;
+  max-height: 55vh;
+  padding: 8px 0
+}
+
+.conflict {
+  padding: 12px 0;
+  border-bottom: 1px solid #d9dfdc
+}
+
+.conflict label {
+  margin-top: 8px;
+  overflow-wrap: anywhere
+}
+
+.hidden {
+  display: none
+}
+</style>
+<header><h1>数据集剪辑</h1><div class="row"><button id="save" title="保存剪辑方案">保存方案</button><button id="restore">载入方案</button><button id="merge">合并方案</button><input id="filename" type="file" accept="application/json,.json"><input id="mergeFiles" class="hidden" type="file" multiple accept="application/json,.json"></div></header>
+<main>
+<form class="source" id="load"><input id="source" class="path" aria-label="数据集目录" placeholder="LeRobot 数据集目录" required><button class="primary">打开数据集</button></form>
+<div id="identity" class="muted" role="status"></div>
+<section class="collaboration">
+<div class="row"><label>负责人 <input id="reviewer" maxlength="200" placeholder="姓名 / 工号"></label><label>分工起始 <input id="scopeStart" type="number" min="0" value="0"></label><label>结束 <input id="scopeEnd" type="number" min="0" value="0"></label><button id="assign">添加分工范围</button><label><input id="onlyAssigned" type="checkbox">只看分工范围</label></div>
+<div class="row"><button id="reviewed" class="primary">标记本条已完成</button><button id="unreview">重新检查本条</button><button id="unassign">移出本条分工</button><span id="reviewStatus"></span></div>
+<div id="coverage" class="muted"></div>
+</section>
+<div class="workspace">
+<section>
+<div class="row viewbar"><label>Episode <select id="episode" aria-label="Episode"></select></label><span id="busy" role="status"></span><span class="muted" id="datasetMeta"></span></div>
+<div id="cameras" class="cameras"></div>
+<div class="transport">
+<div class="row"><button class="icon" id="prev" title="上一帧" aria-label="上一帧">&#10094;</button><button class="icon" id="play" title="播放 / 暂停" aria-label="播放 / 暂停">&#9654;</button><button class="icon" id="next" title="下一帧" aria-label="下一帧">&#10095;</button><span class="position" id="position">—</span><span class="grow"></span><select id="speed" aria-label="播放速度"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select><label><input id="skip" type="checkbox">跳过删除区间</label></div>
+<div class="timeline"><div class="marks" id="marks"></div><input id="seek" type="range" min="0" max="0" value="0" step="1" aria-label="时间轴"></div>
+<div class="row"><label>帧 <input id="frame" type="number" min="0" value="0" aria-label="当前帧"></label><span id="time" class="muted"></span></div>
+</div>
+<div class="selection-inputs"><label>起始帧（含）<input id="start" type="number" min="0" value="0"></label><button id="markStart">标记起点</button><label>结束帧（含）<input id="end" type="number" min="0" value="0"></label><button id="markEnd">标记终点</button><button class="danger" id="add">添加删除区间</button></div>
+<div class="row"><button class="danger" id="deleteEpisode">删除整条 Episode</button><button class="icon" id="undo" title="撤销上次区间修改" aria-label="撤销">&#8630;</button><button id="clear">清空本条标记</button></div>
+</section>
+<aside class="sidebar"><header><h2>删除区间</h2><span class="muted" id="rangeCount"></span></header><ul class="intervals" id="intervals"></ul><div class="summary"><div>删除帧<strong id="removed">0</strong></div><div>保留帧<strong id="retained">0</strong></div><div>输出段<strong id="segments">0</strong></div></div></aside>
+</div>
+<footer><div class="row"><h2 class="grow">导出数据集</h2><span class="muted" id="total"></span></div><div class="export"><input class="path" id="output" aria-label="新数据集目录" placeholder="新数据集目录"><button class="primary" id="export">导出新数据集</button></div></footer>
+<p id="message" class="message" role="status" aria-live="polite"></p>
+<dialog id="conflictDialog"><h2 id="conflictTitle">分工冲突</h2><div id="conflicts"></div><div class="row"><button class="primary" id="applyConflicts">应用选择</button><button id="cancelConflicts">取消本次导入</button></div></dialog>
+</main>
+<script>
+const $ = id => document.getElementById(id),
+  token = '__TOKEN__';
+let data = null,
+  edits = {},
+  assigned = [],
+  reviewed = {},
+  owners = {},
+  draftFingerprint = null,
+  ep = 0,
+  current = 0,
+  playing = false,
+  playback = 0,
+  version = 0,
+  urls = [],
+  history = [],
+  jobRunning = false,
+  controller = null;
+const cameras = {
+  head: '头部相机',
+  left_wrist: '左腕相机',
+  right_wrist: '右腕相机'
+};
+
+function message(text = '', error = false) {
+  $('message').textContent = text;
+  $('message').classList.toggle('error', error)
+}
+async function api(path, body) {
+  const response = await fetch(path, {
+    method: body ? 'POST' : 'GET',
+    headers: {
+      'X-Editor-Token': token,
+      ...(body ? {
+        'Content-Type': 'application/json'
+      } : {})
+    },
+    body: body ? JSON.stringify(body) : undefined
+  });
+  const result = await response.json();
+  if (!response.ok) throw Error(result.error);
+  return result
+}
+
+function action(fn) {
+  return async event => {
+    try {
+      await fn(event)
+    } catch (error) {
+      if (error.name !== 'AbortError') message(error.message, true)
+    }
+  }
+}
+
+function length() {
+  return data.episodes[ep].length
+}
+
+function ranges() {
+  return edits[ep] || []
+}
+
+function normalize(list, n) {
+  const out = [];
+  for (const pair of list) {
+    if (!Array.isArray(pair) || pair.length !== 2 || !pair.every(Number.isInteger) || pair[0] < 0 || pair[0] >
+      pair[1] || pair[1] >= n) throw Error('删除区间超出帧范围');
+  }
+  for (const [a, b] of [...list].sort((x, y) => x[0] - y[0])) {
+    if (out.length && a <= out.at(-1)[1] + 1) out.at(-1)[1] = Math.max(b, out.at(-1)[1]);
+    else out.push([a, b]);
+  }
+  return out
+}
+
+function stop() {
+  playing = false;
+  playback++;
+  $('play').innerHTML = '&#9654;'
+}
+
+function stash() {
+  try {
+    localStorage.setItem('towel-editor:' + data.path, JSON.stringify({
+      signature: data.episodes,
+      fingerprint: draftFingerprint || data.identity?.fingerprint,
+      edits,
+      assigned,
+      reviewed,
+      owners,
+      reviewer: $('reviewer').value
+    }));
+  } catch {}
+}
+
+function change(list) {
+  const checked = normalize(list, length());
+  stop();
+  history.push(snapshot());
+  edits[ep] = checked;
+  claim(ep);
+  reviewed[ep] = false;
+  stash();
+  refresh()
+}
+
+function snapshot() {
+  return JSON.stringify({
+    edits,
+    assigned,
+    reviewed,
+    owners
+  })
+}
+
+function claim(index) {
+  if (!assigned.includes(index)) assigned.push(index);
+  owners[index] = $('reviewer').value.trim();
+}
+
+function plan() {
+  if (!data || data.identity?.state !== 'done') throw Error('请等待数据集内容校验完成');
+  return {
+    version: 2,
+    dataset: data.path,
+    fingerprint: data.identity.fingerprint,
+    episodes: data.episodes,
+    assigned: [...assigned].sort((a, b) => a - b),
+    records: Object.fromEntries(assigned.map(i => [i, {
+      deletions: edits[i] || [],
+      reviewed: !!reviewed[i],
+      reviewer: owners[i] || ''
+    }]))
+  };
+}
+
+function applyPlan(value) {
+  edits = {};
+  reviewed = {};
+  owners = {};
+  assigned = [...value.assigned];
+  for (const [key, record] of Object.entries(value.records)) {
+    edits[key] = record.deletions;
+    reviewed[key] = record.reviewed;
+    owners[key] = record.reviewer;
+  }
+  stash();
+  refresh();
+}
+
+function identityStatus() {
+  const identity = data?.identity;
+  $('identity').textContent = !identity ? '' : identity.state === 'done' ?
+    '数据集身份：' + identity.fingerprint :
+    identity.state === 'error' ? '内容校验失败：' + identity.message :
+    `正在校验数据集内容：${identity.percent||0}%`;
+  for (const id of ['save', 'restore', 'merge']) $(id).disabled = !identity || identity.state !== 'done';
+}
+async function waitIdentity(path) {
+  if (!data || data.path !== path) return;
+  const latest = await api('/api/dataset');
+  if (!data || data.path !== path || latest.path !== path) return;
+  data.identity = latest.identity;
+  identityStatus();
+  refresh();
+  if (latest.identity.state === 'done') {
+    if (draftFingerprint && draftFingerprint !== latest.identity.fingerprint) {
+      edits = {};
+      assigned = [];
+      reviewed = {};
+      owners = {};
+      history = [];
+      message('数据集内容已变化，旧的本地草稿已停止应用，请重新检查', true);
+    }
+    draftFingerprint = latest.identity.fingerprint;
+    stash();
+    refresh();
+  }
+  if (latest.identity.state === 'running') setTimeout(() => action(() => waitIdentity(path))(), 1000);
+}
+
+function stats(index) {
+  const n = data.episodes[index].length,
+    list = edits[index] || [];
+  let removed = 0,
+    segments = 0,
+    start = 0;
+  for (const [a, b] of list) {
+    removed += b - a + 1;
+    if (a > start) segments++;
+    start = b + 1
+  }
+  if (start < n) segments++;
+  return {
+    removed,
+    retained: n - removed,
+    segments
+  }
+}
+
+function refresh() {
+  if (!data) return;
+  const list = ranges(),
+    s = stats(ep);
+  $('removed').textContent = s.removed;
+  $('retained').textContent = s.retained;
+  $('segments').textContent = s.segments;
+  $('rangeCount').textContent = list.length + ' 段';
+  $('intervals').replaceChildren();
+  if (!list.length) {
+    const li = document.createElement('li');
+    li.textContent = '暂无删除标记';
+    li.className = 'empty';
+    $('intervals').append(li)
+  }
+  list.forEach(([a, b], index) => {
+    const li = document.createElement('li'),
+      jump = document.createElement('button'),
+      del = document.createElement('button');
+    jump.className = 'jump';
+    jump.textContent = `${a} – ${b} 帧 · ${((b-a+1)/data.fps).toFixed(2)} s`;
+    jump.title = '跳转到区间起点';
+    jump.onclick = action(() => {
+      stop();
+      return show(a)
+    });
+    del.className = 'icon';
+    del.innerHTML = '&times;';
+    del.title = '移除删除标记';
+    del.setAttribute('aria-label', '移除删除标记');
+    del.onclick = () => change(list.filter((_, i) => i !== index));
+    li.append(jump, del);
+    $('intervals').append(li)
+  });
+  $('marks').replaceChildren();
+  for (const [a, b] of list) {
+    const span = document.createElement('span');
+    span.style.left = (100 * a / length()) + '%';
+    span.style.width = (100 * (b - a + 1) / length()) + '%';
+    $('marks').append(span)
+  }
+  const a = +$('start').value,
+    b = +$('end').value;
+  if (a <= b) {
+    const span = document.createElement('span');
+    span.className = 'selection';
+    span.style.left = (100 * a / length()) + '%';
+    span.style.width = (100 * (b - a + 1) / length()) + '%';
+    $('marks').append(span)
+  }
+  const sums = data.episodes.reduce((t, _, i) => {
+    const s = stats(i);
+    return {
+      removed: t.removed + s.removed,
+      segments: t.segments + s.segments
+    }
+  }, {
+    removed: 0,
+    segments: 0
+  });
+  $('total').textContent = `共 ${data.episodes.length} 条 · 删除 ${sums.removed} 帧 · 输出 ${sums.segments} 段`;
+  const missing = data.episodes.filter(e => !reviewed[e.index]).map(e => e.index);
+  $('coverage').textContent =
+    `分工 ${assigned.length} / ${data.episodes.length} 条 · 已完成 ${data.episodes.length-missing.length} 条` +
+    (missing.length ? ` · 未完成：${missing.join(', ')}` : ' · 全部完成');
+  $('reviewStatus').textContent = reviewed[ep] ? `已完成 · ${owners[ep]}` : assigned.includes(ep) ?
+    `待检查 · ${owners[ep]||'未署名'}` : '未分工';
+  $('reviewed').disabled = !!reviewed[ep];
+  $('unreview').disabled = !reviewed[ep];
+  $('unassign').disabled = !assigned.includes(ep) || !!reviewed[ep] || ranges().length > 0;
+  $('export').disabled = jobRunning || sums.removed === data.total_frames || missing.length > 0 || data
+    .identity?.state !== 'done';
+  $('undo').disabled = !history.length;
+  for (const option of $('episode').options) {
+    const n = stats(+option.value).removed;
+    const i = +option.value;
+    option.textContent =
+      `Episode ${i} · ${reviewed[i]?'已完成':assigned.includes(i)?'待检查':'未分工'}${n?' · −'+n+' 帧':''}`;
+    option.hidden = $('onlyAssigned').checked && !assigned.includes(i);
+  }
+}
+async function show(target) {
+  if (!data) return;
+  const frame = Math.max(0, Math.min(length() - 1, Math.round(target)));
+  if (!Number.isFinite(frame)) return;
+  const id = ++version;
+  controller?.abort();
+  controller = new AbortController();
+  $('busy').textContent = '加载帧…';
+  try {
+    const blobs = await Promise.all(data.cameras.map(async camera => {
+      const q = new URLSearchParams({
+        episode: ep,
+        frame,
+        camera
+      });
+      const r = await fetch('/api/frame?' + q, {
+        headers: {
+          'X-Editor-Token': token
+        },
+        signal: controller.signal
+      });
+      if (!r.ok) {
+        const e = await r.json();
+        throw Error(e.error)
+      }
+      return r.blob()
+    }));
+    if (id !== version) return;
+    const next = blobs.map(URL.createObjectURL);
+    await Promise.all(next.map(src => new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = resolve;
+      img.onerror = reject;
+      img.src = src
+    })));
+    if (id !== version) {
+      next.forEach(URL.revokeObjectURL);
+      return
+    }
+    document.querySelectorAll('.camera img').forEach((img, i) => img.src = next[i]);
+    urls.forEach(URL.revokeObjectURL);
+    urls = next;
+    current = frame;
+    $('seek').value = frame;
+    $('frame').value = frame;
+    $('position').textContent = `${frame} / ${length()-1} 帧`;
+    $('time').textContent = `${(frame/data.fps).toFixed(3)} / ${((length()-1)/data.fps).toFixed(3)} s`;
+  } finally {
+    if (id === version) $('busy').textContent = ''
+  }
+}
+async function selectEpisode() {
+  stop();
+  ep = +$('episode').value;
+  $('seek').max = length() - 1;
+  for (const id of ['frame', 'start', 'end']) $(id).max = length() - 1;
+  $('start').value = 0;
+  $('end').value = 0;
+  refresh();
+  await show(0)
+}
+async function install(dataset, explicitEdits) {
+  if (!dataset) return;
+  stop();
+  data = dataset;
+  edits = {};
+  assigned = [];
+  reviewed = {};
+  owners = {};
+  draftFingerprint = null;
+  history = [];
+  ep = 0;
+  $('source').value = data.path;
+  $('output').value = data.path + '-edited';
+  if (explicitEdits) {
+    edits = explicitEdits
+  } else {
+    try {
+      const saved = JSON.parse(localStorage.getItem('towel-editor:' + data.path));
+      if (saved && JSON.stringify(saved.signature) === JSON.stringify(data.episodes) &&
+        (!saved.fingerprint || data.identity?.state !== 'done' || saved.fingerprint === data.identity
+          .fingerprint)) {
+        edits = saved.edits;
+        assigned = saved.assigned || Object.keys(edits).map(Number);
+        reviewed = saved.reviewed || {};
+        owners = saved.owners || {};
+        draftFingerprint = saved.fingerprint || null;
+        $('reviewer').value = saved.reviewer || '';
+      }
+    } catch {}
+  }
+  for (const key of Object.keys(edits)) {
+    if (!data.episodes[+key]) throw Error('方案包含未知 Episode');
+    edits[key] = normalize(edits[key], data.episodes[+key].length)
+  }
+  $('datasetMeta').textContent = `${data.fps} FPS · ${data.total_frames.toLocaleString()} 帧`;
+  for (const id of ['scopeStart', 'scopeEnd']) $(id).max = data.episodes.length - 1;
+  $('onlyAssigned').checked = false;
+  identityStatus();
+  $('episode').replaceChildren();
+  for (const e of data.episodes) {
+    const opt = document.createElement('option');
+    opt.value = e.index;
+    opt.textContent = 'Episode ' + e.index;
+    $('episode').append(opt)
+  }
+  $('cameras').replaceChildren();
+  for (const key of data.cameras) {
+    const figure = document.createElement('figure'),
+      img = document.createElement('img'),
+      caption = document.createElement('figcaption');
+    figure.className = 'camera';
+    img.alt = cameras[key.split('.').at(-1)] || key;
+    caption.textContent = img.alt;
+    figure.append(img, caption);
+    $('cameras').append(figure)
+  }
+  await selectEpisode();
+  stash();
+  if (data.identity?.state === 'running') action(() => waitIdentity(data.path))();
+}
+$('load').onsubmit = action(async event => {
+  event.preventDefault();
+  stop();
+  message();
+  await install(await api('/api/load', {
+    path: $('source').value
+  }))
+});
+$('episode').onchange = action(selectEpisode);
+$('seek').oninput = action(() => {
+  stop();
+  return show(+$('seek').value)
+});
+$('frame').onchange = action(() => {
+  stop();
+  return show(+$('frame').value)
+});
+$('prev').onclick = action(() => {
+  stop();
+  return show(current - 1)
+});
+$('next').onclick = action(() => {
+  stop();
+  return show(current + 1)
+});
+$('play').onclick = action(async () => {
+  if (!data) return;
+  if (playing) {
+    stop();
+    return
+  }
+  const run = ++playback;
+  playing = true;
+  $('play').innerHTML = '&#10074;&#10074;';
+  try {
+    if (current === length() - 1) await show(0);
+    while (playing && run === playback) {
+      const begun = performance.now();
+      let target = current + 1;
+      if ($('skip').checked) {
+        for (const [a, b] of ranges())
+          if (target >= a && target <= b) target = b + 1
+      }
+      if (target >= length()) break;
+      await show(target);
+      const wait = 1000 / (data.fps * +$('speed').value) - (performance.now() - begun);
+      if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait));
+    }
+  } finally {
+    if (run === playback) stop()
+  }
+});
+$('markStart').onclick = () => {
+  if (data) {
+    stop();
+    $('start').value = current;
+    refresh()
+  }
+};
+$('markEnd').onclick = () => {
+  if (data) {
+    stop();
+    $('end').value = current;
+    refresh()
+  }
+};
+for (const id of ['start', 'end']) $(id).oninput = () => refresh();
+$('add').onclick = action(() => {
+  if (data) change([...ranges(), [+$('start').value, +$('end').value]])
+});
+$('deleteEpisode').onclick = () => {
+  if (data) change([
+    [0, length() - 1]
+  ])
+};
+$('clear').onclick = () => {
+  if (data) change([])
+};
+$('undo').onclick = () => {
+  if (history.length) {
+    stop();
+    const previous = JSON.parse(history.pop());
+    ({
+      edits,
+      assigned,
+      reviewed,
+      owners
+    } = previous);
+    stash();
+    refresh()
+  }
+};
+$('save').onclick = action(async () => {
+  if (!data) return;
+  const checked = await api('/api/plan', {
+    mode: 'replace',
+    incoming: plan()
+  });
+  const blob = new Blob([JSON.stringify({
+    ...checked.plan,
+    dataset: data.path
+  }, null, 2)], {
+    type: 'application/json'
+  });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'towel-edit-plan.json';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  message('剪辑方案已保存')
+});
+$('restore').onclick = () => $('filename').click();
+$('filename').onchange = action(async () => {
+  try {
+    const file = $('filename').files[0];
+    if (!file) return;
+    if (!data) throw Error('请先打开本机的数据集');
+    const incoming = JSON.parse(await file.text());
+    const result = await api('/api/plan', {
+      mode: 'replace',
+      incoming
+    });
+    stop();
+    history.push(snapshot());
+    applyPlan(result.plan);
+    message('剪辑方案已载入')
+  } finally {
+    $('filename').value = ''
+  }
+});
+
+function chooseConflicts(conflicts, filename) {
+  return new Promise(resolve => {
+    $('applyConflicts').disabled = true;
+    $('conflictTitle').textContent = `分工冲突 · ${filename}`;
+    $('conflicts').replaceChildren();
+    for (const conflict of conflicts) {
+      const row = document.createElement('div');
+      row.className = 'conflict';
+      const title = document.createElement('strong');
+      title.textContent = `Episode ${conflict.episode}`;
+      row.append(title);
+      for (const side of ['current', 'incoming']) {
+        const record = conflict[side],
+          label = document.createElement('label'),
+          input = document.createElement('input');
+        input.type = 'radio';
+        input.name = 'conflict-' + conflict.episode;
+        input.value = side;
+        input.onchange = () => {
+          $('applyConflicts').disabled = conflicts.some(c =>
+            !document.querySelector(`input[name="conflict-${c.episode}"]:checked`));
+        };
+        const text = document.createElement('span');
+        text.textContent =
+          `${side==='current'?'当前':'导入'}：${record.reviewer||'未署名'} · ${record.reviewed?'已完成':'待检查'} · 删除 ${JSON.stringify(record.deletions)}`;
+        label.append(input, text);
+        row.append(label);
+      }
+      $('conflicts').append(row);
+    }
+    const dialog = $('conflictDialog');
+    dialog.oncancel = event => {
+      event.preventDefault();
+      dialog.close();
+      resolve(null)
+    };
+    $('cancelConflicts').onclick = () => {
+      dialog.close();
+      resolve(null)
+    };
+    $('applyConflicts').onclick = () => {
+      const choices = {};
+      for (const c of conflicts) {
+        const selected = document.querySelector(`input[name="conflict-${c.episode}"]:checked`);
+        if (!selected) return;
+        choices[c.episode] = selected.value;
+      }
+      dialog.close();
+      resolve(choices);
+    };
+    dialog.showModal();
+  });
+}
+$('merge').onclick = () => $('mergeFiles').click();
+$('mergeFiles').onchange = action(async () => {
+  try {
+    if (!data) throw Error('请先打开本机的数据集');
+    stop();
+    let combined = plan();
+    const before = snapshot(),
+      path = data.path;
+    for (const file of $('mergeFiles').files) {
+      const incoming = JSON.parse(await file.text());
+      let result = await api('/api/plan', {
+        current: combined,
+        incoming
+      });
+      if (result.conflicts.length) {
+        const choices = await chooseConflicts(result.conflicts, file.name);
+        if (!choices) {
+          message('已取消，本次合并未应用');
+          return
+        }
+        result = await api('/api/plan', {
+          current: combined,
+          incoming,
+          choices
+        });
+      }
+      combined = result.plan;
+    }
+    if (data.path !== path || snapshot() !== before) throw Error('当前方案已变化，请重新合并');
+    history.push(before);
+    applyPlan(combined);
+    message('方案合并完成');
+  } finally {
+    $('mergeFiles').value = ''
+  }
+});
+$('reviewer').onchange = () => {
+  if (data) stash()
+};
+$('assign').onclick = action(() => {
+  if (!data) return;
+  const first = +$('scopeStart').value,
+    last = +$('scopeEnd').value;
+  if (!Number.isInteger(first) || !Number.isInteger(last) || first < 0 || first > last || last >= data
+    .episodes.length) throw Error('分工范围无效');
+  history.push(snapshot());
+  for (let i = first; i <= last; i++)
+    if (!assigned.includes(i)) claim(i);
+  stash();
+  refresh();
+});
+$('reviewed').onclick = action(() => {
+  if (!data) return;
+  if (!$('reviewer').value.trim()) throw Error('请先填写负责人');
+  history.push(snapshot());
+  claim(ep);
+  reviewed[ep] = true;
+  stash();
+  refresh();
+});
+$('unreview').onclick = () => {
+  if (data) {
+    history.push(snapshot());
+    reviewed[ep] = false;
+    stash();
+    refresh()
+  }
+};
+$('unassign').onclick = () => {
+  if (data && !reviewed[ep] && !ranges().length) {
+    history.push(snapshot());
+    assigned = assigned.filter(i => i !== ep);
+    delete owners[ep];
+    stash();
+    refresh()
+  }
+};
+$('onlyAssigned').onchange = action(async () => {
+  refresh();
+  if ($('onlyAssigned').checked && !assigned.includes(ep) && assigned.length) {
+    $('episode').value = Math.min(...assigned);
+    await selectEpisode()
+  }
+});
+async function poll() {
+  const status = await api('/api/status');
+  jobRunning = status.state === 'running';
+  $('load').querySelector('button').disabled = jobRunning;
+  $('restore').disabled = jobRunning;
+  $('merge').disabled = jobRunning;
+  identityStatus();
+  if (data) refresh();
+  if (status.state === 'running') message('正在导出：' + status.output);
+  if (status.state === 'done') message(
+    `导出完成：${status.output} · ${status.frames} 帧 / ${status.episodes} 条 Episode`);
+  if (status.state === 'error') message('导出失败：' + status.message, true);
+  return jobRunning
+}
+async function watch() {
+  try {
+    if (await poll()) setTimeout(watch, 1500)
+  } catch (error) {
+    message(error.message, true);
+    setTimeout(watch, 3000)
+  }
+}
+$('export').onclick = action(async () => {
+  if (!data) return;
+  stop();
+  await api('/api/export', {
+    dataset: data.path,
+    output: $('output').value,
+    plan: plan()
+  });
+  await watch()
+});
+action(async () => {
+  await install(await api('/api/dataset'));
+  await watch()
+})();
+</script>
+</html>

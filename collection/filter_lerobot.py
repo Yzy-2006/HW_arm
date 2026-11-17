@@ -220,13 +220,16 @@ def write_filtered(root, output, info, episodes, tasks, report):
                   f"(source={entry['source_episode_index']}, frames={len(kept)})", flush=True)
         dataset.finalize()
         schema_path = root / "meta/towel_schema.json"
+        manual = report.get("operation") == "manual_trim"
+        report_name = "manual_trim" if manual else "offline_filter"
         if schema_path.exists():
             schema = json.loads(schema_path.read_text())
             schema["resampling"] = report["timeline"]
-            schema["offline_filter"] = {"min_joint_delta_rad": report["min_joint_delta_rad"],
-                                        "provenance": "meta/offline_filter.json"}
+            schema[report_name] = {"provenance": f"meta/{report_name}.json"}
+            if not manual:
+                schema[report_name]["min_joint_delta_rad"] = report["min_joint_delta_rad"]
             (output / "meta/towel_schema.json").write_text(json.dumps(schema, ensure_ascii=False, indent=2) + "\n")
-        (output / "meta/offline_filter.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+        (output / f"meta/{report_name}.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     except BaseException as exc:
         if output.exists() and not isinstance(exc, FileExistsError):
             (output / "FILTER_INCOMPLETE").write_text("Offline filtering failed. Retry with a new output path.\n")

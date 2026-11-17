@@ -35,6 +35,7 @@ def recorder(monkeypatch, tmp_path):
     modules = {
         'rclpy': {}, 'rclpy.node': {'Node': Node},
         'rclpy.callback_groups': {'MutuallyExclusiveCallbackGroup': object},
+        'rclpy.event_handler': {'SubscriptionEventCallbacks': NS},
         'rclpy.qos': {'qos_profile_sensor_data': NS(depth=5)},
         'ctl_msgs_hw': {}, 'ctl_msgs_hw.msg': {name: NS for name in (
             'CtlInformation', 'FkDataPub', 'MidNodeCtlMsgRet', 'MidNodeCtlMsgSend')},
@@ -153,6 +154,7 @@ def test_independent_feedback_group_and_atomic_joint_snapshot(recorder, monkeypa
     node, clock, camera, feed, messages = recorder
     assert node.feedback_group is not node.default_callback_group
     assert all(sub['callback_group'] is node.feedback_group for sub in node.subscriptions)
+    assert all(not sub['event_callbacks'].use_default_callbacks for sub in node.subscriptions)
     feed()
     original = node.put
     first_joint, release, snapshot_done = threading.Event(), threading.Event(), threading.Event()

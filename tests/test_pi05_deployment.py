@@ -71,6 +71,7 @@ def test_yaml_integration_steps_reach_openpi_loader_and_horizon_is_checked(tmp_p
     ("inference_flat_towel.py", "encos_flat_train45"),
     ("inference_mix159.py", "encos_mix159_train125"),
     ("inference_full321.py", "encos_full321_train255"),
+    ("inference_full321005.py", "encos_full321005_train255"),
 ])
 def test_release_entry_imports_sibling_and_reaches_policy_loader(tmp_path, monkeypatch, entry, stats):
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -336,6 +337,7 @@ def bridge(monkeypatch, tmp_path, request):
 
     for name, mod in {
         "rclpy.callback_groups": SimpleNamespace(MutuallyExclusiveCallbackGroup=object),
+        "rclpy.event_handler": SimpleNamespace(SubscriptionEventCallbacks=SimpleNamespace),
         "rclpy.node": SimpleNamespace(Node=Node),
         "rclpy.qos": SimpleNamespace(qos_profile_sensor_data=SimpleNamespace(depth=5),
             QoSProfile=lambda **kwargs: SimpleNamespace(**kwargs),
@@ -698,6 +700,7 @@ def test_continuous_mode_and_latest_feedback_limit(bridge):
     assert msg.l_arm_des_msg[0] == pytest.approx(0.22)
     assert msg.r_arm_des_msg[0] == pytest.approx(0.22)
     assert all(s["callback_group"] is node.feedback_group for s in node.subscriptions)
+    assert all(not s["event_callbacks"].use_default_callbacks for s in node.subscriptions)
     assert node.safety_attach_options["receive_callback_group"] is node.safety_receive_group
     assert node.safety_receive_group is not node.feedback_group
     clock[0] += 0.04

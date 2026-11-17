@@ -109,6 +109,7 @@ def test_capture_survives_blocked_writer_but_rejects_repeated_camera(tmp_path, m
     modules = {
         'rclpy': {}, 'rclpy.node': {'Node': FakeNode},
         'rclpy.callback_groups': {'MutuallyExclusiveCallbackGroup': object},
+        'rclpy.event_handler': {'SubscriptionEventCallbacks': ns},
         'rclpy.qos': {'qos_profile_sensor_data': ns(depth=5)},
         'ctl_msgs_hw': {}, 'ctl_msgs_hw.msg': {name: ns for name in (
             'CtlInformation', 'FkDataPub', 'MidNodeCtlMsgRet', 'MidNodeCtlMsgSend')},
@@ -220,6 +221,7 @@ def test_stationary_joint_samples_are_skipped_until_motion_or_gripper_change(tmp
     modules = {
         'rclpy': {}, 'rclpy.node': {'Node': FakeNode},
         'rclpy.callback_groups': {'MutuallyExclusiveCallbackGroup': object},
+        'rclpy.event_handler': {'SubscriptionEventCallbacks': ns},
         'rclpy.qos': {'qos_profile_sensor_data': ns(depth=5)},
         'ctl_msgs_hw': {}, 'ctl_msgs_hw.msg': {name: ns for name in (
             'CtlInformation', 'FkDataPub', 'MidNodeCtlMsgRet', 'MidNodeCtlMsgSend')},

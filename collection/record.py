@@ -14,7 +14,7 @@ import numpy as np
 import yaml
 
 from core import AsyncEpisodeWriter, StreamCache
-from ros_capture import feedback_qos, make_feedback_group
+from ros_capture import feedback_qos, feedback_event_callbacks, make_feedback_group
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -318,7 +318,8 @@ def make_node(config, cameras, *, show_opencv=False, start_guard=None, control_c
             ]
             for typ, topic, callback in subs:
                 self.create_subscription(typ, topic, callback, feedback_qos(),
-                                         callback_group=self.feedback_group)
+                                         callback_group=self.feedback_group,
+                                         event_callbacks=feedback_event_callbacks())
             self.create_service(SetBool, "/towel/record", self.record, **control_options)
             self.create_service(Trigger, "/towel/discard", self.discard, **control_options)
             self.create_timer(1.0 / config["fps"], self.sample, **control_options)

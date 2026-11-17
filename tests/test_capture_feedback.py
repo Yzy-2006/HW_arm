@@ -56,6 +56,13 @@ def test_feedback_qos_does_not_change_global_sensor_qos():
     assert qos_module.qos_profile_sensor_data.depth == previous_depth
 
 
+def test_feedback_events_disable_only_optional_dds_diagnostics():
+    pytest.importorskip("rclpy.event_handler")
+    callbacks = ros_capture.feedback_event_callbacks()
+    assert not callbacks.use_default_callbacks
+    assert callbacks.incompatible_qos is None and callbacks.incompatible_type is None
+
+
 def test_capture_releases_cache_lock_before_validation(monkeypatch):
     cache = StreamCache()
     for name, size in REQUIRED.items():
@@ -99,7 +106,8 @@ import rclpy
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from std_msgs.msg import Int64
-from ros_capture import make_feedback_group, feedback_qos
+from ros_capture import make_feedback_group, feedback_qos, feedback_event_callbacks
+from ros_shutdown import drain_executor
 
 rclpy.init()
 publisher_node, reader = Node("capture_test_publisher"), Node("capture_test_reader")
@@ -107,7 +115,8 @@ publisher = publisher_node.create_publisher(Int64, "/capture_feedback_test", 1)
 group = make_feedback_group(reader, 120)
 observed, published, ticks = [], [], []
 reader.create_subscription(Int64, "/capture_feedback_test", lambda msg: observed.append(msg.data),
-                           feedback_qos(), callback_group=group)
+                           feedback_qos(), callback_group=group,
+                           event_callbacks=feedback_event_callbacks())
 reader.create_timer(1/30, lambda: ticks.append(time.monotonic()))
 stop = threading.Event()
 def publish():
@@ -121,30 +130,35 @@ thread = threading.Thread(target=publish)
 executor = MultiThreadedExecutor(num_threads=3)
 executor.add_node(reader)
 started = time.monotonic()
+cpu_started = time.process_time()
 try:
     thread.start()
     while time.monotonic() - started < 1.5:
         executor.spin_once(timeout_sec=.02)
     elapsed = time.monotonic() - started
+    cpu_seconds = time.process_time() - cpu_started
+    print(f"feedback_cpu_seconds={cpu_seconds:.3f} wall_seconds={elapsed:.3f} ticks={len(ticks)}")
+    assert cpu_seconds < elapsed * .6, (cpu_seconds, elapsed)
     stop.set()
     thread.join(1)
     deadline = time.monotonic() + .5
     while (not observed or observed[-1] != published[-1]) and time.monotonic() < deadline:
         executor.spin_once(timeout_sec=.02)
     assert 15 < len(observed) <= elapsed * 120 + 5, (len(observed), elapsed)
-    assert len(ticks) > 15, len(ticks)
+    assert len(ticks) >= 30, len(ticks)
     assert observed[-1] == published[-1], (observed[-1], published[-1])
     assert len(published) > len(observed) * 2, (len(published), len(observed))
 finally:
     stop.set()
     thread.join(1)
-    executor.shutdown(wait_for_threads=True)
+    drain_executor(executor)
     reader.destroy_node()
     publisher_node.destroy_node()
     rclpy.shutdown()
 '''
     env = dict(os.environ, ROS_DOMAIN_ID="221", ROS_AUTOMATIC_DISCOVERY_RANGE="LOCALHOST",
-               ROS_LOG_DIR=str(tmp_path / "ros_logs"))
+               ROS_LOG_DIR=str(tmp_path / "ros_logs"),
+               PYTHONPATH=os.pathsep.join([str(ROOT / "deployment"), os.environ.get("PYTHONPATH", "")]))
     result = subprocess.run([sys.executable, "-c", code], cwd=ROOT / "collection", env=env,
                             capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stdout + result.stderr

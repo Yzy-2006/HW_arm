@@ -486,7 +486,7 @@ def create_bridge_node(args, cameras=None, recorder=None):
 
     sys.path.insert(0, str(ROOT / "collection"))
     from record import Cameras
-    from ros_capture import feedback_qos, make_feedback_group
+    from ros_capture import feedback_qos, feedback_event_callbacks, make_feedback_group
 
     class BridgeNode(Node):
         def __init__(self):
@@ -549,9 +549,11 @@ def create_bridge_node(args, cameras=None, recorder=None):
                 self._joint_callback,
                 feedback_qos(),
                 callback_group=self.feedback_group,
+                event_callbacks=feedback_event_callbacks(),
             )
             self.create_subscription(Float64MultiArray, "/gripper/fdb", self._gripper_callback,
-                                     feedback_qos(), callback_group=self.feedback_group)
+                                     feedback_qos(), callback_group=self.feedback_group,
+                                     event_callbacks=feedback_event_callbacks())
             self.control_timer = self.create_timer(1.0 / rate_hz, self.step)
             self.publish_timer = self.create_timer(1.0 / publish_rate_hz, self.publish_step) if interpolate else None
             if self.motion:

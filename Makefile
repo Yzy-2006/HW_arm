@@ -88,6 +88,7 @@ help:
 	@echo "  make validate-data          Validate completed raw episodes"
 	@echo "  make export-data OUTPUT=/absolute/output [EXPORT_CONFIG=...]  Export with the training environment"
 	@echo "  make filter-data DATASET=/path/to/lerobot OUTPUT=/new/path MIN_JOINT_DELTA_RAD=0.02  Offline motion filtering (training environment; ARGS=--dry-run for counts only)"
+	@echo "  make edit-data [DATASET=/path/to/lerobot]  Open the local visual dataset editor (LeRobot environment)"
 	@echo "  make pi05                         Start the OpenPI PI05 worker"
 	@echo "  make pi05-thor                    SSH to $(THOR_USER)@$(THOR_HOST) and start the Thor PI05 worker"
 	@echo "  make pi05-bench                   Benchmark PI05 inference without robot hardware"
@@ -289,6 +290,10 @@ validate-data:
 export-data:
 	@if [[ -z "$(OUTPUT)" ]]; then echo "Usage: make export-data OUTPUT=/absolute/path (run in towel-pi05 environment)"; exit 2; fi
 	@python3 "$(ROOT)/collection/export_lerobot.py" --root "$(DATASET_ROOT)" --output "$(OUTPUT)" --repo-id local/fold_towel --config "$(EXPORT_CONFIG)"
+
+.PHONY: edit-data
+edit-data:
+	@python3 "$(ROOT)/collection/edit_lerobot.py" $(if $(DATASET),--dataset "$(DATASET)") $(ARGS)
 
 filter-data:
 	@if [[ -z "$(DATASET)" ]]; then echo "Usage: make filter-data DATASET=/path/to/lerobot OUTPUT=/new/path MIN_JOINT_DELTA_RAD=0.02 [ARGS=--dry-run] (run in the LeRobot environment)"; exit 2; fi

@@ -86,6 +86,9 @@ make pi05
 `full321003-resume10k-to50k-step-50000`，入口为 `inference_full321.py`，推理积分为 20 步。
 可以继续通过 `PI05_MODEL`、`PI05_CHECKPOINT` 和 `PI05_ARGS` 临时覆盖。
 
+`full321005-from-pi05-base-step-50000` 使用专用入口 `inference_full321005.py`，
+统计目录为 `assets/encos_full321005_train255`；不能使用旧的 `inference_full321.py`。
+
 日志应显示新 checkpoint、`OpenPI inference entry: inference_full321.py`、CUDA 设备和 listening。
 已有控制链正常运行时，另开终端执行 `make bridge` 做 dry-run。
 新入口关闭 JAX 磁盘持久化编译缓存，但仍使用进程内 JIT，首次推理可能编译较久。

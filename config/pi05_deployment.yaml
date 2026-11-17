@@ -36,7 +36,7 @@ bridge:
   rate_hz: 30
   # Time spacing of predicted actions is 1 / action_rate_hz seconds.
   # Keep 30 to match the dataset; independent of the bridge control timer.
-  action_rate_hz: 30
+  action_rate_hz: 12
   interpolation:
     enabled: true
     publish_rate_hz: 50
@@ -65,7 +65,7 @@ bridge:
     tracking_timeout_s: 0.1
   state_timeout_s: 0.25  # Used in full mode; speed_only accepts cached finite feedback.
   # Refresh the horizon asynchronously; control and feedback never wait for it.
-  replan_interval_s: 0.8 # Approximately 1 inference request per second.
+  replan_interval_s: 0.5 # Approximately 1 inference request per second.
   # Full mode only: reject actions older than this observation age.
   max_action_age_s: 1.0
   jpeg_quality: 90

@@ -15,6 +15,14 @@ def feedback_qos():
     return qos
 
 
+def feedback_event_callbacks():
+    from rclpy.event_handler import SubscriptionEventCallbacks
+
+    # Jazzy/RMW default QoS event waitables can spin under high-rate telemetry.
+    # Feedback validity/age and explicit servo faults are checked separately.
+    return SubscriptionEventCallbacks(use_default_callbacks=False)
+
+
 def make_feedback_group(node, rate_hz):
     from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 
