@@ -34,6 +34,9 @@ ACT_HOST ?= 127.0.0.1
 ACT_PORT ?= 8765
 ACT_ARGS ?=
 PI05_SLOW_FACTOR ?=
+VOICE_CONFIG ?= $(ROOT)/config/voice_control.yaml
+VOICE_ARGS ?=
+VOICE_PYTHON ?= $(ROOT)/.venv-voice/bin/python
 SERVO_NODE := $(ROOT)/ros2_ws/install/servo_control_hw/lib/servo_control_hw/servo_node
 
 # Every robot-side recipe gets the same Python/ROS/OpenRobots environment.
@@ -52,6 +55,7 @@ endef
 
 .PHONY: vr-takeover vr-intervene
 .PHONY: pi05-thor bridge-thor motion-thor
+.PHONY: voice
 
 help:
 	@echo "Towel task commands"
@@ -95,6 +99,7 @@ help:
 	@echo "  make act                          Start the LeRobot ACT worker"
 	@echo "  make bridge                       Start the policy bridge in dry-run mode"
 	@echo "  make motion                       Request policy ownership, then start the motion bridge"
+	@echo "  make voice                        Voice: 毛巾 starts motion; 停止 returns home and waits"
 	@echo "  make bridge-thor                  Local dry-run bridge using Thor inference at $(THOR_HOST)"
 	@echo "  make motion-thor                  Local motion bridge using Thor inference at $(THOR_HOST)"
 	@echo "    H in motion terminal            Pause policy, return home, resume after trajectory timing + 3 s"
@@ -324,6 +329,10 @@ bridge-thor:
 
 motion-thor:
 	@$(MAKE) --no-print-directory motion ARGS="--worker-host $(THOR_HOST) $(ARGS)"
+
+voice:
+	@$(ROBOT_ENV)
+	@"$(VOICE_PYTHON)" "$(ROOT)/scripts/run_voice_control.py" --config "$(VOICE_CONFIG)" --robot-venv "$(VENV)" --policy-config "$(PI05_CONFIG)" --motion-args="$(ARGS)" $(if $(PI05_SLOW_FACTOR),--slow-factor "$(PI05_SLOW_FACTOR)",) $(VOICE_ARGS)
 
 motion:
 	@if [[ -n "$(PI05_SLOW_FACTOR)" && ( "$(PI05_SLOW_FACTOR)" == "0" || "$(PI05_SLOW_FACTOR)" == -* ) ]]; then echo "PI05_SLOW_FACTOR must be greater than 0" >&2; exit 2; fi

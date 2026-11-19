@@ -35,7 +35,7 @@ def test_live_fk_topic_reaches_vr_handoff_and_rejects_missing_stale_nan(tmp_path
                ROS_LOG_DIR=str(tmp_path / "ros_logs"))
     log = tmp_path / "robot.log"
     result = subprocess.run([sys.executable, str(ROOT / "tests/vr_fk_handoff_runtime.py"),
-                             str(executable), str(log)], env=env, capture_output=True, text=True, timeout=45)
+                             str(executable), str(log)], env=env, capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stderr + (log.read_text() if log.exists() else "")
 
 

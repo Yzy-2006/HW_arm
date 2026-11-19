@@ -1,0 +1,5 @@
+# Separate system-Python venv with ROS system packages; no PyTorch required.
+faster-whisper==1.2.1
+PyAudio==0.2.14
+scipy>=1.10,<2
+PyYAML>=6,<7

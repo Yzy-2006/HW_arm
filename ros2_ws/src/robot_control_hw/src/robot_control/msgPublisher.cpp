@@ -601,7 +601,7 @@ void RobotCtlNode::run()
 
 
         //如果处于暂停状态，跳过控制输出
-        if (policy_home_.active) is_paused = false;
+        if (policy_home_.active || keyboard_return_in_progress_) is_paused = false;
         if (is_paused && !shutdown_flag) {
             // 暂停状态下只处理必要的ROS回调
             rclcpp::spin_some(this->get_node_base_interface());

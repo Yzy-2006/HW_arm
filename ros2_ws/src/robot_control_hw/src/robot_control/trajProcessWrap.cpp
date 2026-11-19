@@ -190,6 +190,14 @@ void RobotCtlNode::xr_teleComu_init(){
             safety_ready_ = msg->data == "ready";
             safety_fault_ = safety_fault_ || msg->data.rfind("fault:", 0) == 0;
         });
+    keyboard_home_service_ = this->create_service<std_srvs::srv::Trigger>(
+        "/dexbotCtl/keyboard_home",
+        [this](std_srvs::srv::Trigger::Request::SharedPtr,
+               std_srvs::srv::Trigger::Response::SharedPtr response) {
+            response->success = request_keyboard_home(false);
+            response->message = response->success ? "Keyboard home accepted; waiting for explicit policy start"
+                : "Home rejected: check initialization, safety, feedback or an active home trajectory";
+        });
     policy_home_service_ = this->create_service<std_srvs::srv::Trigger>(
         "/dexbotCtl/policy_home",
         [this](std_srvs::srv::Trigger::Request::SharedPtr,

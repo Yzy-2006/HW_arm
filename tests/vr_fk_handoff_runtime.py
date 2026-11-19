@@ -20,7 +20,7 @@ def main():
     prefix = f"/vr_fk_test_{os.getpid()}"
     fk_topic = "/dexbotCtl/DescPub/Fk_ret_data_pub"
     service = "/dexbotCtl/vr_override"
-    topics = [fk_topic, service, "/dexbotCtl/policy_home", "/dexbotCtl/policy_intervene", "/towel/safety/state",
+    topics = [fk_topic, service, "/dexbotCtl/policy_home", "/dexbotCtl/keyboard_home", "/dexbotCtl/policy_intervene", "/towel/safety/state",
               "/dexbotCtl/upperMonitor_msg_send", "/dexbotCtl/midMonitor_msg_send",
               "/dexbotCtl/bridge_ctl_msg", "/dexbotCtl/pingpong_simu_start",
               "/vr/left_arm_delta", "/vr/right_arm_delta",
@@ -36,6 +36,7 @@ def main():
     fk = node.create_publisher(FkDataPub, prefix + fk_topic, 10)
     client = node.create_client(SetBool, prefix + service)
     home_client = node.create_client(Trigger, prefix + "/dexbotCtl/policy_home")
+    keyboard_home_client = node.create_client(Trigger, prefix + "/dexbotCtl/keyboard_home")
     intervene_client = node.create_client(Trigger, prefix + "/dexbotCtl/policy_intervene")
     grippers = []
     gripper_sub = node.create_subscription(GripperCtl, prefix + "/gripper/ctl",
@@ -230,6 +231,34 @@ def main():
             assert_closed(grippers[0][1])
             spin_for(.3)
             assert len(grippers) == 1 and outputs[-1].ctl_trans_mod == 4
+
+            # The voice service also releases an R pause, then holds ownership
+            # after home even with a live policy publisher trying to command.
+            assert request(False).success
+            policy_timer = node.create_timer(.02, publish_policy)
+            spin_for(.3)
+            assert outputs[-1].ctl_trans_mod == 3
+            os.write(master, b"r")
+            spin_for(.2)
+            grippers.clear()
+            future = keyboard_home_client.call_async(Trigger.Request())
+            deadline = time.monotonic() + 3
+            while not future.done() and time.monotonic() < deadline:
+                spin_for(.02)
+            assert future.done() and future.result().success, future.result()
+            spin_for(.3)
+            assert outputs[-1].ctl_trans_mod == 1 and not grippers
+            deadline = time.monotonic() + 10
+            while not grippers and time.monotonic() < deadline:
+                spin_for(.05)
+            assert len(grippers) == 1, "Voice home did not finish while R-paused"
+            assert_closed(grippers[0][1])
+            spin_for(3.3)
+            assert outputs[-1].ctl_trans_mod != 3, "Voice home automatically resumed policy"
+            assert request(False).success, "Explicit next start did not release voice home"
+            spin_for(.2)
+            assert outputs[-1].ctl_trans_mod == 3
+            policy_timer.cancel()
         finally:
             if process.poll() is None:
                 process.send_signal(signal.SIGINT)

@@ -15,6 +15,7 @@
 | 真机遥操作与示教采集 | [真机数据采集流程](docs/DATA_COLLECTION_WORKFLOW.md) |
 | 当天实验预检与验收 | [真机实验总清单](docs/REAL_ROBOT_EXPERIMENT.md) |
 | 运行 PI05/ACT 模型 | [机器人部署指南](docs/DEPLOYMENT.md) |
+| 语音开始与停止叠毛巾 | [语音控制](docs/VOICE_CONTROL.md) |
 | 数据集动作回放 | [数据集回放流程](docs/DATASET_REPLAY_WORKFLOW.md) |
 | 纯仿真、自动对折或仿真 VR | [Newton 仿真指南](simulation/README.md) |
 | 使用相机手势 | [RViz 仿真](docs/GESTURE_RVIZ.md)、[真机接入](docs/GESTURE_ROBOT.md) |

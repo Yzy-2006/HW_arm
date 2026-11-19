@@ -238,6 +238,7 @@ class RobotCtlNode : public rclcpp::Node{
         rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr zeroReturnCmd_sub;
         rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr vr_override_service;
         rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr policy_home_service_;
+        rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr keyboard_home_service_;
         rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr policy_intervention_service_;
         std::chrono::steady_clock::time_point last_desc_feedback{};
         //末端笛卡尔位姿反馈订阅（回零完成后重新锚定笛卡尔遥操作基准）

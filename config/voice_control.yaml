@@ -1,0 +1,20 @@
+audio:
+  input_device_name: ""
+  input_device_index: -1
+  sample_rate: 0
+  channels: 1
+  rms_threshold: 0.015
+  silence_sec: 0.6
+  backend: faster_whisper
+  model_name: small
+  device: cpu
+  compute_type: int8
+  cpu_threads: 4
+  beam_size: 5
+  vad_filter: true
+  language: zh
+  initial_prompt: "简体中文。机器人口令：毛巾，停止。"
+  max_text_chars: 32
+  min_avg_logprob: -0.8
+  max_no_speech_prob: 0.6
+  max_compression_ratio: 2.4

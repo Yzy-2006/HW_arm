@@ -42,6 +42,7 @@
 | [数据集约定](DATASET.md) | 原始格式、时间对齐、质量检查、LeRobot 导出和离线筛选 |
 | [PI05 训练](../training/README_PI05.md) | 微调环境与示例；示例仍需真实数据和 GPU 验证 |
 | [PI05/ACT 部署](DEPLOYMENT.md) | 共用 bridge、worker 启动、相机占用与停止 |
+| [语音控制](VOICE_CONTROL.md) | “毛巾”启动 motion，“停止”回零并等待 |
 | [PI05 部署参考](PI05
 _DEPLOYMENT.md) | Checkpoint 格式、模型变体、动作与推理时序 |
 | [部署转 VR 与补采](POLICY_INTERVENTION.md) | 停止 bridge、显式交接控制权、独立补采 |
